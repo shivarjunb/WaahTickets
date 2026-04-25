@@ -45,7 +45,6 @@ authRoutes.post('/register', async (c) => {
     email?: string
     phone_number?: string
     password?: string
-    webrole?: string
   }>()
 
   if (!body.email || !body.password) {
@@ -54,7 +53,7 @@ authRoutes.post('/register', async (c) => {
 
   const userId = crypto.randomUUID()
   const now = new Date().toISOString()
-  const webrole = body.webrole ?? 'Customers'
+  const webrole = 'Customers'
   const passwordHash = await hashPassword(body.password)
 
   try {

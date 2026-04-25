@@ -2193,7 +2193,7 @@ authRoutes.post("/register", async (c) => {
   }
   const userId = crypto.randomUUID();
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const webrole = body.webrole ?? "Customers";
+  const webrole = "Customers";
   const passwordHash = await hashPassword(body.password);
   try {
     await c.env.DB.prepare(
@@ -2963,9 +2963,13 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  if (table.table === "users") {
+    return deleteUserRecord(c, db, c.req.param("id"));
+  }
   const result = await executeMutation(
     c,
-    () => db.prepare(`DELETE FROM ${table.table} WHERE id = ? RETURNING *`).bind(c.req.param("id")).first()
+    () => db.prepare(`DELETE FROM ${table.table} WHERE id = ? RETURNING *`).bind(c.req.param("id")).first(),
+    "delete"
   );
   if (result instanceof Response) {
     return result;
@@ -2975,6 +2979,71 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   }
   return c.json({ data: result });
 });
+async function deleteUserRecord(c, db, userId) {
+  const user = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
+  if (!user) {
+    return c.json({ error: "Record not found." }, 404);
+  }
+  if (user.email === "admin@waahtickets.local") {
+    return c.json(
+      {
+        error: "Protected user.",
+        message: "The master admin user cannot be deleted."
+      },
+      409
+    );
+  }
+  const blockingReferences = await findUserBlockingReferences(db, userId);
+  if (blockingReferences.length > 0) {
+    return c.json(
+      {
+        error: "User has related records.",
+        message: `This user has related ${blockingReferences.join(
+          ", "
+        )}. Delete or reassign those records before deleting the user.`
+      },
+      409
+    );
+  }
+  const result = await executeMutation(c, async () => {
+    await db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM user_web_roles WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM organization_users WHERE user_id = ?").bind(userId).run();
+    await db.prepare("DELETE FROM customers WHERE user_id = ?").bind(userId).run();
+    await db.prepare("UPDATE organizations SET created_by = NULL WHERE created_by = ?").bind(userId).run();
+    await db.prepare("UPDATE files SET created_by = NULL WHERE created_by = ?").bind(userId).run();
+    await db.prepare("UPDATE events SET created_by = NULL WHERE created_by = ?").bind(userId).run();
+    await db.prepare("UPDATE tickets SET redeemed_by = NULL WHERE redeemed_by = ?").bind(userId).run();
+    await db.prepare("UPDATE messages SET created_by = NULL WHERE created_by = ?").bind(userId).run();
+    await db.prepare("UPDATE ticket_scans SET scanned_by = NULL WHERE scanned_by = ?").bind(userId).run();
+    return db.prepare("DELETE FROM users WHERE id = ? RETURNING *").bind(userId).first();
+  }, "delete");
+  if (result instanceof Response) {
+    return result;
+  }
+  if (!result) {
+    return c.json({ error: "Record not found." }, 404);
+  }
+  return c.json({ data: result });
+}
+__name(deleteUserRecord, "deleteUserRecord");
+async function findUserBlockingReferences(db, userId) {
+  const checks = [
+    ["orders", "customer_id"],
+    ["payments", "customer_id"],
+    ["tickets", "customer_id"],
+    ["coupon_redemptions", "customer_id"]
+  ];
+  const references = [];
+  for (const [table, column] of checks) {
+    const result = await db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(userId).first();
+    if ((result?.count ?? 0) > 0) {
+      references.push(table);
+    }
+  }
+  return references;
+}
+__name(findUserBlockingReferences, "findUserBlockingReferences");
 function getDatabase(env) {
   return env?.DB;
 }
@@ -3022,16 +3091,17 @@ function toD1Value(value) {
   return JSON.stringify(value);
 }
 __name(toD1Value, "toD1Value");
-async function executeMutation(c, operation) {
+async function executeMutation(c, operation, action = "write") {
   try {
     return await operation();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Database mutation failed.";
     if (message.includes("FOREIGN KEY constraint failed")) {
+      const userMessage = action === "delete" ? "This record is referenced by other records. Delete or reassign the related records first, then try again." : "Create the referenced parent record first, then retry this request with that existing id.";
       return c.json(
         {
           error: "Foreign key constraint failed.",
-          message: "Create the referenced parent record first, then retry this request with that existing id."
+          message: userMessage
         },
         409
       );
@@ -3192,7 +3262,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-Sw4mdO/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-J0A05O/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -3224,7 +3294,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-Sw4mdO/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-J0A05O/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
