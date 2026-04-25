@@ -266,6 +266,27 @@ type AuthUser = {
   webrole?: WebRoleName
 } | null
 
+const hiddenTableColumns = new Set([
+  'id',
+  'user_id',
+  'customer_id',
+  'organization_id',
+  'event_id',
+  'event_location_id',
+  'ticket_type_id',
+  'order_id',
+  'order_item_id',
+  'web_role_id',
+  'message_id',
+  'coupon_id',
+  'created_by',
+  'redeemed_by',
+  'banner_file_id',
+  'pdf_file_id',
+  'google_sub',
+  'password_hash'
+])
+
 function App() {
   const [path, setPath] = useState(window.location.pathname)
   const [user, setUser] = useState<AuthUser>(null)
@@ -290,12 +311,30 @@ function App() {
     void loadSession()
   }, [])
 
+  async function logout() {
+    try {
+      await fetchJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // Clear client-side session even if the server has already expired it.
+    }
+
+    setUser(null)
+    if (window.location.pathname.startsWith('/admin')) {
+      window.history.pushState({}, '', '/')
+      setPath('/')
+    }
+  }
+
   return (
     <>
       {path.startsWith('/admin') ? (
-        <AdminApp user={user} onLoginClick={() => setIsAuthOpen(true)} />
+        user ? (
+          <AdminApp user={user} onLoginClick={() => setIsAuthOpen(true)} onLogout={logout} />
+        ) : (
+          <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
+        )
       ) : (
-        <PublicApp user={user} onLoginClick={() => setIsAuthOpen(true)} />
+        <PublicApp user={user} onLoginClick={() => setIsAuthOpen(true)} onLogout={logout} />
       )}
       {isAuthOpen ? (
         <AuthModal
@@ -312,10 +351,12 @@ function App() {
 
 function PublicApp({
   user,
-  onLoginClick
+  onLoginClick,
+  onLogout
 }: {
   user: AuthUser
   onLoginClick: () => void
+  onLogout: () => void
 }) {
   const [events, setEvents] = useState<PublicEvent[]>([])
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
@@ -408,9 +449,14 @@ function PublicApp({
           <a href="#checkout">Checkout</a>
         </div>
         {user ? (
-          <a className="nav-action" href="/admin">
-            Admin
-          </a>
+          <div className="nav-session-actions">
+            <a className="nav-action" href="/admin">
+              Admin
+            </a>
+            <button className="secondary-button compact-button" type="button" onClick={() => void onLogout()}>
+              Logout
+            </button>
+          </div>
         ) : (
           <button className="nav-action" type="button" onClick={onLoginClick}>
             Login
@@ -764,7 +810,6 @@ function AuthModal({
             email: form.email,
             phone_number: form.phone_number,
             password: form.password,
-            webrole: form.webrole
           }
 
     try {
@@ -816,17 +861,6 @@ function AuthModal({
                   onChange={(event) => setForm({ ...form, phone_number: event.target.value })}
                 />
               </label>
-              <label>
-                <span>Webrole</span>
-                <select
-                  value={form.webrole}
-                  onChange={(event) => setForm({ ...form, webrole: event.target.value })}
-                >
-                  <option value="Customers">Customers</option>
-                  <option value="Organizations">Organizations</option>
-                  <option value="Admin">Admin</option>
-                </select>
-              </label>
             </div>
           ) : null}
           <div className="modal-form-grid auth-name-grid">
@@ -863,15 +897,45 @@ function AuthModal({
   )
 }
 
+function LoginRequired({ onLoginClick }: { onLoginClick: () => void }) {
+  return (
+    <main className="auth-gate">
+      <section className="auth-gate-panel">
+        <a className="brand" href="/">
+          <span className="brand-mark">W</span>
+          <span>Waahtickets</span>
+        </a>
+        <p className="eyebrow">Admin access</p>
+        <h1>Login required</h1>
+        <p>
+          The admin dashboard is protected. Sign in with an admin or organization account
+          to manage records.
+        </p>
+        <div className="hero-actions">
+          <button className="primary-button" type="button" onClick={onLoginClick}>
+            Login
+          </button>
+          <a className="secondary-button" href="/">
+            Back to site
+          </a>
+        </div>
+      </section>
+    </main>
+  )
+}
+
 function AdminApp({
   user,
-  onLoginClick
+  onLoginClick,
+  onLogout
 }: {
   user: AuthUser
   onLoginClick: () => void
+  onLogout: () => void
 }) {
   const [resources, setResources] = useState(fallbackResources)
-  const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(user?.webrole ?? 'Admin')
+  const isAdminUser = user?.webrole === 'Admin'
+  const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(user?.webrole ?? 'Customers')
   const [selectedResource, setSelectedResource] = useState('events')
   const [records, setRecords] = useState<ApiRecord[]>([])
   const [selectedRecord, setSelectedRecord] = useState<ApiRecord | null>(null)
@@ -927,10 +991,10 @@ function AdminApp({
   }, [selectedResource, visibleResources])
 
   useEffect(() => {
-    if (user?.webrole) {
+    if (user?.webrole && !isAdminUser) {
       setSelectedWebRole(user.webrole)
     }
-  }, [user?.webrole])
+  }, [isAdminUser, user?.webrole])
 
   async function loadRecords(resource = selectedResource) {
     setIsLoading(true)
@@ -1157,17 +1221,19 @@ function AdminApp({
             <span>{selectedWebRole} access</span>
           </div>
         </div>
-        <label className="role-switcher">
-          <span>Web role</span>
-          <select
-            value={selectedWebRole}
-            onChange={(event) => setSelectedWebRole(event.target.value as WebRoleName)}
-          >
-            <option value="Customers">Customers</option>
-            <option value="Organizations">Organizations</option>
-            <option value="Admin">Admin</option>
-          </select>
-        </label>
+        {isAdminUser ? (
+          <label className="role-switcher">
+            <span>View as web role</span>
+            <select
+              value={selectedWebRole}
+              onChange={(event) => setSelectedWebRole(event.target.value as WebRoleName)}
+            >
+              <option value="Customers">Customers</option>
+              <option value="Organizations">Organizations</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </label>
+        ) : null}
         <nav className="admin-menu" aria-label="Admin resources">
           {visibleResources.map((resource) => (
             <button
@@ -1198,6 +1264,9 @@ function AdminApp({
             <a className="admin-link-button" href="/">
               Public site
             </a>
+            <button type="button" onClick={() => void onLogout()}>
+              Logout
+            </button>
             <button type="button" onClick={() => void seedStarterData()}>
               <Database size={17} />
               Seed
@@ -1282,7 +1351,7 @@ function AdminApp({
                   filteredRecords.map((record) => (
                     <tr key={String(record.id ?? JSON.stringify(record))}>
                       {tableColumns.map((column) => (
-                        <td key={column}>{formatCellValue(record[column])}</td>
+                        <td key={column}>{formatCellValue(column, record[column])}</td>
                       ))}
                       <td>
                         <div className="crud-icons">
@@ -1348,7 +1417,7 @@ function RecordModal({
   onClose: () => void
   onSave: () => void
 }) {
-  const fields = Object.keys(formValues)
+  const fields = Object.keys(formValues).filter((field) => !isAlwaysHiddenFormField(field))
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -1385,6 +1454,19 @@ function RecordModal({
                     </option>
                   ))}
                 </select>
+              ) : isBooleanField(field) ? (
+                <button
+                  className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
+                  type="button"
+                  onClick={() =>
+                    setFormValues({
+                      ...formValues,
+                      [field]: isTruthyValue(formValues[field]) ? '0' : '1'
+                    })
+                  }
+                >
+                  {isTruthyValue(formValues[field]) ? 'True' : 'False'}
+                </button>
               ) : (
                 <input
                   disabled={mode === 'edit' && field === 'id'}
@@ -1430,7 +1512,7 @@ function fromFormValues(
 
   for (const [key, value] of Object.entries(values)) {
     if (value.trim() === '') continue
-    payload[key] = coerceValue(value, original?.[key] ?? samplePayloads[resource]?.[key])
+    payload[key] = coerceFieldValue(key, value, original?.[key] ?? samplePayloads[resource]?.[key])
   }
 
   return payload
@@ -1449,18 +1531,35 @@ function coerceValue(value: string, originalValue: unknown) {
   return value
 }
 
-function getTableColumns(records: ApiRecord[]) {
-  const preferred = ['id', 'name', 'email', 'slug', 'status', 'created_at']
-  const available = new Set(records.flatMap((record) => Object.keys(record)))
-  const preferredColumns = preferred.filter((column) => available.has(column))
-  const remaining = [...available].filter((column) => !preferredColumns.includes(column)).slice(0, 5)
-  const columns = [...preferredColumns, ...remaining].slice(0, 6)
+function coerceFieldValue(field: string, value: string, originalValue: unknown) {
+  if (isBooleanField(field)) {
+    return isTruthyValue(value) ? 1 : 0
+  }
 
-  return columns.length > 0 ? columns : ['id', 'name', 'status']
+  return coerceValue(value, originalValue)
 }
 
-function formatCellValue(value: unknown) {
+function getTableColumns(records: ApiRecord[]) {
+  const preferred = ['name', 'display_name', 'email', 'slug', 'status', 'webrole', 'created_at']
+  const available = new Set(records.flatMap((record) => Object.keys(record)))
+  const preferredColumns = preferred.filter((column) => available.has(column))
+  const remaining = [...available]
+    .filter((column) => !preferredColumns.includes(column) && !hiddenTableColumns.has(column))
+    .slice(0, 5)
+  const columns = [...preferredColumns, ...remaining].slice(0, 6)
+
+  return columns.length > 0 ? columns : ['name', 'status']
+}
+
+function formatCellValue(column: string, value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
+  if (isBooleanField(column)) {
+    return (
+      <span className={isTruthyValue(value) ? 'table-toggle active' : 'table-toggle'}>
+        {isTruthyValue(value) ? 'True' : 'False'}
+      </span>
+    )
+  }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
@@ -1474,9 +1573,25 @@ function getLookupLabel(record: ApiRecord) {
     record.ticket_number ??
     record.code ??
     record.file_name ??
-    record.id
+    'Record'
 
-  return `${primary ?? 'Record'}${record.id ? ` (${record.id})` : ''}`
+  return String(primary)
+}
+
+function isBooleanField(field: string) {
+  return (
+    field.startsWith('is_') ||
+    field.startsWith('can_') ||
+    ['email_verified', 'phone_verified'].includes(field)
+  )
+}
+
+function isTruthyValue(value: unknown) {
+  return value === true || value === 1 || value === '1' || value === 'true' || value === 'True'
+}
+
+function isAlwaysHiddenFormField(field: string) {
+  return ['id', 'password_hash', 'google_sub', 'auth_provider', 'avatar_url', 'last_login_at'].includes(field)
 }
 
 function getInitials(user: AuthUser) {

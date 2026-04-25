@@ -88,6 +88,18 @@ textarea {
   font-size: 0.95rem;
 }
 
+.nav-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compact-button {
+  min-height: 40px;
+  border: 0;
+  cursor: pointer;
+}
+
 .nav-action,
 .primary-button,
 .secondary-button,
@@ -1153,6 +1165,7 @@ h1 {
 
 .auth-name-grid {
   padding: 0;
+  grid-template-columns: 1fr;
 }
 
 .auth-actions {
@@ -1180,6 +1193,63 @@ h1 {
   color: #ffffff;
   background: #dc3545;
   border-color: #dc3545;
+}
+
+.auth-gate {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-gate-panel {
+  width: min(560px, 100%);
+  border: 1px solid rgba(24, 63, 53, 0.12);
+  border-radius: 8px;
+  padding: 28px;
+  background: rgba(255, 254, 248, 0.88);
+  box-shadow: 0 24px 70px rgba(24, 63, 53, 0.16);
+}
+
+.auth-gate-panel .brand {
+  margin-bottom: 26px;
+}
+
+.auth-gate-panel h1 {
+  margin-bottom: 14px;
+  font-size: clamp(2.4rem, 5vw, 4.4rem);
+}
+
+.auth-gate-panel p:not(.eyebrow) {
+  color: #526157;
+  line-height: 1.65;
+}
+
+.table-toggle,
+.boolean-toggle {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #6c757d;
+  background: #e9ecef;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.table-toggle.active,
+.boolean-toggle.active {
+  color: #ffffff;
+  background: #28a745;
+}
+
+.boolean-toggle {
+  width: fit-content;
+  min-width: 82px;
+  border: 0;
+  cursor: pointer;
 }
 
 @media (max-width: 860px) {
