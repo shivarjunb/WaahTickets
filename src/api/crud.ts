@@ -5,7 +5,13 @@ import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
 import type { Bindings } from '../types/bindings.js'
 
-type AppContext = Context<{ Bindings: Bindings }>
+type AuthScope = {
+  userId: string
+  webrole: 'Admin' | 'Organizations' | 'Customers'
+  organizationIds: string[]
+}
+
+type AppContext = Context<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>
 type JsonRecord = Record<string, unknown>
 type D1Value = string | number | null
 
@@ -16,7 +22,7 @@ const hiddenColumnsByTable: Record<string, readonly string[]> = {
 const LIST_CACHE_TTL_SECONDS = 60
 const DETAIL_CACHE_TTL_SECONDS = 120
 
-export const crudRoutes = new Hono<{ Bindings: Bindings }>()
+export const crudRoutes = new Hono<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>()
 
 crudRoutes.use('*', async (c, next) => {
   const token = getCookie(c.req.header('Cookie'), 'waah_session')
@@ -26,25 +32,46 @@ crudRoutes.use('*', async (c, next) => {
 
   const session = await c.env.DB
     .prepare(
-      `SELECT users.id
+      `SELECT users.id, users.webrole
       FROM auth_sessions
       JOIN users ON users.id = auth_sessions.user_id
       WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
       LIMIT 1`
     )
     .bind(await hashToken(token), new Date().toISOString())
-    .first<{ id: string }>()
+    .first<{ id: string; webrole: string | null }>()
 
   if (!session) {
     return c.json({ error: 'Authentication required.' }, 401)
   }
 
+  const role = normalizeWebrole(session.webrole)
+  const organizationIds =
+    role === 'Organizations'
+      ? (
+          await c.env.DB
+            .prepare('SELECT organization_id FROM organization_users WHERE user_id = ?')
+            .bind(session.id)
+            .all<{ organization_id: string }>()
+        ).results
+          .map((row) => row.organization_id)
+          .filter((organizationId) => Boolean(organizationId))
+      : []
+
+  c.set('authScope', {
+    userId: session.id,
+    webrole: role,
+    organizationIds
+  })
+
   await next()
 })
 
 crudRoutes.get('/resources', (c) => {
+  const scope = c.get('authScope')
+
   return c.json({
-    resources: listResources(),
+    resources: listResources().filter((resource) => isTableVisibleForScope(resource, scope)),
     aliases: {
       'event-locations': 'event_locations',
       'organization-users': 'organization_users',
@@ -70,12 +97,17 @@ crudRoutes.get('/:resource', async (c) => {
   if (!db) {
     return missingDatabaseResponse(c)
   }
+  const scope = c.get('authScope')
+  const accessPolicy = buildAccessPolicy(table.table, scope)
+  if (!accessPolicy.allowed) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
 
   const cache = createCache(c.env)
   const queryEntries = Object.entries(c.req.query()).sort(([left], [right]) => left.localeCompare(right))
   const queryString = new URLSearchParams(queryEntries).toString()
   const resourceVersion = await cache.getResourceVersion(table.table)
-  const cacheKey = `cache:${table.table}:v${resourceVersion}:list:${queryString}`
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:list:${queryString}`
   const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number } }>(
     cacheKey
   )
@@ -98,7 +130,10 @@ crudRoutes.get('/:resource', async (c) => {
     values.push(value)
   }
 
-  const whereSql = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : ''
+  conditions.push(accessPolicy.clause)
+  values.push(...accessPolicy.bindings)
+
+  const whereSql = ` WHERE ${conditions.join(' AND ')}`
   const orderBy = sanitizeOrderBy(c.req.query('order_by'), table)
   const orderDir = c.req.query('order_dir')?.toLowerCase() === 'asc' ? 'ASC' : 'DESC'
   const limit = sanitizeInteger(c.req.query('limit'), 50, 1, 100)
@@ -135,6 +170,7 @@ crudRoutes.post('/:resource', async (c) => {
   if (!db) {
     return missingDatabaseResponse(c)
   }
+  const scope = c.get('authScope')
 
   const payload = await readJsonBody(c.req)
   if (!payload) {
@@ -159,6 +195,11 @@ crudRoutes.post('/:resource', async (c) => {
   const columns = Object.keys(record)
   if (columns.length === 0) {
     return c.json({ error: 'No valid columns were provided.' }, 400)
+  }
+
+  const createAuthResult = await authorizeCreateRecord(c, db, scope, table.table, record)
+  if (createAuthResult instanceof Response) {
+    return createAuthResult
   }
 
   const placeholders = columns.map(() => '?').join(', ')
@@ -191,10 +232,15 @@ crudRoutes.get('/:resource/:id', async (c) => {
   if (!db) {
     return missingDatabaseResponse(c)
   }
+  const scope = c.get('authScope')
+  const accessPolicy = buildAccessPolicy(table.table, scope)
+  if (!accessPolicy.allowed) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
 
   const cache = createCache(c.env)
   const resourceVersion = await cache.getResourceVersion(table.table)
-  const cacheKey = `cache:${table.table}:v${resourceVersion}:item:${c.req.param('id')}`
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:item:${c.req.param('id')}`
   const cached = await cache.getJson<{ data: unknown }>(cacheKey)
 
   if (cached) {
@@ -203,8 +249,8 @@ crudRoutes.get('/:resource/:id', async (c) => {
   }
 
   const result = await db
-    .prepare(`SELECT * FROM ${table.table} WHERE id = ? LIMIT 1`)
-    .bind(c.req.param('id'))
+    .prepare(`SELECT * FROM ${table.table} WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`)
+    .bind(c.req.param('id'), ...accessPolicy.bindings)
     .first()
 
   if (!result) {
@@ -228,6 +274,14 @@ crudRoutes.patch('/:resource/:id', async (c) => {
   if (!db) {
     return missingDatabaseResponse(c)
   }
+  const scope = c.get('authScope')
+  const accessPolicy = buildAccessPolicy(table.table, scope)
+  if (!accessPolicy.allowed) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+  if (!canMutateResource(scope, table.table, 'patch')) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
 
   const payload = await readJsonBody(c.req)
   if (!payload) {
@@ -250,8 +304,8 @@ crudRoutes.patch('/:resource/:id', async (c) => {
   const assignments = columns.map((column) => `${column} = ?`).join(', ')
   const result = await executeMutation(c, () =>
     db
-      .prepare(`UPDATE ${table.table} SET ${assignments} WHERE id = ? RETURNING *`)
-      .bind(...columns.map((column) => toD1Value(record[column])), c.req.param('id'))
+      .prepare(`UPDATE ${table.table} SET ${assignments} WHERE id = ? AND ${accessPolicy.clause} RETURNING *`)
+      .bind(...columns.map((column) => toD1Value(record[column])), c.req.param('id'), ...accessPolicy.bindings)
       .first()
   )
 
@@ -279,17 +333,25 @@ crudRoutes.delete('/:resource/:id', async (c) => {
   if (!db) {
     return missingDatabaseResponse(c)
   }
+  const scope = c.get('authScope')
+  const accessPolicy = buildAccessPolicy(table.table, scope)
+  if (!accessPolicy.allowed) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+  if (!canMutateResource(scope, table.table, 'delete')) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
 
   if (table.table === 'users') {
-    return deleteUserRecord(c, db, c.req.param('id'))
+    return deleteUserRecord(c, db, c.req.param('id'), scope)
   }
 
   const result = await executeMutation(
     c,
     () =>
       db
-        .prepare(`DELETE FROM ${table.table} WHERE id = ? RETURNING *`)
-        .bind(c.req.param('id'))
+        .prepare(`DELETE FROM ${table.table} WHERE id = ? AND ${accessPolicy.clause} RETURNING *`)
+        .bind(c.req.param('id'), ...accessPolicy.bindings)
         .first(),
     'delete'
   )
@@ -308,7 +370,11 @@ crudRoutes.delete('/:resource/:id', async (c) => {
   return c.json({ data: sanitizeRowForTable(table.table, result) })
 })
 
-async function deleteUserRecord(c: AppContext, db: D1Database, userId: string) {
+async function deleteUserRecord(c: AppContext, db: D1Database, userId: string, scope: AuthScope) {
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
   const user = await db.prepare('SELECT * FROM users WHERE id = ? LIMIT 1').bind(userId).first()
 
   if (!user) {
@@ -482,6 +548,293 @@ async function executeMutation<T>(
     }
 
     throw error
+  }
+}
+
+type AccessPolicy = {
+  allowed: boolean
+  clause: string
+  bindings: D1Value[]
+}
+
+function normalizeWebrole(value: string | null | undefined): AuthScope['webrole'] {
+  if (value === 'Admin' || value === 'Organizations') {
+    return value
+  }
+
+  return 'Customers'
+}
+
+function getScopeCacheKey(scope: AuthScope) {
+  if (scope.webrole === 'Admin') {
+    return 'admin'
+  }
+
+  if (scope.webrole === 'Organizations') {
+    const orgPart = scope.organizationIds.slice().sort().join(',')
+    return `org:${scope.userId}:${orgPart}`
+  }
+
+  return `customer:${scope.userId}`
+}
+
+function isTableVisibleForScope(tableName: string, scope: AuthScope) {
+  return buildAccessPolicy(tableName, scope).allowed
+}
+
+function canMutateResource(scope: AuthScope, tableName: string, action: 'patch' | 'delete') {
+  if (scope.webrole === 'Admin') {
+    return true
+  }
+
+  if (scope.webrole === 'Customers') {
+    if (action === 'patch') {
+      return tableName === 'users' || tableName === 'customers'
+    }
+
+    return false
+  }
+
+  if (scope.webrole === 'Organizations') {
+    const allowedOrganizationTables = new Set([
+      'events',
+      'event_locations',
+      'ticket_types',
+      'orders',
+      'order_items',
+      'payments',
+      'tickets',
+      'ticket_scans',
+      'coupons',
+      'coupon_redemptions',
+      'organization_users'
+    ])
+    return allowedOrganizationTables.has(tableName)
+  }
+
+  return false
+}
+
+function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
+  if (scope.webrole === 'Admin') {
+    return {
+      allowed: true,
+      clause: '1 = 1',
+      bindings: []
+    }
+  }
+
+  if (scope.webrole === 'Customers') {
+    switch (tableName) {
+      case 'users':
+        return { allowed: true, clause: 'id = ?', bindings: [scope.userId] }
+      case 'customers':
+        return { allowed: true, clause: 'user_id = ?', bindings: [scope.userId] }
+      case 'orders':
+      case 'tickets':
+        return { allowed: true, clause: 'customer_id = ?', bindings: [scope.userId] }
+      default:
+        return { allowed: false, clause: '1 = 0', bindings: [] }
+    }
+  }
+
+  if (scope.organizationIds.length === 0) {
+    return { allowed: false, clause: '1 = 0', bindings: [] }
+  }
+
+  const placeholders = scope.organizationIds.map(() => '?').join(', ')
+  const orgBindings = [...scope.organizationIds]
+
+  switch (tableName) {
+    case 'organizations':
+      return { allowed: true, clause: `id IN (${placeholders})`, bindings: orgBindings }
+    case 'organization_users':
+      return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings }
+    case 'events':
+      return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings }
+    case 'event_locations':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = event_locations.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'ticket_types':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = ticket_types.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'orders':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = orders.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'order_items':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM orders
+          JOIN events ON events.id = orders.event_id
+          WHERE orders.id = order_items.order_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'payments':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM orders
+          JOIN events ON events.id = orders.event_id
+          WHERE orders.id = payments.order_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'tickets':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = tickets.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'ticket_scans':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = ticket_scans.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'coupons':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = coupons.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'coupon_redemptions':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM coupons
+          JOIN events ON events.id = coupons.event_id
+          WHERE coupons.id = coupon_redemptions.coupon_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    default:
+      return { allowed: false, clause: '1 = 0', bindings: [] }
+  }
+}
+
+async function authorizeCreateRecord(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  tableName: string,
+  record: JsonRecord
+) {
+  if (scope.webrole === 'Admin') {
+    return null
+  }
+
+  if (scope.webrole === 'Customers') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const inScope = async (query: string, value: unknown) => {
+    if (typeof value !== 'string' || !value) {
+      return false
+    }
+
+    const placeholders = scope.organizationIds.map(() => '?').join(', ')
+    const result = await db
+      .prepare(`${query} AND events.organization_id IN (${placeholders}) LIMIT 1`)
+      .bind(value, ...scope.organizationIds)
+      .first<{ ok: number }>()
+
+    return Boolean(result)
+  }
+
+  switch (tableName) {
+    case 'organization_users': {
+      const organizationId = record.organization_id
+      if (typeof organizationId !== 'string' || !scope.organizationIds.includes(organizationId)) {
+        return c.json({ error: 'Forbidden for this organization.' }, 403)
+      }
+      return null
+    }
+    case 'events': {
+      const organizationId = record.organization_id
+      if (typeof organizationId !== 'string' || !scope.organizationIds.includes(organizationId)) {
+        return c.json({ error: 'Forbidden for this organization.' }, 403)
+      }
+      return null
+    }
+    case 'event_locations':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    case 'ticket_types':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    case 'orders':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    case 'tickets':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    case 'ticket_scans':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    case 'coupons':
+      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+      return null
+    default:
+      return c.json({ error: 'Forbidden for this role.' }, 403)
   }
 }
 

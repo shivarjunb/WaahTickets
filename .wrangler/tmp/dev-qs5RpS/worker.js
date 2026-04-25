@@ -2955,7 +2955,7 @@ crudRoutes.use("*", async (c, next) => {
     return c.json({ error: "Authentication required." }, 401);
   }
   const session = await c.env.DB.prepare(
-    `SELECT users.id
+    `SELECT users.id, users.webrole
       FROM auth_sessions
       JOIN users ON users.id = auth_sessions.user_id
       WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
@@ -2964,11 +2964,19 @@ crudRoutes.use("*", async (c, next) => {
   if (!session) {
     return c.json({ error: "Authentication required." }, 401);
   }
+  const role = normalizeWebrole(session.webrole);
+  const organizationIds = role === "Organizations" ? (await c.env.DB.prepare("SELECT organization_id FROM organization_users WHERE user_id = ?").bind(session.id).all()).results.map((row) => row.organization_id).filter((organizationId) => Boolean(organizationId)) : [];
+  c.set("authScope", {
+    userId: session.id,
+    webrole: role,
+    organizationIds
+  });
   await next();
 });
 crudRoutes.get("/resources", (c) => {
+  const scope = c.get("authScope");
   return c.json({
-    resources: listResources(),
+    resources: listResources().filter((resource) => isTableVisibleForScope(resource, scope)),
     aliases: {
       "event-locations": "event_locations",
       "organization-users": "organization_users",
@@ -2992,11 +3000,16 @@ crudRoutes.get("/:resource", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const scope = c.get("authScope");
+  const accessPolicy = buildAccessPolicy(table.table, scope);
+  if (!accessPolicy.allowed) {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
   const cache = createCache(c.env);
   const queryEntries = Object.entries(c.req.query()).sort(([left], [right]) => left.localeCompare(right));
   const queryString = new URLSearchParams(queryEntries).toString();
   const resourceVersion = await cache.getResourceVersion(table.table);
-  const cacheKey = `cache:${table.table}:v${resourceVersion}:list:${queryString}`;
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:list:${queryString}`;
   const cached = await cache.getJson(
     cacheKey
   );
@@ -3014,7 +3027,9 @@ crudRoutes.get("/:resource", async (c) => {
     conditions.push(`${key} = ?`);
     values.push(value);
   }
-  const whereSql = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  conditions.push(accessPolicy.clause);
+  values.push(...accessPolicy.bindings);
+  const whereSql = ` WHERE ${conditions.join(" AND ")}`;
   const orderBy = sanitizeOrderBy(c.req.query("order_by"), table);
   const orderDir = c.req.query("order_dir")?.toLowerCase() === "asc" ? "ASC" : "DESC";
   const limit = sanitizeInteger(c.req.query("limit"), 50, 1, 100);
@@ -3042,6 +3057,7 @@ crudRoutes.post("/:resource", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const scope = c.get("authScope");
   const payload = await readJsonBody(c.req);
   if (!payload) {
     return c.json({ error: "Expected a JSON object request body." }, 400);
@@ -3060,6 +3076,10 @@ crudRoutes.post("/:resource", async (c) => {
   const columns = Object.keys(record);
   if (columns.length === 0) {
     return c.json({ error: "No valid columns were provided." }, 400);
+  }
+  const createAuthResult = await authorizeCreateRecord(c, db, scope, table.table, record);
+  if (createAuthResult instanceof Response) {
+    return createAuthResult;
   }
   const placeholders = columns.map(() => "?").join(", ");
   const result = await executeMutation(
@@ -3084,15 +3104,20 @@ crudRoutes.get("/:resource/:id", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const scope = c.get("authScope");
+  const accessPolicy = buildAccessPolicy(table.table, scope);
+  if (!accessPolicy.allowed) {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
   const cache = createCache(c.env);
   const resourceVersion = await cache.getResourceVersion(table.table);
-  const cacheKey = `cache:${table.table}:v${resourceVersion}:item:${c.req.param("id")}`;
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:item:${c.req.param("id")}`;
   const cached = await cache.getJson(cacheKey);
   if (cached) {
     c.header("X-Cache", "HIT");
     return c.json(cached);
   }
-  const result = await db.prepare(`SELECT * FROM ${table.table} WHERE id = ? LIMIT 1`).bind(c.req.param("id")).first();
+  const result = await db.prepare(`SELECT * FROM ${table.table} WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`).bind(c.req.param("id"), ...accessPolicy.bindings).first();
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
@@ -3109,6 +3134,14 @@ crudRoutes.patch("/:resource/:id", async (c) => {
   const db = getDatabase(c.env);
   if (!db) {
     return missingDatabaseResponse(c);
+  }
+  const scope = c.get("authScope");
+  const accessPolicy = buildAccessPolicy(table.table, scope);
+  if (!accessPolicy.allowed) {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
+  if (!canMutateResource(scope, table.table, "patch")) {
+    return c.json({ error: "Forbidden for this role." }, 403);
   }
   const payload = await readJsonBody(c.req);
   if (!payload) {
@@ -3127,7 +3160,7 @@ crudRoutes.patch("/:resource/:id", async (c) => {
   const assignments = columns.map((column) => `${column} = ?`).join(", ");
   const result = await executeMutation(
     c,
-    () => db.prepare(`UPDATE ${table.table} SET ${assignments} WHERE id = ? RETURNING *`).bind(...columns.map((column) => toD1Value(record[column])), c.req.param("id")).first()
+    () => db.prepare(`UPDATE ${table.table} SET ${assignments} WHERE id = ? AND ${accessPolicy.clause} RETURNING *`).bind(...columns.map((column) => toD1Value(record[column])), c.req.param("id"), ...accessPolicy.bindings).first()
   );
   if (result instanceof Response) {
     return result;
@@ -3148,12 +3181,20 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const scope = c.get("authScope");
+  const accessPolicy = buildAccessPolicy(table.table, scope);
+  if (!accessPolicy.allowed) {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
+  if (!canMutateResource(scope, table.table, "delete")) {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
   if (table.table === "users") {
-    return deleteUserRecord(c, db, c.req.param("id"));
+    return deleteUserRecord(c, db, c.req.param("id"), scope);
   }
   const result = await executeMutation(
     c,
-    () => db.prepare(`DELETE FROM ${table.table} WHERE id = ? RETURNING *`).bind(c.req.param("id")).first(),
+    () => db.prepare(`DELETE FROM ${table.table} WHERE id = ? AND ${accessPolicy.clause} RETURNING *`).bind(c.req.param("id"), ...accessPolicy.bindings).first(),
     "delete"
   );
   if (result instanceof Response) {
@@ -3166,7 +3207,10 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   await cache.bumpResourceVersion(table.table);
   return c.json({ data: sanitizeRowForTable(table.table, result) });
 });
-async function deleteUserRecord(c, db, userId) {
+async function deleteUserRecord(c, db, userId, scope) {
+  if (scope.webrole !== "Admin") {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
   const user = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
   if (!user) {
     return c.json({ error: "Record not found." }, 404);
@@ -3306,6 +3350,262 @@ async function executeMutation(c, operation, action = "write") {
   }
 }
 __name(executeMutation, "executeMutation");
+function normalizeWebrole(value) {
+  if (value === "Admin" || value === "Organizations") {
+    return value;
+  }
+  return "Customers";
+}
+__name(normalizeWebrole, "normalizeWebrole");
+function getScopeCacheKey(scope) {
+  if (scope.webrole === "Admin") {
+    return "admin";
+  }
+  if (scope.webrole === "Organizations") {
+    const orgPart = scope.organizationIds.slice().sort().join(",");
+    return `org:${scope.userId}:${orgPart}`;
+  }
+  return `customer:${scope.userId}`;
+}
+__name(getScopeCacheKey, "getScopeCacheKey");
+function isTableVisibleForScope(tableName, scope) {
+  return buildAccessPolicy(tableName, scope).allowed;
+}
+__name(isTableVisibleForScope, "isTableVisibleForScope");
+function canMutateResource(scope, tableName, action) {
+  if (scope.webrole === "Admin") {
+    return true;
+  }
+  if (scope.webrole === "Customers") {
+    if (action === "patch") {
+      return tableName === "users" || tableName === "customers";
+    }
+    return false;
+  }
+  if (scope.webrole === "Organizations") {
+    const allowedOrganizationTables = /* @__PURE__ */ new Set([
+      "events",
+      "event_locations",
+      "ticket_types",
+      "orders",
+      "order_items",
+      "payments",
+      "tickets",
+      "ticket_scans",
+      "coupons",
+      "coupon_redemptions",
+      "organization_users"
+    ]);
+    return allowedOrganizationTables.has(tableName);
+  }
+  return false;
+}
+__name(canMutateResource, "canMutateResource");
+function buildAccessPolicy(tableName, scope) {
+  if (scope.webrole === "Admin") {
+    return {
+      allowed: true,
+      clause: "1 = 1",
+      bindings: []
+    };
+  }
+  if (scope.webrole === "Customers") {
+    switch (tableName) {
+      case "users":
+        return { allowed: true, clause: "id = ?", bindings: [scope.userId] };
+      case "customers":
+        return { allowed: true, clause: "user_id = ?", bindings: [scope.userId] };
+      case "orders":
+      case "tickets":
+        return { allowed: true, clause: "customer_id = ?", bindings: [scope.userId] };
+      default:
+        return { allowed: false, clause: "1 = 0", bindings: [] };
+    }
+  }
+  if (scope.organizationIds.length === 0) {
+    return { allowed: false, clause: "1 = 0", bindings: [] };
+  }
+  const placeholders = scope.organizationIds.map(() => "?").join(", ");
+  const orgBindings = [...scope.organizationIds];
+  switch (tableName) {
+    case "organizations":
+      return { allowed: true, clause: `id IN (${placeholders})`, bindings: orgBindings };
+    case "organization_users":
+      return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings };
+    case "events":
+      return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings };
+    case "event_locations":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = event_locations.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "ticket_types":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = ticket_types.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "orders":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = orders.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "order_items":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM orders
+          JOIN events ON events.id = orders.event_id
+          WHERE orders.id = order_items.order_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "payments":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM orders
+          JOIN events ON events.id = orders.event_id
+          WHERE orders.id = payments.order_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "tickets":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = tickets.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "ticket_scans":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = ticket_scans.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "coupons":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = coupons.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    case "coupon_redemptions":
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM coupons
+          JOIN events ON events.id = coupons.event_id
+          WHERE coupons.id = coupon_redemptions.coupon_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      };
+    default:
+      return { allowed: false, clause: "1 = 0", bindings: [] };
+  }
+}
+__name(buildAccessPolicy, "buildAccessPolicy");
+async function authorizeCreateRecord(c, db, scope, tableName, record) {
+  if (scope.webrole === "Admin") {
+    return null;
+  }
+  if (scope.webrole === "Customers") {
+    return c.json({ error: "Forbidden for this role." }, 403);
+  }
+  const inScope = /* @__PURE__ */ __name(async (query, value) => {
+    if (typeof value !== "string" || !value) {
+      return false;
+    }
+    const placeholders = scope.organizationIds.map(() => "?").join(", ");
+    const result = await db.prepare(`${query} AND events.organization_id IN (${placeholders}) LIMIT 1`).bind(value, ...scope.organizationIds).first();
+    return Boolean(result);
+  }, "inScope");
+  switch (tableName) {
+    case "organization_users": {
+      const organizationId = record.organization_id;
+      if (typeof organizationId !== "string" || !scope.organizationIds.includes(organizationId)) {
+        return c.json({ error: "Forbidden for this organization." }, 403);
+      }
+      return null;
+    }
+    case "events": {
+      const organizationId = record.organization_id;
+      if (typeof organizationId !== "string" || !scope.organizationIds.includes(organizationId)) {
+        return c.json({ error: "Forbidden for this organization." }, 403);
+      }
+      return null;
+    }
+    case "event_locations":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    case "ticket_types":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    case "orders":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    case "tickets":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    case "ticket_scans":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    case "coupons":
+      if (!await inScope("SELECT 1 as ok FROM events WHERE events.id = ?", record.event_id)) {
+        return c.json({ error: "Forbidden for this event." }, 403);
+      }
+      return null;
+    default:
+      return c.json({ error: "Forbidden for this role." }, 403);
+  }
+}
+__name(authorizeCreateRecord, "authorizeCreateRecord");
 function sanitizeInteger(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) {

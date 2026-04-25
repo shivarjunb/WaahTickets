@@ -172,7 +172,8 @@ function createMockDatabase() {
         async first() {
           if (sql.includes('FROM auth_sessions')) {
             return {
-              id: 'user-1'
+              id: 'user-1',
+              webrole: 'Admin'
             }
           }
 
