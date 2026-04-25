@@ -246,6 +246,12 @@ const lookupResourceByField: Record<string, string> = {
   pdf_file_id: 'files'
 }
 
+const fieldSelectOptions: Record<string, Record<string, string[]>> = {
+  events: {
+    status: ['draft', 'published', 'cancelled', 'archived']
+  }
+}
+
 type ApiListResponse = {
   data?: ApiRecord[]
   error?: string
@@ -394,7 +400,9 @@ function PublicApp({
     async function loadPublicEvents() {
       try {
         const { data } = await fetchJson<ApiListResponse>('/api/public/events')
-        const loadedEvents = (data.data ?? []) as PublicEvent[]
+        const loadedEvents = ((data.data ?? []) as PublicEvent[]).filter(
+          (event) => event.status === 'published'
+        )
 
         setEvents(loadedEvents)
         setSelectedEventId(loadedEvents[0]?.id ?? null)
@@ -1436,7 +1444,25 @@ function RecordModal({
           {fields.map((field) => (
             <label key={field}>
               <span>{formatResourceName(field)}</span>
-              {lookupOptions[field]?.length ? (
+              {getFieldSelectOptions(resource, field).length ? (
+                <select
+                  disabled={mode === 'edit' && field === 'id'}
+                  value={formValues[field] ?? ''}
+                  onChange={(event) =>
+                    setFormValues({
+                      ...formValues,
+                      [field]: event.target.value
+                    })
+                  }
+                >
+                  <option value="">Select {formatResourceName(field)}</option>
+                  {getFieldSelectOptions(resource, field).map((option) => (
+                    <option key={option} value={option}>
+                      {formatResourceName(option)}
+                    </option>
+                  ))}
+                </select>
+              ) : lookupOptions[field]?.length ? (
                 <select
                   disabled={mode === 'edit' && field === 'id'}
                   value={formValues[field] ?? ''}
@@ -1495,6 +1521,10 @@ function RecordModal({
       </section>
     </div>
   )
+}
+
+function getFieldSelectOptions(resource: string, field: string) {
+  return fieldSelectOptions[resource]?.[field] ?? []
 }
 
 function toFormValues(record: Record<string, unknown>) {

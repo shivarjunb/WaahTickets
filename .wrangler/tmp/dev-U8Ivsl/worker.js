@@ -2446,6 +2446,102 @@ function getGoogleConfig(env, origin) {
 }
 __name(getGoogleConfig, "getGoogleConfig");
 
+// src/cache/upstash.ts
+var DEFAULT_RESOURCE_VERSION = 1;
+function createCache(env) {
+  const nodeEnv = typeof process !== "undefined" ? process.env : void 0;
+  const url = env?.UPSTASH_REDIS_REST_URL ?? nodeEnv?.UPSTASH_REDIS_REST_URL;
+  const token = env?.UPSTASH_REDIS_REST_TOKEN ?? nodeEnv?.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    return createNoopCache();
+  }
+  const normalizedUrl = url.replace(/\/+$/, "");
+  async function runCommand(...command) {
+    const response = await fetch(`${normalizedUrl}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(command)
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    if (payload.error) {
+      return null;
+    }
+    return payload.result ?? null;
+  }
+  __name(runCommand, "runCommand");
+  async function getResourceVersion(resource) {
+    const raw2 = await runCommand("GET", resourceVersionKey(resource));
+    const parsed = Number(raw2);
+    if (!Number.isInteger(parsed) || parsed < DEFAULT_RESOURCE_VERSION) {
+      return DEFAULT_RESOURCE_VERSION;
+    }
+    return parsed;
+  }
+  __name(getResourceVersion, "getResourceVersion");
+  return {
+    enabled: true,
+    async getJson(key) {
+      const value = await runCommand("GET", key);
+      if (!value) {
+        return null;
+      }
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    },
+    async setJson(key, value, ttlSeconds) {
+      await runCommand("SET", key, JSON.stringify(value), "EX", ttlSeconds);
+    },
+    getResourceVersion,
+    async getResourceVersions(resources) {
+      const versions = {};
+      await Promise.all(
+        resources.map(async (resource) => {
+          versions[resource] = await getResourceVersion(resource);
+        })
+      );
+      return versions;
+    },
+    async bumpResourceVersion(resource) {
+      const key = resourceVersionKey(resource);
+      await runCommand("SET", key, DEFAULT_RESOURCE_VERSION, "NX");
+      await runCommand("INCR", key);
+    }
+  };
+}
+__name(createCache, "createCache");
+function resourceVersionKey(resource) {
+  return `cache:resource:${resource}:version`;
+}
+__name(resourceVersionKey, "resourceVersionKey");
+function createNoopCache() {
+  return {
+    enabled: false,
+    async getJson() {
+      return null;
+    },
+    async setJson() {
+    },
+    async getResourceVersion() {
+      return DEFAULT_RESOURCE_VERSION;
+    },
+    async getResourceVersions(resources) {
+      return Object.fromEntries(resources.map((resource) => [resource, DEFAULT_RESOURCE_VERSION]));
+    },
+    async bumpResourceVersion() {
+    }
+  };
+}
+__name(createNoopCache, "createNoopCache");
+
 // src/db/schema.ts
 var tableConfigs = {
   users: {
@@ -2810,6 +2906,8 @@ __name(listResources, "listResources");
 
 // src/api/crud.ts
 var reservedQueryParams = /* @__PURE__ */ new Set(["limit", "offset", "order_by", "order_dir"]);
+var LIST_CACHE_TTL_SECONDS = 60;
+var DETAIL_CACHE_TTL_SECONDS = 120;
 var crudRoutes = new Hono2();
 crudRoutes.get("/resources", (c) => {
   return c.json({
@@ -2837,6 +2935,18 @@ crudRoutes.get("/:resource", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const cache = createCache(c.env);
+  const queryEntries = Object.entries(c.req.query()).sort(([left], [right]) => left.localeCompare(right));
+  const queryString = new URLSearchParams(queryEntries).toString();
+  const resourceVersion = await cache.getResourceVersion(table.table);
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:list:${queryString}`;
+  const cached = await cache.getJson(
+    cacheKey
+  );
+  if (cached) {
+    c.header("X-Cache", "HIT");
+    return c.json(cached);
+  }
   const columns = new Set(table.columns);
   const conditions = [];
   const values = [];
@@ -2855,13 +2965,16 @@ crudRoutes.get("/:resource", async (c) => {
   const result = await db.prepare(
     `SELECT * FROM ${table.table}${whereSql} ORDER BY ${orderBy} ${orderDir} LIMIT ? OFFSET ?`
   ).bind(...values, limit, offset).all();
-  return c.json({
+  const payload = {
     data: result.results,
     pagination: {
       limit,
       offset
     }
-  });
+  };
+  await cache.setJson(cacheKey, payload, LIST_CACHE_TTL_SECONDS);
+  c.header("X-Cache", "MISS");
+  return c.json(payload);
 });
 crudRoutes.post("/:resource", async (c) => {
   const table = resolveTable(c.req.param("resource"));
@@ -2901,6 +3014,8 @@ crudRoutes.post("/:resource", async (c) => {
   if (result instanceof Response) {
     return result;
   }
+  const cache = createCache(c.env);
+  await cache.bumpResourceVersion(table.table);
   return c.json({ data: result }, 201);
 });
 crudRoutes.get("/:resource/:id", async (c) => {
@@ -2912,11 +3027,22 @@ crudRoutes.get("/:resource/:id", async (c) => {
   if (!db) {
     return missingDatabaseResponse(c);
   }
+  const cache = createCache(c.env);
+  const resourceVersion = await cache.getResourceVersion(table.table);
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:item:${c.req.param("id")}`;
+  const cached = await cache.getJson(cacheKey);
+  if (cached) {
+    c.header("X-Cache", "HIT");
+    return c.json(cached);
+  }
   const result = await db.prepare(`SELECT * FROM ${table.table} WHERE id = ? LIMIT 1`).bind(c.req.param("id")).first();
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
-  return c.json({ data: result });
+  const payload = { data: result };
+  await cache.setJson(cacheKey, payload, DETAIL_CACHE_TTL_SECONDS);
+  c.header("X-Cache", "MISS");
+  return c.json(payload);
 });
 crudRoutes.patch("/:resource/:id", async (c) => {
   const table = resolveTable(c.req.param("resource"));
@@ -2952,6 +3078,8 @@ crudRoutes.patch("/:resource/:id", async (c) => {
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
+  const cache = createCache(c.env);
+  await cache.bumpResourceVersion(table.table);
   return c.json({ data: result });
 });
 crudRoutes.delete("/:resource/:id", async (c) => {
@@ -2977,6 +3105,8 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
+  const cache = createCache(c.env);
+  await cache.bumpResourceVersion(table.table);
   return c.json({ data: result });
 });
 async function deleteUserRecord(c, db, userId) {
@@ -3136,6 +3266,8 @@ function sanitizeOrderBy(value, table) {
 __name(sanitizeOrderBy, "sanitizeOrderBy");
 
 // src/app.ts
+var PUBLIC_EVENTS_CACHE_TTL_SECONDS = 60;
+var PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS = 60;
 var app = new Hono2();
 app.onError((error, c) => {
   console.error(error);
@@ -3159,6 +3291,14 @@ app.get("/api/public/events", async (c) => {
   if (!c.env.DB) {
     return c.json({ data: [] });
   }
+  const cache = createCache(c.env);
+  const versions = await cache.getResourceVersions(["events", "organizations", "event_locations"]);
+  const cacheKey = `cache:public:events:v${versions.events}:org-v${versions.organizations}:loc-v${versions.event_locations}`;
+  const cached = await cache.getJson(cacheKey);
+  if (cached) {
+    c.header("X-Cache", "HIT");
+    return c.json(cached);
+  }
   const events = await c.env.DB.prepare(
     `SELECT
       events.*,
@@ -3169,23 +3309,45 @@ app.get("/api/public/events", async (c) => {
     FROM events
     LEFT JOIN organizations ON organizations.id = events.organization_id
     LEFT JOIN event_locations ON event_locations.event_id = events.id
-    WHERE events.status IN ('published', 'draft')
+    WHERE events.status = 'published'
     ORDER BY events.start_datetime ASC
     LIMIT 24`
   ).all();
-  return c.json({ data: events.results });
+  const payload = { data: events.results };
+  await cache.setJson(cacheKey, payload, PUBLIC_EVENTS_CACHE_TTL_SECONDS);
+  c.header("X-Cache", "MISS");
+  return c.json(payload);
 });
 app.get("/api/public/events/:id/ticket-types", async (c) => {
   if (!c.env.DB) {
     return c.json({ data: [] });
   }
+  const cache = createCache(c.env);
+  const eventId = c.req.param("id");
+  const ticketTypesVersion = await cache.getResourceVersion("ticket_types");
+  const cacheKey = `cache:public:event:${eventId}:ticket-types:v${ticketTypesVersion}`;
+  const cached = await cache.getJson(cacheKey);
+  if (cached) {
+    c.header("X-Cache", "HIT");
+    return c.json(cached);
+  }
   const ticketTypes = await c.env.DB.prepare(
     `SELECT *
     FROM ticket_types
-    WHERE event_id = ? AND is_active = 1
+    WHERE event_id = ?
+      AND is_active = 1
+      AND EXISTS (
+        SELECT 1
+        FROM events
+        WHERE events.id = ticket_types.event_id
+          AND events.status = 'published'
+      )
     ORDER BY price_paisa ASC`
-  ).bind(c.req.param("id")).all();
-  return c.json({ data: ticketTypes.results });
+  ).bind(eventId).all();
+  const payload = { data: ticketTypes.results };
+  await cache.setJson(cacheKey, payload, PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS);
+  c.header("X-Cache", "MISS");
+  return c.json(payload);
 });
 app.get("/api/database/status", async (c) => {
   if (!c.env.DB) {
@@ -3201,6 +3363,14 @@ app.get("/api/database/status", async (c) => {
     configured: true,
     table_count: result.results.length,
     tables: result.results.map((table) => table.name)
+  });
+});
+app.get("/api/cache/status", async (c) => {
+  const cache = createCache(c.env);
+  return c.json({
+    configured: cache.enabled,
+    provider: cache.enabled ? "upstash-redis" : null,
+    message: cache.enabled ? "Upstash Redis cache is configured." : "Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to enable caching."
   });
 });
 app.route("/api/auth", authRoutes);
@@ -3262,7 +3432,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-J0A05O/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-NspfAo/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -3294,7 +3464,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-J0A05O/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-NspfAo/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

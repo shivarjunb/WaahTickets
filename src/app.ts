@@ -57,7 +57,7 @@ app.get('/api/public/events', async (c) => {
     FROM events
     LEFT JOIN organizations ON organizations.id = events.organization_id
     LEFT JOIN event_locations ON event_locations.event_id = events.id
-    WHERE events.status IN ('published', 'draft')
+    WHERE events.status = 'published'
     ORDER BY events.start_datetime ASC
     LIMIT 24`
   ).all()
@@ -87,7 +87,14 @@ app.get('/api/public/events/:id/ticket-types', async (c) => {
   const ticketTypes = await c.env.DB.prepare(
     `SELECT *
     FROM ticket_types
-    WHERE event_id = ? AND is_active = 1
+    WHERE event_id = ?
+      AND is_active = 1
+      AND EXISTS (
+        SELECT 1
+        FROM events
+        WHERE events.id = ticket_types.event_id
+          AND events.status = 'published'
+      )
     ORDER BY price_paisa ASC`
   )
     .bind(eventId)
