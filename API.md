@@ -16,6 +16,12 @@ Check the D1 binding and tables:
 curl http://localhost:8787/api/database/status
 ```
 
+Check cache configuration:
+
+```bash
+curl http://localhost:8787/api/cache/status
+```
+
 ## CRUD Pattern
 
 Every schema table can be accessed with the same shape:
@@ -101,6 +107,26 @@ web-role-menu-items -> web_role_menu_items
 ```
 
 The API automatically fills `id`, `created_at`, and `updated_at` when those columns exist and the request does not provide them.
+
+## Upstash Redis Cache
+
+The API uses Upstash Redis read-through caching for:
+
+- `GET /api/:resource`
+- `GET /api/:resource/:id`
+- `GET /api/public/events`
+- `GET /api/public/events/:id/ticket-types`
+
+Mutation endpoints (`POST`, `PATCH`, `DELETE`) bump per-resource cache versions so stale entries are invalidated immediately.
+
+Configure cache credentials:
+
+1. Set `UPSTASH_REDIS_REST_URL` in `wrangler.jsonc` under `vars`.
+2. Set token as a Wrangler secret:
+
+```bash
+npx wrangler secret put UPSTASH_REDIS_REST_TOKEN
+```
 
 ## Admin UI
 

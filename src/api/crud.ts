@@ -1,16 +1,16 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
-
-type Bindings = {
-  DB: D1Database
-}
+import type { Bindings } from '../types/bindings.js'
 
 type AppContext = Context<{ Bindings: Bindings }>
 type JsonRecord = Record<string, unknown>
 type D1Value = string | number | null
 
 const reservedQueryParams = new Set(['limit', 'offset', 'order_by', 'order_dir'])
+const LIST_CACHE_TTL_SECONDS = 60
+const DETAIL_CACHE_TTL_SECONDS = 120
 
 export const crudRoutes = new Hono<{ Bindings: Bindings }>()
 
@@ -43,6 +43,20 @@ crudRoutes.get('/:resource', async (c) => {
     return missingDatabaseResponse(c)
   }
 
+  const cache = createCache(c.env)
+  const queryEntries = Object.entries(c.req.query()).sort(([left], [right]) => left.localeCompare(right))
+  const queryString = new URLSearchParams(queryEntries).toString()
+  const resourceVersion = await cache.getResourceVersion(table.table)
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:list:${queryString}`
+  const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number } }>(
+    cacheKey
+  )
+
+  if (cached) {
+    c.header('X-Cache', 'HIT')
+    return c.json(cached)
+  }
+
   const columns = new Set(table.columns)
   const conditions: string[] = []
   const values: D1Value[] = []
@@ -69,13 +83,18 @@ crudRoutes.get('/:resource', async (c) => {
     .bind(...values, limit, offset)
     .all()
 
-  return c.json({
+  const payload = {
     data: result.results,
     pagination: {
       limit,
       offset
     }
-  })
+  }
+
+  await cache.setJson(cacheKey, payload, LIST_CACHE_TTL_SECONDS)
+  c.header('X-Cache', 'MISS')
+
+  return c.json(payload)
 })
 
 crudRoutes.post('/:resource', async (c) => {
@@ -128,6 +147,9 @@ crudRoutes.post('/:resource', async (c) => {
     return result
   }
 
+  const cache = createCache(c.env)
+  await cache.bumpResourceVersion(table.table)
+
   return c.json({ data: result }, 201)
 })
 
@@ -142,6 +164,16 @@ crudRoutes.get('/:resource/:id', async (c) => {
     return missingDatabaseResponse(c)
   }
 
+  const cache = createCache(c.env)
+  const resourceVersion = await cache.getResourceVersion(table.table)
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:item:${c.req.param('id')}`
+  const cached = await cache.getJson<{ data: unknown }>(cacheKey)
+
+  if (cached) {
+    c.header('X-Cache', 'HIT')
+    return c.json(cached)
+  }
+
   const result = await db
     .prepare(`SELECT * FROM ${table.table} WHERE id = ? LIMIT 1`)
     .bind(c.req.param('id'))
@@ -151,7 +183,11 @@ crudRoutes.get('/:resource/:id', async (c) => {
     return c.json({ error: 'Record not found.' }, 404)
   }
 
-  return c.json({ data: result })
+  const payload = { data: result }
+  await cache.setJson(cacheKey, payload, DETAIL_CACHE_TTL_SECONDS)
+  c.header('X-Cache', 'MISS')
+
+  return c.json(payload)
 })
 
 crudRoutes.patch('/:resource/:id', async (c) => {
@@ -199,6 +235,9 @@ crudRoutes.patch('/:resource/:id', async (c) => {
     return c.json({ error: 'Record not found.' }, 404)
   }
 
+  const cache = createCache(c.env)
+  await cache.bumpResourceVersion(table.table)
+
   return c.json({ data: result })
 })
 
@@ -224,6 +263,9 @@ crudRoutes.delete('/:resource/:id', async (c) => {
   if (!result) {
     return c.json({ error: 'Record not found.' }, 404)
   }
+
+  const cache = createCache(c.env)
+  await cache.bumpResourceVersion(table.table)
 
   return c.json({ data: result })
 })
