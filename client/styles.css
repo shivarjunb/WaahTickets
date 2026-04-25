@@ -36,6 +36,12 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+button,
+input,
+textarea {
+  font: inherit;
+}
+
 .app-shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
@@ -387,6 +393,249 @@ h1 {
   cursor: pointer;
 }
 
+.admin-section {
+  margin-top: 24px;
+  padding: 28px;
+  border: 1px solid rgba(24, 63, 53, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 254, 248, 0.82);
+}
+
+.admin-heading,
+.admin-toolbar,
+.admin-actions,
+.editor-actions {
+  display: flex;
+  align-items: center;
+}
+
+.admin-heading,
+.admin-toolbar {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-heading {
+  margin-bottom: 22px;
+}
+
+.admin-heading h2,
+.admin-toolbar h3 {
+  margin-bottom: 0;
+}
+
+.admin-heading h2 {
+  font-size: clamp(1.9rem, 3vw, 2.8rem);
+  line-height: 1;
+}
+
+.admin-status {
+  max-width: 420px;
+  padding: 10px 12px;
+  border: 1px solid rgba(24, 63, 53, 0.12);
+  border-radius: 8px;
+  color: #4d5f54;
+  background: #fffef8;
+  font-size: 0.9rem;
+}
+
+.admin-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.resource-rail {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 720px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.resource-rail button,
+.admin-actions button,
+.editor-actions button {
+  min-height: 40px;
+  border: 1px solid rgba(24, 63, 53, 0.14);
+  border-radius: 8px;
+  color: #183f35;
+  background: #fffef8;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resource-rail button {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  text-transform: capitalize;
+}
+
+.resource-rail button.active {
+  color: #fffef8;
+  background: #183f35;
+}
+
+.admin-workspace {
+  min-width: 0;
+}
+
+.admin-toolbar {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(24, 63, 53, 0.1);
+  border-radius: 8px;
+  background: #fffef8;
+}
+
+.admin-toolbar h3 {
+  color: #183f35;
+  font-size: 1.05rem;
+  word-break: break-word;
+}
+
+.admin-actions {
+  gap: 10px;
+}
+
+.admin-actions input {
+  width: min(260px, 42vw);
+  min-height: 40px;
+  border: 1px solid rgba(24, 63, 53, 0.16);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #172018;
+  background: #f7f5ee;
+}
+
+.admin-actions button,
+.editor-actions button {
+  padding: 0 14px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+  gap: 14px;
+}
+
+.record-list,
+.record-editor {
+  min-height: 520px;
+  border: 1px solid rgba(24, 63, 53, 0.1);
+  border-radius: 8px;
+  background: #fffef8;
+}
+
+.record-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 680px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.record-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.record-row > button:first-child {
+  min-width: 0;
+  border: 1px solid rgba(24, 63, 53, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  color: #172018;
+  background: #f7f5ee;
+  text-align: left;
+  cursor: pointer;
+}
+
+.record-row.selected > button:first-child {
+  border-color: rgba(24, 63, 53, 0.52);
+  background: rgba(24, 63, 53, 0.08);
+}
+
+.record-row strong,
+.record-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-row span {
+  margin-top: 4px;
+  color: #607168;
+  font-size: 0.82rem;
+}
+
+.danger-button {
+  min-width: 78px;
+  border: 0;
+  border-radius: 8px;
+  color: #fffef8;
+  background: #cf4030;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.empty-state {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed rgba(24, 63, 53, 0.18);
+  border-radius: 8px;
+  color: #607168;
+}
+
+.record-editor {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.record-editor label {
+  margin-bottom: 8px;
+  color: #183f35;
+  font-weight: 900;
+}
+
+.record-editor textarea {
+  width: 100%;
+  min-height: 420px;
+  flex: 1;
+  resize: vertical;
+  border: 1px solid rgba(24, 63, 53, 0.16);
+  border-radius: 8px;
+  padding: 14px;
+  color: #172018;
+  background: #f7f5ee;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.editor-actions {
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.editor-actions button:nth-child(2) {
+  color: #fffef8;
+  background: #183f35;
+}
+
+.editor-actions button:nth-child(3) {
+  color: #fffef8;
+  background: #cf4030;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     width: min(100% - 24px, 680px);
@@ -404,8 +653,27 @@ h1 {
 
   .hero,
   .content-grid,
-  .stats-row {
+  .stats-row,
+  .admin-layout,
+  .admin-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-heading,
+  .admin-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .resource-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+    padding-right: 0;
+  }
+
+  .record-list,
+  .record-editor {
+    min-height: 360px;
   }
 
   .hero {
@@ -456,5 +724,26 @@ h1 {
   .event-card {
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+
+  .admin-section {
+    padding: 18px;
+  }
+
+  .admin-actions,
+  .editor-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-actions input,
+  .admin-actions button,
+  .editor-actions button {
+    width: 100%;
+  }
+
+  .resource-rail {
+    grid-template-columns: 1fr;
   }
 }

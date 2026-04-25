@@ -9,7 +9,12 @@
     "dev:cloudflare": "npm run build && wrangler dev",
     "build": "vite build && tsc",
     "start": "node dist/index.js",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "db:create": "wrangler d1 create waahtickets-db",
+    "db:migrate:local": "wrangler d1 migrations apply waahtickets-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply waahtickets-db --remote",
+    "db:execute:local": "wrangler d1 execute waahtickets-db --local",
+    "db:execute:remote": "wrangler d1 execute waahtickets-db --remote"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
