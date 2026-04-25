@@ -1648,7 +1648,7 @@ async function fetchJson<T>(url: string, options?: RequestInit) {
 function getErrorMessage(error: unknown) {
   if (!(error instanceof Error)) return 'Request failed'
   if (error.message.includes('FOREIGN KEY constraint failed')) {
-    return 'Foreign key failed. Create the parent record first, or use Seed to generate valid linked records.'
+    return 'Foreign key failed. Create, delete, or reassign the related records first, then try again.'
   }
   return error.message
 }
