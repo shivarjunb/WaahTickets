@@ -1,18 +1,6 @@
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { Hono } from 'hono'
-
-const app = new Hono()
-
-app.get('/api/status', (c) => {
-  return c.json({
-    name: 'Waahtickets',
-    status: 'running',
-    message: 'Tickets, events, and delightful checkout flows are ready to shape.'
-  })
-})
-
-app.get('/health', (c) => c.json({ ok: true }))
+import { app } from './app.js'
 
 app.use('/assets/*', serveStatic({ root: './dist/client' }))
 app.use('/favicon.svg', serveStatic({ path: './dist/client/favicon.svg' }))

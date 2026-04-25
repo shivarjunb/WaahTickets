@@ -3,12 +3,13 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
     "strict": true,
     "jsx": "react-jsx",
     "skipLibCheck": true,
     "rootDir": "src",
     "outDir": "dist",
-    "types": ["node", "vite/client"]
+    "types": ["node", "vite/client", "@cloudflare/workers-types"]
   },
   "include": ["src"]
 }
