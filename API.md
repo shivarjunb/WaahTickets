@@ -64,6 +64,10 @@ Supported resources:
 
 ```text
 users
+customers
+web_roles
+user_web_roles
+web_role_menu_items
 organizations
 organization_users
 files
@@ -84,7 +88,6 @@ coupon_redemptions
 Convenience aliases:
 
 ```text
-customers -> users
 event-locations -> event_locations
 organization-users -> organization_users
 ticket-types -> ticket_types
@@ -92,6 +95,9 @@ order-items -> order_items
 notification-queue -> notification_queue
 ticket-scans -> ticket_scans
 coupon-redemptions -> coupon_redemptions
+web-roles -> web_roles
+user-web-roles -> user_web_roles
+web-role-menu-items -> web_role_menu_items
 ```
 
 The API automatically fills `id`, `created_at`, and `updated_at` when those columns exist and the request does not provide them.
@@ -115,4 +121,41 @@ Then open:
 
 ```text
 http://localhost:8787/#admin
+```
+
+## Authentication
+
+Email/password endpoints:
+
+```text
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
+```
+
+Google SSO endpoints:
+
+```text
+GET /api/auth/google/start
+GET /api/auth/google/callback
+```
+
+Set Google OAuth secrets before using SSO:
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+For local dev, `AUTH_REDIRECT_ORIGIN` is configured as `http://localhost:8787` in `wrangler.jsonc`. In Google Cloud Console, add this authorized redirect URI:
+
+```text
+http://localhost:8787/api/auth/google/callback
+```
+
+Google SSO uses the OpenID Connect scopes:
+
+```text
+openid profile email
 ```

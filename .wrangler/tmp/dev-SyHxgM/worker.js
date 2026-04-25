@@ -2096,6 +2096,356 @@ var Hono2 = class extends Hono {
   }
 };
 
+// src/auth/password.ts
+var encoder = new TextEncoder();
+var iterations = 1e5;
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(password, salt);
+  const hash = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+  return `pbkdf2$${iterations}$${toBase64(salt)}$${toBase64(hash)}`;
+}
+__name(hashPassword, "hashPassword");
+async function verifyPassword(password, storedHash) {
+  const [algorithm, iterationText, saltText, hashText] = storedHash.split("$");
+  if (algorithm !== "pbkdf2" || !iterationText || !saltText || !hashText) {
+    return false;
+  }
+  const salt = fromBase64(saltText);
+  const expectedHash = fromBase64(hashText);
+  const key = await deriveKey(password, salt, Number(iterationText));
+  const actualHash = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+  return timingSafeEqual(actualHash, expectedHash);
+}
+__name(verifyPassword, "verifyPassword");
+async function hashToken(token) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(token));
+  return toBase64(new Uint8Array(digest));
+}
+__name(hashToken, "hashToken");
+async function deriveKey(password, salt, iterationCount = iterations) {
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits", "deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: toArrayBuffer(salt),
+      iterations: iterationCount,
+      hash: "SHA-256"
+    },
+    baseKey,
+    {
+      name: "HMAC",
+      hash: "SHA-256",
+      length: 256
+    },
+    true,
+    ["sign"]
+  );
+}
+__name(deriveKey, "deriveKey");
+function toArrayBuffer(value) {
+  const copy = new Uint8Array(value.byteLength);
+  copy.set(value);
+  return copy.buffer;
+}
+__name(toArrayBuffer, "toArrayBuffer");
+function timingSafeEqual(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  let result = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left[index] ^ right[index];
+  }
+  return result === 0;
+}
+__name(timingSafeEqual, "timingSafeEqual");
+function toBase64(value) {
+  let binary = "";
+  for (const byte of value) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+__name(toBase64, "toBase64");
+function fromBase64(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+__name(fromBase64, "fromBase64");
+
+// src/api/auth.ts
+var authRoutes = new Hono2();
+authRoutes.post("/register", async (c) => {
+  const body = await c.req.json();
+  if (!body.email || !body.password) {
+    return c.json({ error: "Email and password are required." }, 400);
+  }
+  const userId = crypto.randomUUID();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const webrole = body.webrole ?? "Customers";
+  const passwordHash = await hashPassword(body.password);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO users (
+        id, first_name, last_name, email, phone_number, password_hash, webrole,
+        is_email_verified, auth_provider, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'password', ?, ?)`
+    ).bind(
+      userId,
+      body.first_name ?? null,
+      body.last_name ?? null,
+      body.email.toLowerCase(),
+      body.phone_number ?? null,
+      passwordHash,
+      webrole,
+      now,
+      now
+    ).run();
+    if (webrole === "Customers") {
+      await c.env.DB.prepare(
+        `INSERT INTO customers (id, user_id, display_name, email, phone_number, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        userId,
+        `${body.first_name ?? ""} ${body.last_name ?? ""}`.trim() || body.email,
+        body.email.toLowerCase(),
+        body.phone_number ?? null,
+        now,
+        now
+      ).run();
+    }
+    await attachRole(c.env.DB, userId, webrole);
+    const session = await createSession(c.env.DB, userId, "password");
+    return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Registration failed.";
+    return c.json({ error: "Registration failed.", message }, 409);
+  }
+});
+authRoutes.post("/login", async (c) => {
+  const body = await c.req.json();
+  if (!body.email || !body.password) {
+    return c.json({ error: "Email and password are required." }, 400);
+  }
+  const user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ? LIMIT 1").bind(body.email.toLowerCase()).first();
+  if (!user?.password_hash || !await verifyPassword(body.password, user.password_hash)) {
+    return c.json({ error: "Invalid email or password." }, 401);
+  }
+  await c.env.DB.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?").bind((/* @__PURE__ */ new Date()).toISOString(), (/* @__PURE__ */ new Date()).toISOString(), user.id).run();
+  const session = await createSession(c.env.DB, user.id, "password");
+  return withSessionCookie(c, { user: sanitizeUser(user) }, session.token);
+});
+authRoutes.post("/logout", async (c) => {
+  const token = getCookie(c.req.header("Cookie"), "waah_session");
+  if (token) {
+    await c.env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash = ?").bind(await hashToken(token)).run();
+  }
+  c.header("Set-Cookie", clearSessionCookie());
+  return c.json({ ok: true });
+});
+authRoutes.get("/me", async (c) => {
+  const token = getCookie(c.req.header("Cookie"), "waah_session");
+  if (!token) {
+    return c.json({ user: null });
+  }
+  const tokenHash = await hashToken(token);
+  const session = await c.env.DB.prepare(
+    `SELECT users.*
+    FROM auth_sessions
+    JOIN users ON users.id = auth_sessions.user_id
+    WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
+    LIMIT 1`
+  ).bind(tokenHash, (/* @__PURE__ */ new Date()).toISOString()).first();
+  return c.json({ user: session ? sanitizeUser(session) : null });
+});
+authRoutes.get("/google/start", (c) => {
+  const config = getGoogleConfig(c.env, new URL(c.req.url).origin);
+  if (!config) {
+    return c.json({ error: "Google SSO is not configured." }, 501);
+  }
+  const state = crypto.randomUUID();
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: "code",
+    scope: "openid profile email",
+    access_type: "online",
+    include_granted_scopes: "true",
+    state
+  });
+  c.header("Set-Cookie", `waah_oauth_state=${state}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly`);
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+authRoutes.get("/google/callback", async (c) => {
+  const config = getGoogleConfig(c.env, new URL(c.req.url).origin);
+  if (!config) {
+    return c.json({ error: "Google SSO is not configured." }, 501);
+  }
+  const url = new URL(c.req.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const expectedState = getCookie(c.req.header("Cookie"), "waah_oauth_state");
+  if (!code || !state || state !== expectedState) {
+    return c.json({ error: "Invalid Google OAuth callback state." }, 400);
+  }
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      redirect_uri: config.redirectUri,
+      grant_type: "authorization_code"
+    })
+  });
+  const tokenData = await tokenResponse.json();
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    return c.json(
+      { error: "Google token exchange failed.", message: tokenData.error_description ?? tokenData.error },
+      502
+    );
+  }
+  const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: { Authorization: `Bearer ${tokenData.access_token}` }
+  });
+  const profile = await profileResponse.json();
+  if (!profileResponse.ok || !profile.email) {
+    return c.json({ error: "Google profile lookup failed." }, 502);
+  }
+  const user = await upsertGoogleUser(c.env.DB, profile);
+  const session = await createSession(c.env.DB, user.id, "google");
+  c.header("Set-Cookie", clearOAuthStateCookie());
+  c.header("Set-Cookie", sessionCookie(session.token));
+  return c.redirect("/admin");
+});
+async function upsertGoogleUser(db, profile) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const existing = await db.prepare("SELECT * FROM users WHERE google_sub = ? OR email = ? LIMIT 1").bind(profile.sub, profile.email.toLowerCase()).first();
+  if (existing) {
+    await db.prepare(
+      `UPDATE users
+      SET google_sub = ?, avatar_url = ?, is_email_verified = ?, auth_provider = 'google',
+        last_login_at = ?, updated_at = ?
+      WHERE id = ?`
+    ).bind(
+      profile.sub,
+      profile.picture ?? null,
+      profile.email_verified ? 1 : 0,
+      now,
+      now,
+      existing.id
+    ).run();
+    return { ...existing, webrole: existing.webrole ?? "Customers" };
+  }
+  const userId = crypto.randomUUID();
+  await db.prepare(
+    `INSERT INTO users (
+      id, first_name, last_name, email, google_sub, avatar_url, is_email_verified,
+      auth_provider, webrole, last_login_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'google', 'Customers', ?, ?, ?)`
+  ).bind(
+    userId,
+    profile.given_name ?? null,
+    profile.family_name ?? null,
+    profile.email.toLowerCase(),
+    profile.sub,
+    profile.picture ?? null,
+    profile.email_verified ? 1 : 0,
+    now,
+    now,
+    now
+  ).run();
+  await db.prepare(
+    `INSERT INTO customers (id, user_id, display_name, email, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    userId,
+    `${profile.given_name ?? ""} ${profile.family_name ?? ""}`.trim() || profile.email,
+    profile.email.toLowerCase(),
+    now,
+    now
+  ).run();
+  await attachRole(db, userId, "Customers");
+  return { id: userId, email: profile.email, webrole: "Customers" };
+}
+__name(upsertGoogleUser, "upsertGoogleUser");
+async function attachRole(db, userId, roleName) {
+  const role = await db.prepare("SELECT id FROM web_roles WHERE name = ? LIMIT 1").bind(roleName).first();
+  if (!role) return;
+  await db.prepare(
+    `INSERT OR IGNORE INTO user_web_roles (id, user_id, web_role_id, created_at)
+    VALUES (?, ?, ?, ?)`
+  ).bind(crypto.randomUUID(), userId, role.id, (/* @__PURE__ */ new Date()).toISOString()).run();
+}
+__name(attachRole, "attachRole");
+async function createSession(db, userId, provider) {
+  const token = crypto.randomUUID();
+  const now = /* @__PURE__ */ new Date();
+  const expiresAt = new Date(now.getTime() + 1e3 * 60 * 60 * 24 * 14).toISOString();
+  await db.prepare(
+    `INSERT INTO auth_sessions (id, user_id, token_hash, provider, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(crypto.randomUUID(), userId, await hashToken(token), provider, expiresAt, now.toISOString()).run();
+  return { token, expiresAt };
+}
+__name(createSession, "createSession");
+function sanitizeUser(user) {
+  return {
+    id: user.id,
+    first_name: user.first_name ?? null,
+    last_name: user.last_name ?? null,
+    email: user.email,
+    webrole: user.webrole ?? "Customers"
+  };
+}
+__name(sanitizeUser, "sanitizeUser");
+function withSessionCookie(c, body, token) {
+  c.header("Set-Cookie", sessionCookie(token));
+  return c.json(body);
+}
+__name(withSessionCookie, "withSessionCookie");
+function sessionCookie(token) {
+  return `waah_session=${token}; Path=/; Max-Age=1209600; SameSite=Lax; HttpOnly`;
+}
+__name(sessionCookie, "sessionCookie");
+function clearSessionCookie() {
+  return "waah_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly";
+}
+__name(clearSessionCookie, "clearSessionCookie");
+function clearOAuthStateCookie() {
+  return "waah_oauth_state=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly";
+}
+__name(clearOAuthStateCookie, "clearOAuthStateCookie");
+function getCookie(cookieHeader, name) {
+  return cookieHeader?.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+__name(getCookie, "getCookie");
+function getGoogleConfig(env, origin) {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+    return null;
+  }
+  return {
+    clientId: env.GOOGLE_CLIENT_ID,
+    clientSecret: env.GOOGLE_CLIENT_SECRET,
+    redirectUri: `${env.AUTH_REDIRECT_ORIGIN ?? origin}/api/auth/google/callback`
+  };
+}
+__name(getGoogleConfig, "getGoogleConfig");
+
 // src/db/schema.ts
 var tableConfigs = {
   users: {
@@ -2112,6 +2462,52 @@ var tableConfigs = {
       "is_active",
       "is_email_verified",
       "is_phone_verified",
+      "webrole",
+      "auth_provider",
+      "google_sub",
+      "avatar_url",
+      "last_login_at",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  customers: {
+    table: "customers",
+    defaultOrderBy: "created_at",
+    columns: [
+      "id",
+      "user_id",
+      "display_name",
+      "email",
+      "phone_number",
+      "billing_address",
+      "notes",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  web_roles: {
+    table: "web_roles",
+    defaultOrderBy: "created_at",
+    columns: ["id", "name", "description", "is_active", "created_at", "updated_at"]
+  },
+  user_web_roles: {
+    table: "user_web_roles",
+    defaultOrderBy: "created_at",
+    columns: ["id", "user_id", "web_role_id", "created_at"]
+  },
+  web_role_menu_items: {
+    table: "web_role_menu_items",
+    defaultOrderBy: "created_at",
+    columns: [
+      "id",
+      "web_role_id",
+      "resource_name",
+      "can_view",
+      "can_create",
+      "can_edit",
+      "can_delete",
       "created_at",
       "updated_at"
     ]
@@ -2379,7 +2775,13 @@ var tableConfigs = {
   }
 };
 var tableAliases = {
-  customers: "users",
+  customers: "customers",
+  web_roles: "web_roles",
+  "web-roles": "web_roles",
+  user_web_roles: "user_web_roles",
+  "user-web-roles": "user_web_roles",
+  web_role_menu_items: "web_role_menu_items",
+  "web-role-menu-items": "web_role_menu_items",
   event_locations: "event_locations",
   "event-locations": "event_locations",
   organization_users: "organization_users",
@@ -2413,14 +2815,16 @@ crudRoutes.get("/resources", (c) => {
   return c.json({
     resources: listResources(),
     aliases: {
-      customers: "users",
       "event-locations": "event_locations",
       "organization-users": "organization_users",
       "ticket-types": "ticket_types",
       "order-items": "order_items",
       "notification-queue": "notification_queue",
       "ticket-scans": "ticket_scans",
-      "coupon-redemptions": "coupon_redemptions"
+      "coupon-redemptions": "coupon_redemptions",
+      "web-roles": "web_roles",
+      "user-web-roles": "user_web_roles",
+      "web-role-menu-items": "web_role_menu_items"
     }
   });
 });
@@ -2681,6 +3085,38 @@ app.get("/api/status", (c) => {
   });
 });
 app.get("/health", (c) => c.json({ ok: true }));
+app.get("/api/public/events", async (c) => {
+  if (!c.env.DB) {
+    return c.json({ data: [] });
+  }
+  const events = await c.env.DB.prepare(
+    `SELECT
+      events.*,
+      organizations.name AS organization_name,
+      event_locations.id AS location_id,
+      event_locations.name AS location_name,
+      event_locations.address AS location_address
+    FROM events
+    LEFT JOIN organizations ON organizations.id = events.organization_id
+    LEFT JOIN event_locations ON event_locations.event_id = events.id
+    WHERE events.status IN ('published', 'draft')
+    ORDER BY events.start_datetime ASC
+    LIMIT 24`
+  ).all();
+  return c.json({ data: events.results });
+});
+app.get("/api/public/events/:id/ticket-types", async (c) => {
+  if (!c.env.DB) {
+    return c.json({ data: [] });
+  }
+  const ticketTypes = await c.env.DB.prepare(
+    `SELECT *
+    FROM ticket_types
+    WHERE event_id = ? AND is_active = 1
+    ORDER BY price_paisa ASC`
+  ).bind(c.req.param("id")).all();
+  return c.json({ data: ticketTypes.results });
+});
 app.get("/api/database/status", async (c) => {
   if (!c.env.DB) {
     return c.json({
@@ -2697,6 +3133,7 @@ app.get("/api/database/status", async (c) => {
     tables: result.results.map((table) => table.name)
   });
 });
+app.route("/api/auth", authRoutes);
 app.route("/api", crudRoutes);
 app.notFound((c) => {
   if (c.req.path.startsWith("/api/")) {
@@ -2755,7 +3192,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-lPUj6b/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-Sw4mdO/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -2787,7 +3224,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-lPUj6b/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-Sw4mdO/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

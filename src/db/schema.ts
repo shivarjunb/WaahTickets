@@ -1,5 +1,9 @@
 export type TableName =
   | 'users'
+  | 'customers'
+  | 'web_roles'
+  | 'user_web_roles'
+  | 'web_role_menu_items'
   | 'organizations'
   | 'organization_users'
   | 'files'
@@ -37,6 +41,52 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'is_active',
       'is_email_verified',
       'is_phone_verified',
+      'webrole',
+      'auth_provider',
+      'google_sub',
+      'avatar_url',
+      'last_login_at',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  customers: {
+    table: 'customers',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'user_id',
+      'display_name',
+      'email',
+      'phone_number',
+      'billing_address',
+      'notes',
+      'is_active',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  web_roles: {
+    table: 'web_roles',
+    defaultOrderBy: 'created_at',
+    columns: ['id', 'name', 'description', 'is_active', 'created_at', 'updated_at']
+  },
+  user_web_roles: {
+    table: 'user_web_roles',
+    defaultOrderBy: 'created_at',
+    columns: ['id', 'user_id', 'web_role_id', 'created_at']
+  },
+  web_role_menu_items: {
+    table: 'web_role_menu_items',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'web_role_id',
+      'resource_name',
+      'can_view',
+      'can_create',
+      'can_edit',
+      'can_delete',
       'created_at',
       'updated_at'
     ]
@@ -305,7 +355,13 @@ export const tableConfigs: Record<TableName, TableConfig> = {
 }
 
 const tableAliases: Record<string, TableName> = {
-  customers: 'users',
+  customers: 'customers',
+  web_roles: 'web_roles',
+  'web-roles': 'web_roles',
+  user_web_roles: 'user_web_roles',
+  'user-web-roles': 'user_web_roles',
+  web_role_menu_items: 'web_role_menu_items',
+  'web-role-menu-items': 'web_role_menu_items',
   event_locations: 'event_locations',
   'event-locations': 'event_locations',
   organization_users: 'organization_users',

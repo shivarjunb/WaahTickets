@@ -18,14 +18,16 @@ crudRoutes.get('/resources', (c) => {
   return c.json({
     resources: listResources(),
     aliases: {
-      customers: 'users',
       'event-locations': 'event_locations',
       'organization-users': 'organization_users',
       'ticket-types': 'ticket_types',
       'order-items': 'order_items',
       'notification-queue': 'notification_queue',
       'ticket-scans': 'ticket_scans',
-      'coupon-redemptions': 'coupon_redemptions'
+      'coupon-redemptions': 'coupon_redemptions',
+      'web-roles': 'web_roles',
+      'user-web-roles': 'user_web_roles',
+      'web-role-menu-items': 'web_role_menu_items'
     }
   })
 })
