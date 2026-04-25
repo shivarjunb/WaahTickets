@@ -18,7 +18,7 @@
     }
   ],
   "vars": {
-    "AUTH_REDIRECT_ORIGIN": "https://flying-pipefish-93304.upstash.io",
+    "AUTH_REDIRECT_ORIGIN": "http://localhost:8787",
     "UPSTASH_REDIS_REST_URL": "gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg"
   }
 }

@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
 import type { Bindings } from '../types/bindings.js'
@@ -9,10 +10,37 @@ type JsonRecord = Record<string, unknown>
 type D1Value = string | number | null
 
 const reservedQueryParams = new Set(['limit', 'offset', 'order_by', 'order_dir'])
+const hiddenColumnsByTable: Record<string, readonly string[]> = {
+  users: ['password_hash', 'google_sub']
+}
 const LIST_CACHE_TTL_SECONDS = 60
 const DETAIL_CACHE_TTL_SECONDS = 120
 
 export const crudRoutes = new Hono<{ Bindings: Bindings }>()
+
+crudRoutes.use('*', async (c, next) => {
+  const token = getCookie(c.req.header('Cookie'), 'waah_session')
+  if (!token) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const session = await c.env.DB
+    .prepare(
+      `SELECT users.id
+      FROM auth_sessions
+      JOIN users ON users.id = auth_sessions.user_id
+      WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
+      LIMIT 1`
+    )
+    .bind(await hashToken(token), new Date().toISOString())
+    .first<{ id: string }>()
+
+  if (!session) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  await next()
+})
 
 crudRoutes.get('/resources', (c) => {
   return c.json({
@@ -84,7 +112,7 @@ crudRoutes.get('/:resource', async (c) => {
     .all()
 
   const payload = {
-    data: result.results,
+    data: sanitizeRowsForTable(table.table, result.results),
     pagination: {
       limit,
       offset
@@ -150,7 +178,7 @@ crudRoutes.post('/:resource', async (c) => {
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
 
-  return c.json({ data: result }, 201)
+  return c.json({ data: sanitizeRowForTable(table.table, result) }, 201)
 })
 
 crudRoutes.get('/:resource/:id', async (c) => {
@@ -183,7 +211,7 @@ crudRoutes.get('/:resource/:id', async (c) => {
     return c.json({ error: 'Record not found.' }, 404)
   }
 
-  const payload = { data: result }
+  const payload = { data: sanitizeRowForTable(table.table, result) }
   await cache.setJson(cacheKey, payload, DETAIL_CACHE_TTL_SECONDS)
   c.header('X-Cache', 'MISS')
 
@@ -238,7 +266,7 @@ crudRoutes.patch('/:resource/:id', async (c) => {
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
 
-  return c.json({ data: result })
+  return c.json({ data: sanitizeRowForTable(table.table, result) })
 })
 
 crudRoutes.delete('/:resource/:id', async (c) => {
@@ -277,7 +305,7 @@ crudRoutes.delete('/:resource/:id', async (c) => {
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
 
-  return c.json({ data: result })
+  return c.json({ data: sanitizeRowForTable(table.table, result) })
 })
 
 async function deleteUserRecord(c: AppContext, db: D1Database, userId: string) {
@@ -340,7 +368,7 @@ async function deleteUserRecord(c: AppContext, db: D1Database, userId: string) {
     return c.json({ error: 'Record not found.' }, 404)
   }
 
-  return c.json({ data: result })
+  return c.json({ data: sanitizeRowForTable('users', result) })
 }
 
 async function findUserBlockingReferences(db: D1Database, userId: string) {
@@ -477,4 +505,34 @@ function sanitizeOrderBy(value: string | undefined, table: { columns: readonly s
   }
 
   return table.defaultOrderBy ?? 'id'
+}
+
+function getCookie(cookieHeader: string | undefined, name: string) {
+  return cookieHeader
+    ?.split(';')
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${name}=`))
+    ?.slice(name.length + 1)
+}
+
+function sanitizeRowsForTable(tableName: string, rows: unknown[]) {
+  return rows.map((row) => sanitizeRowForTable(tableName, row))
+}
+
+function sanitizeRowForTable(tableName: string, row: unknown) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    return row
+  }
+
+  const hiddenColumns = hiddenColumnsByTable[tableName]
+  if (!hiddenColumns?.length) {
+    return row
+  }
+
+  const redacted: JsonRecord = { ...(row as JsonRecord) }
+  for (const hiddenColumn of hiddenColumns) {
+    delete redacted[hiddenColumn]
+  }
+
+  return redacted
 }

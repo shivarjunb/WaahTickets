@@ -98,8 +98,8 @@ authRoutes.post('/register', async (c) => {
 
     return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Registration failed.'
-    return c.json({ error: 'Registration failed.', message }, 409)
+    console.error(error)
+    return c.json({ error: 'Registration failed.' }, 409)
   }
 })
 
@@ -158,8 +158,18 @@ authRoutes.get('/me', async (c) => {
   return c.json({ user: session ? sanitizeUser(session) : null })
 })
 
-authRoutes.get('/google/start', (c) => {
+authRoutes.get('/google/config', (c) => {
   const config = getGoogleConfig(c.env, new URL(c.req.url).origin)
+
+  return c.json({
+    configured: Boolean(config),
+    redirect_uri: config?.redirectUri ?? null
+  })
+})
+
+authRoutes.get('/google/start', (c) => {
+  const origin = new URL(c.req.url).origin
+  const config = getGoogleConfig(c.env, origin)
   if (!config) {
     return c.json({ error: 'Google SSO is not configured.' }, 501)
   }
@@ -175,12 +185,13 @@ authRoutes.get('/google/start', (c) => {
     state
   })
 
-  c.header('Set-Cookie', `waah_oauth_state=${state}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly`)
+  c.header('Set-Cookie', oauthStateCookie(state, isSecureOrigin(origin)))
   return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`)
 })
 
 authRoutes.get('/google/callback', async (c) => {
-  const config = getGoogleConfig(c.env, new URL(c.req.url).origin)
+  const origin = new URL(c.req.url).origin
+  const config = getGoogleConfig(c.env, origin)
   if (!config) {
     return c.json({ error: 'Google SSO is not configured.' }, 501)
   }
@@ -222,29 +233,39 @@ authRoutes.get('/google/callback', async (c) => {
   if (!profileResponse.ok || !profile.email) {
     return c.json({ error: 'Google profile lookup failed.' }, 502)
   }
+  if (!profile.email_verified) {
+    return c.json({ error: 'Google account email is not verified.' }, 403)
+  }
 
   const user = await upsertGoogleUser(c.env.DB, profile)
   const session = await createSession(c.env.DB, user.id, 'google')
 
-  c.header('Set-Cookie', clearOAuthStateCookie())
-  c.header('Set-Cookie', sessionCookie(session.token))
+  const isSecure = isSecureOrigin(origin)
+  c.header('Set-Cookie', sessionCookie(session.token, isSecure))
   return c.redirect('/admin')
 })
 
 async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {
   const now = new Date().toISOString()
-  const existing = await db.prepare('SELECT * FROM users WHERE google_sub = ? OR email = ? LIMIT 1')
-    .bind(profile.sub, profile.email.toLowerCase())
+  const normalizedEmail = profile.email.toLowerCase()
+  const existingByGoogleSub = await db
+    .prepare('SELECT * FROM users WHERE google_sub = ? LIMIT 1')
+    .bind(profile.sub)
     .first<UserRow>()
+  const existingByEmail = !existingByGoogleSub
+    ? await db.prepare('SELECT * FROM users WHERE email = ? LIMIT 1').bind(normalizedEmail).first<UserRow>()
+    : null
+  const existing = existingByGoogleSub ?? existingByEmail
 
   if (existing) {
     await db.prepare(
       `UPDATE users
-      SET google_sub = ?, avatar_url = ?, is_email_verified = ?, auth_provider = 'google',
+      SET email = ?, google_sub = ?, avatar_url = ?, is_email_verified = ?, auth_provider = 'google',
         last_login_at = ?, updated_at = ?
       WHERE id = ?`
     )
       .bind(
+        normalizedEmail,
         profile.sub,
         profile.picture ?? null,
         profile.email_verified ? 1 : 0,
@@ -268,7 +289,7 @@ async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {
       userId,
       profile.given_name ?? null,
       profile.family_name ?? null,
-      profile.email.toLowerCase(),
+      normalizedEmail,
       profile.sub,
       profile.picture ?? null,
       profile.email_verified ? 1 : 0,
@@ -341,20 +362,30 @@ function withSessionCookie(
   body: Record<string, unknown>,
   token: string
 ) {
-  c.header('Set-Cookie', sessionCookie(token))
+  c.header('Set-Cookie', sessionCookie(token, isSecureOrigin(new URL(c.req.url).origin)))
   return c.json(body)
 }
 
-function sessionCookie(token: string) {
-  return `waah_session=${token}; Path=/; Max-Age=1209600; SameSite=Lax; HttpOnly`
+function sessionCookie(token: string, secure = false) {
+  return appendSecureFlag(
+    `waah_session=${token}; Path=/; Max-Age=1209600; SameSite=Lax; HttpOnly`,
+    secure
+  )
 }
 
 function clearSessionCookie() {
   return 'waah_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly'
 }
 
-function clearOAuthStateCookie() {
-  return 'waah_oauth_state=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly'
+function oauthStateCookie(state: string, secure = false) {
+  return appendSecureFlag(
+    `waah_oauth_state=${state}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly`,
+    secure
+  )
+}
+
+function clearOAuthStateCookie(secure = false) {
+  return appendSecureFlag('waah_oauth_state=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly', secure)
 }
 
 function getCookie(cookieHeader: string | undefined, name: string) {
@@ -370,9 +401,25 @@ function getGoogleConfig(env: Bindings, origin: string) {
     return null
   }
 
+  const baseOrigin = normalizeOrigin(env.AUTH_REDIRECT_ORIGIN ?? origin)
+
   return {
     clientId: env.GOOGLE_CLIENT_ID,
     clientSecret: env.GOOGLE_CLIENT_SECRET,
-    redirectUri: `${env.AUTH_REDIRECT_ORIGIN ?? origin}/api/auth/google/callback`
+    redirectUri: new URL('/api/auth/google/callback', baseOrigin).toString()
   }
+}
+
+function isSecureOrigin(origin: string) {
+  return origin.startsWith('https://')
+}
+
+function appendSecureFlag(cookie: string, secure: boolean) {
+  return secure ? `${cookie}; Secure` : cookie
+}
+
+function normalizeOrigin(origin: string) {
+  const trimmedOrigin = origin.trim().replace(/\/+$/, '')
+  const parsed = new URL(trimmedOrigin)
+  return parsed.origin
 }

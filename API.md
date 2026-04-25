@@ -163,21 +163,51 @@ GET  /api/auth/me
 Google SSO endpoints:
 
 ```text
+GET /api/auth/google/config
 GET /api/auth/google/start
 GET /api/auth/google/callback
 ```
 
-Set Google OAuth secrets before using SSO:
+For local dev, create `.dev.vars` from `.dev.vars.example` and set:
+
+```text
+GOOGLE_CLIENT_ID="your-google-oauth-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="your-google-oauth-client-secret"
+AUTH_REDIRECT_ORIGIN="http://localhost:8787"
+```
+
+If you run the frontend with Vite on port `5173`, set:
+
+```text
+AUTH_REDIRECT_ORIGIN="http://localhost:5173"
+```
+
+Use an origin without a trailing slash, and add the exact callback URL for that origin in Google Cloud Console.
+
+For deployed Workers, set Google OAuth secrets before using SSO:
 
 ```bash
 npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put AUTH_REDIRECT_ORIGIN
 ```
 
 For local dev, `AUTH_REDIRECT_ORIGIN` is configured as `http://localhost:8787` in `wrangler.jsonc`. In Google Cloud Console, add this authorized redirect URI:
 
 ```text
 http://localhost:8787/api/auth/google/callback
+```
+
+For Vite local dev on `5173`, also add:
+
+```text
+http://localhost:5173/api/auth/google/callback
+```
+
+For production, also add your deployed callback URL, for example:
+
+```text
+https://your-domain.com/api/auth/google/callback
 ```
 
 Google SSO uses the OpenID Connect scopes:

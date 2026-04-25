@@ -2230,8 +2230,8 @@ authRoutes.post("/register", async (c) => {
     const session = await createSession(c.env.DB, userId, "password");
     return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Registration failed.";
-    return c.json({ error: "Registration failed.", message }, 409);
+    console.error(error);
+    return c.json({ error: "Registration failed." }, 409);
   }
 });
 authRoutes.post("/login", async (c) => {
@@ -2270,8 +2270,16 @@ authRoutes.get("/me", async (c) => {
   ).bind(tokenHash, (/* @__PURE__ */ new Date()).toISOString()).first();
   return c.json({ user: session ? sanitizeUser(session) : null });
 });
-authRoutes.get("/google/start", (c) => {
+authRoutes.get("/google/config", (c) => {
   const config = getGoogleConfig(c.env, new URL(c.req.url).origin);
+  return c.json({
+    configured: Boolean(config),
+    redirect_uri: config?.redirectUri ?? null
+  });
+});
+authRoutes.get("/google/start", (c) => {
+  const origin = new URL(c.req.url).origin;
+  const config = getGoogleConfig(c.env, origin);
   if (!config) {
     return c.json({ error: "Google SSO is not configured." }, 501);
   }
@@ -2285,11 +2293,12 @@ authRoutes.get("/google/start", (c) => {
     include_granted_scopes: "true",
     state
   });
-  c.header("Set-Cookie", `waah_oauth_state=${state}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly`);
+  c.header("Set-Cookie", oauthStateCookie(state, isSecureOrigin(origin)));
   return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
 authRoutes.get("/google/callback", async (c) => {
-  const config = getGoogleConfig(c.env, new URL(c.req.url).origin);
+  const origin = new URL(c.req.url).origin;
+  const config = getGoogleConfig(c.env, origin);
   if (!config) {
     return c.json({ error: "Google SSO is not configured." }, 501);
   }
@@ -2325,22 +2334,29 @@ authRoutes.get("/google/callback", async (c) => {
   if (!profileResponse.ok || !profile.email) {
     return c.json({ error: "Google profile lookup failed." }, 502);
   }
+  if (!profile.email_verified) {
+    return c.json({ error: "Google account email is not verified." }, 403);
+  }
   const user = await upsertGoogleUser(c.env.DB, profile);
   const session = await createSession(c.env.DB, user.id, "google");
-  c.header("Set-Cookie", clearOAuthStateCookie());
-  c.header("Set-Cookie", sessionCookie(session.token));
+  const isSecure = isSecureOrigin(origin);
+  c.header("Set-Cookie", sessionCookie(session.token, isSecure));
   return c.redirect("/admin");
 });
 async function upsertGoogleUser(db, profile) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const existing = await db.prepare("SELECT * FROM users WHERE google_sub = ? OR email = ? LIMIT 1").bind(profile.sub, profile.email.toLowerCase()).first();
+  const normalizedEmail = profile.email.toLowerCase();
+  const existingByGoogleSub = await db.prepare("SELECT * FROM users WHERE google_sub = ? LIMIT 1").bind(profile.sub).first();
+  const existingByEmail = !existingByGoogleSub ? await db.prepare("SELECT * FROM users WHERE email = ? LIMIT 1").bind(normalizedEmail).first() : null;
+  const existing = existingByGoogleSub ?? existingByEmail;
   if (existing) {
     await db.prepare(
       `UPDATE users
-      SET google_sub = ?, avatar_url = ?, is_email_verified = ?, auth_provider = 'google',
+      SET email = ?, google_sub = ?, avatar_url = ?, is_email_verified = ?, auth_provider = 'google',
         last_login_at = ?, updated_at = ?
       WHERE id = ?`
     ).bind(
+      normalizedEmail,
       profile.sub,
       profile.picture ?? null,
       profile.email_verified ? 1 : 0,
@@ -2360,7 +2376,7 @@ async function upsertGoogleUser(db, profile) {
     userId,
     profile.given_name ?? null,
     profile.family_name ?? null,
-    profile.email.toLowerCase(),
+    normalizedEmail,
     profile.sub,
     profile.picture ?? null,
     profile.email_verified ? 1 : 0,
@@ -2414,22 +2430,28 @@ function sanitizeUser(user) {
 }
 __name(sanitizeUser, "sanitizeUser");
 function withSessionCookie(c, body, token) {
-  c.header("Set-Cookie", sessionCookie(token));
+  c.header("Set-Cookie", sessionCookie(token, isSecureOrigin(new URL(c.req.url).origin)));
   return c.json(body);
 }
 __name(withSessionCookie, "withSessionCookie");
-function sessionCookie(token) {
-  return `waah_session=${token}; Path=/; Max-Age=1209600; SameSite=Lax; HttpOnly`;
+function sessionCookie(token, secure = false) {
+  return appendSecureFlag(
+    `waah_session=${token}; Path=/; Max-Age=1209600; SameSite=Lax; HttpOnly`,
+    secure
+  );
 }
 __name(sessionCookie, "sessionCookie");
 function clearSessionCookie() {
   return "waah_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly";
 }
 __name(clearSessionCookie, "clearSessionCookie");
-function clearOAuthStateCookie() {
-  return "waah_oauth_state=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly";
+function oauthStateCookie(state, secure = false) {
+  return appendSecureFlag(
+    `waah_oauth_state=${state}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly`,
+    secure
+  );
 }
-__name(clearOAuthStateCookie, "clearOAuthStateCookie");
+__name(oauthStateCookie, "oauthStateCookie");
 function getCookie(cookieHeader, name) {
   return cookieHeader?.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
 }
@@ -2438,13 +2460,28 @@ function getGoogleConfig(env, origin) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
     return null;
   }
+  const baseOrigin = normalizeOrigin(env.AUTH_REDIRECT_ORIGIN ?? origin);
   return {
     clientId: env.GOOGLE_CLIENT_ID,
     clientSecret: env.GOOGLE_CLIENT_SECRET,
-    redirectUri: `${env.AUTH_REDIRECT_ORIGIN ?? origin}/api/auth/google/callback`
+    redirectUri: new URL("/api/auth/google/callback", baseOrigin).toString()
   };
 }
 __name(getGoogleConfig, "getGoogleConfig");
+function isSecureOrigin(origin) {
+  return origin.startsWith("https://");
+}
+__name(isSecureOrigin, "isSecureOrigin");
+function appendSecureFlag(cookie, secure) {
+  return secure ? `${cookie}; Secure` : cookie;
+}
+__name(appendSecureFlag, "appendSecureFlag");
+function normalizeOrigin(origin) {
+  const trimmedOrigin = origin.trim().replace(/\/+$/, "");
+  const parsed = new URL(trimmedOrigin);
+  return parsed.origin;
+}
+__name(normalizeOrigin, "normalizeOrigin");
 
 // src/cache/upstash.ts
 var DEFAULT_RESOURCE_VERSION = 1;
@@ -2906,9 +2943,29 @@ __name(listResources, "listResources");
 
 // src/api/crud.ts
 var reservedQueryParams = /* @__PURE__ */ new Set(["limit", "offset", "order_by", "order_dir"]);
+var hiddenColumnsByTable = {
+  users: ["password_hash", "google_sub"]
+};
 var LIST_CACHE_TTL_SECONDS = 60;
 var DETAIL_CACHE_TTL_SECONDS = 120;
 var crudRoutes = new Hono2();
+crudRoutes.use("*", async (c, next) => {
+  const token = getCookie2(c.req.header("Cookie"), "waah_session");
+  if (!token) {
+    return c.json({ error: "Authentication required." }, 401);
+  }
+  const session = await c.env.DB.prepare(
+    `SELECT users.id
+      FROM auth_sessions
+      JOIN users ON users.id = auth_sessions.user_id
+      WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
+      LIMIT 1`
+  ).bind(await hashToken(token), (/* @__PURE__ */ new Date()).toISOString()).first();
+  if (!session) {
+    return c.json({ error: "Authentication required." }, 401);
+  }
+  await next();
+});
 crudRoutes.get("/resources", (c) => {
   return c.json({
     resources: listResources(),
@@ -2966,7 +3023,7 @@ crudRoutes.get("/:resource", async (c) => {
     `SELECT * FROM ${table.table}${whereSql} ORDER BY ${orderBy} ${orderDir} LIMIT ? OFFSET ?`
   ).bind(...values, limit, offset).all();
   const payload = {
-    data: result.results,
+    data: sanitizeRowsForTable(table.table, result.results),
     pagination: {
       limit,
       offset
@@ -3016,7 +3073,7 @@ crudRoutes.post("/:resource", async (c) => {
   }
   const cache = createCache(c.env);
   await cache.bumpResourceVersion(table.table);
-  return c.json({ data: result }, 201);
+  return c.json({ data: sanitizeRowForTable(table.table, result) }, 201);
 });
 crudRoutes.get("/:resource/:id", async (c) => {
   const table = resolveTable(c.req.param("resource"));
@@ -3039,7 +3096,7 @@ crudRoutes.get("/:resource/:id", async (c) => {
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
-  const payload = { data: result };
+  const payload = { data: sanitizeRowForTable(table.table, result) };
   await cache.setJson(cacheKey, payload, DETAIL_CACHE_TTL_SECONDS);
   c.header("X-Cache", "MISS");
   return c.json(payload);
@@ -3080,7 +3137,7 @@ crudRoutes.patch("/:resource/:id", async (c) => {
   }
   const cache = createCache(c.env);
   await cache.bumpResourceVersion(table.table);
-  return c.json({ data: result });
+  return c.json({ data: sanitizeRowForTable(table.table, result) });
 });
 crudRoutes.delete("/:resource/:id", async (c) => {
   const table = resolveTable(c.req.param("resource"));
@@ -3107,7 +3164,7 @@ crudRoutes.delete("/:resource/:id", async (c) => {
   }
   const cache = createCache(c.env);
   await cache.bumpResourceVersion(table.table);
-  return c.json({ data: result });
+  return c.json({ data: sanitizeRowForTable(table.table, result) });
 });
 async function deleteUserRecord(c, db, userId) {
   const user = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
@@ -3154,7 +3211,7 @@ async function deleteUserRecord(c, db, userId) {
   if (!result) {
     return c.json({ error: "Record not found." }, 404);
   }
-  return c.json({ data: result });
+  return c.json({ data: sanitizeRowForTable("users", result) });
 }
 __name(deleteUserRecord, "deleteUserRecord");
 async function findUserBlockingReferences(db, userId) {
@@ -3264,6 +3321,29 @@ function sanitizeOrderBy(value, table) {
   return table.defaultOrderBy ?? "id";
 }
 __name(sanitizeOrderBy, "sanitizeOrderBy");
+function getCookie2(cookieHeader, name) {
+  return cookieHeader?.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+__name(getCookie2, "getCookie");
+function sanitizeRowsForTable(tableName, rows) {
+  return rows.map((row) => sanitizeRowForTable(tableName, row));
+}
+__name(sanitizeRowsForTable, "sanitizeRowsForTable");
+function sanitizeRowForTable(tableName, row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return row;
+  }
+  const hiddenColumns = hiddenColumnsByTable[tableName];
+  if (!hiddenColumns?.length) {
+    return row;
+  }
+  const redacted = { ...row };
+  for (const hiddenColumn of hiddenColumns) {
+    delete redacted[hiddenColumn];
+  }
+  return redacted;
+}
+__name(sanitizeRowForTable, "sanitizeRowForTable");
 
 // src/app.ts
 var PUBLIC_EVENTS_CACHE_TTL_SECONDS = 60;
@@ -3432,7 +3512,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-NspfAo/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-r8Z0bE/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -3464,7 +3544,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-NspfAo/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-r8Z0bE/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

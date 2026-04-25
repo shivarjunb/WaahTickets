@@ -264,6 +264,11 @@ type ApiMutationResponse = {
   message?: string
 }
 
+type GoogleAuthConfig = {
+  configured: boolean
+  redirect_uri: string | null
+}
+
 type AuthUser = {
   id?: string
   first_name?: string | null
@@ -798,6 +803,10 @@ function AuthModal({
 }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [status, setStatus] = useState('Use email/password or continue with Google.')
+  const [googleConfig, setGoogleConfig] = useState<GoogleAuthConfig>({
+    configured: false,
+    redirect_uri: null
+  })
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -806,6 +815,19 @@ function AuthModal({
     password: '',
     webrole: 'Customers'
   })
+
+  useEffect(() => {
+    async function loadGoogleConfig() {
+      try {
+        const { data } = await fetchJson<GoogleAuthConfig>('/api/auth/google/config')
+        setGoogleConfig(data)
+      } catch {
+        setGoogleConfig({ configured: false, redirect_uri: null })
+      }
+    }
+
+    void loadGoogleConfig()
+  }, [])
 
   async function submitAuth() {
     const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
@@ -895,10 +917,20 @@ function AuthModal({
             <button type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
               {mode === 'login' ? 'Need an account?' : 'Have an account?'}
             </button>
-            <a className="google-auth-button" href="/api/auth/google/start">
+            <button
+              className="google-auth-button"
+              disabled={!googleConfig.configured}
+              type="button"
+              onClick={() => {
+                window.location.href = '/api/auth/google/start'
+              }}
+            >
               Continue with Google
-            </a>
+            </button>
           </div>
+          {!googleConfig.configured ? (
+            <p>Google SSO needs a client ID and secret before this button can be used.</p>
+          ) : null}
         </div>
       </section>
     </div>

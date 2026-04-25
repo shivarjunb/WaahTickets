@@ -61,11 +61,21 @@ describe('crud route caching', () => {
     app.route('/api', crudRoutes)
     const env = { ...upstashEnv, DB: db } as Bindings
 
-    const firstList = await app.request('http://localhost/api/users?limit=2', undefined, env)
+    const authHeaders = { Cookie: 'waah_session=test-session-token' }
+
+    const firstList = await app.request(
+      'http://localhost/api/users?limit=2',
+      { headers: authHeaders },
+      env
+    )
     expect(firstList.headers.get('X-Cache')).toBe('MISS')
     expect(db.stats.listQueries).toBe(1)
 
-    const secondList = await app.request('http://localhost/api/users?limit=2', undefined, env)
+    const secondList = await app.request(
+      'http://localhost/api/users?limit=2',
+      { headers: authHeaders },
+      env
+    )
     expect(secondList.headers.get('X-Cache')).toBe('HIT')
     expect(db.stats.listQueries).toBe(1)
 
@@ -73,7 +83,7 @@ describe('crud route caching', () => {
       'http://localhost/api/users',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: 'user-2',
           email: 'cache-test@example.com',
@@ -85,7 +95,11 @@ describe('crud route caching', () => {
     )
     expect(createRecord.status).toBe(201)
 
-    const thirdList = await app.request('http://localhost/api/users?limit=2', undefined, env)
+    const thirdList = await app.request(
+      'http://localhost/api/users?limit=2',
+      { headers: authHeaders },
+      env
+    )
     expect(thirdList.headers.get('X-Cache')).toBe('MISS')
     expect(db.stats.listQueries).toBe(2)
   })
@@ -156,6 +170,12 @@ function createMockDatabase() {
           return { results: [] }
         },
         async first() {
+          if (sql.includes('FROM auth_sessions')) {
+            return {
+              id: 'user-1'
+            }
+          }
+
           if (sql.startsWith('INSERT INTO users')) {
             stats.insertQueries += 1
             return {
