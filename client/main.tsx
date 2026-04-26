@@ -1214,7 +1214,7 @@ function AdminApp({
     () => getAvailableColumns(resourceColumnsCatalog[selectedResource] ?? [], records),
     [records, resourceColumnsCatalog, selectedResource]
   )
-  const selectedColumns = selectedColumnsByResource[selectedResource] ?? defaultTableColumns
+  const selectedColumns = selectedColumnsByResource[selectedResource] ?? availableColumns
   const tableColumns = useMemo(
     () => {
       if (!(isAdminUser && selectedWebRole === 'Admin')) return defaultTableColumns
@@ -1310,11 +1310,11 @@ function AdminApp({
 
     setSelectedColumnsByResource((current) => ({
       ...current,
-      [selectedResource]: defaultTableColumns
+      [selectedResource]: availableColumns
     }))
   }, [
     availableColumns.length,
-    defaultTableColumns,
+    availableColumns,
     isAdminUser,
     selectedColumnsByResource,
     selectedResource,
