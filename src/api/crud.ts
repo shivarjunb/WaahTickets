@@ -20,7 +20,7 @@ type AppContext = Context<{ Bindings: Bindings; Variables: { authScope: AuthScop
 type JsonRecord = Record<string, unknown>
 type D1Value = string | number | null
 
-const reservedQueryParams = new Set(['limit', 'offset', 'order_by', 'order_dir'])
+const reservedQueryParams = new Set(['limit', 'offset', 'order_by', 'order_dir', 'q'])
 const hiddenColumnsByTable: Record<string, readonly string[]> = {
   users: ['password_hash', 'google_sub']
 }
@@ -484,7 +484,7 @@ crudRoutes.get('/:resource', async (c) => {
   const queryString = new URLSearchParams(queryEntries).toString()
   const resourceVersion = await cache.getResourceVersion(table.table)
   const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:list:${queryString}`
-  const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number } }>(
+  const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number; has_more: boolean } }>(
     cacheKey
   )
 
@@ -498,12 +498,38 @@ crudRoutes.get('/:resource', async (c) => {
   const values: D1Value[] = []
 
   for (const [key, value] of Object.entries(c.req.query())) {
-    if (reservedQueryParams.has(key) || !columns.has(key) || value === undefined) {
+    if (value === undefined) {
+      continue
+    }
+
+    if (key.startsWith('filter_')) {
+      const column = key.slice(7)
+      if (!columns.has(column)) continue
+      const queryValue = value.trim()
+      if (!queryValue) continue
+      conditions.push(`${column} LIKE ? ESCAPE '\\'`)
+      values.push(`%${escapeLikePattern(queryValue)}%`)
+      continue
+    }
+
+    if (reservedQueryParams.has(key) || !columns.has(key)) {
       continue
     }
 
     conditions.push(`${key} = ?`)
     values.push(value)
+  }
+
+  const globalSearch = c.req.query('q')?.trim()
+  if (globalSearch) {
+    const searchableColumns = table.columns.filter((column) => !hiddenColumnsByTable[table.table]?.includes(column))
+    if (searchableColumns.length > 0) {
+      conditions.push(`(${searchableColumns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')})`)
+      const queryValue = `%${escapeLikePattern(globalSearch)}%`
+      for (let index = 0; index < searchableColumns.length; index += 1) {
+        values.push(queryValue)
+      }
+    }
   }
 
   conditions.push(accessPolicy.clause)
@@ -519,14 +545,18 @@ crudRoutes.get('/:resource', async (c) => {
     .prepare(
       `SELECT * FROM ${table.table}${whereSql} ORDER BY ${orderBy} ${orderDir} LIMIT ? OFFSET ?`
     )
-    .bind(...values, limit, offset)
+    .bind(...values, limit + 1, offset)
     .all()
 
+  const rows = result.results.length > limit ? result.results.slice(0, limit) : result.results
+  const hasMore = result.results.length > limit
+
   const payload = {
-    data: sanitizeRowsForTable(table.table, result.results),
+    data: sanitizeRowsForTable(table.table, rows),
     pagination: {
       limit,
-      offset
+      offset,
+      has_more: hasMore
     }
   }
 
@@ -1454,6 +1484,10 @@ function sanitizeInteger(
   }
 
   return Math.min(Math.max(parsed, min), max)
+}
+
+function escapeLikePattern(value: string) {
+  return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
 }
 
 function sanitizeOrderBy(value: string | undefined, table: { columns: readonly string[]; defaultOrderBy?: string }) {

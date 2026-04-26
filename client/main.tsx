@@ -1,18 +1,24 @@
-import { StrictMode, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { StrictMode, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Download,
   BarChart3,
   Bell,
   Building2,
   CalendarDays,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Database,
   Edit3,
   Eye,
   FileText,
+  FilterX,
   Home,
   LayoutDashboard,
   LogIn,
@@ -93,6 +99,63 @@ const featuredSlideImages = [
   'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=1600&q=80',
   'https://images.unsplash.com/photo-1429962714451-bb934ecdc4ec?auto=format&fit=crop&w=1600&q=80'
 ]
+
+type ButtonColorPreset = {
+  id: string
+  name: string
+  primary: string
+  secondary: string
+  text: string
+}
+
+type ButtonColorTheme = {
+  presetId: string
+  primary: string
+  secondary: string
+  text: string
+}
+
+const buttonColorPresets: ButtonColorPreset[] = [
+  { id: 'terracotta-sage', name: 'Terracotta Sage', primary: '#b56d4a', secondary: '#8a4930', text: '#fff7ef' },
+  { id: 'spiced-mocha', name: 'Spiced Mocha', primary: '#9a5b3f', secondary: '#6a3d2a', text: '#fff6ec' },
+  { id: 'google-ocean', name: 'Google Ocean', primary: '#1a73e8', secondary: '#1558b0', text: '#f8fbff' },
+  { id: 'google-forest', name: 'Google Forest', primary: '#1e8e3e', secondary: '#146c2e', text: '#f6fff8' },
+  { id: 'golden-hour', name: 'Golden Hour', primary: '#d4a72c', secondary: '#a67b10', text: '#fffbea' },
+  { id: 'champagne-gold', name: 'Champagne Gold', primary: '#c5a96b', secondary: '#8f7542', text: '#fff8eb' },
+  { id: 'silver-slate', name: 'Silver Slate', primary: '#8b95a7', secondary: '#606a7a', text: '#f7f9fc' },
+  { id: 'graphite-mono', name: 'Graphite Mono', primary: '#3b3f46', secondary: '#1f2329', text: '#f5f7fb' },
+  { id: 'paper-ink', name: 'Paper Ink', primary: '#f3f4f6', secondary: '#d1d5db', text: '#111827' },
+  { id: 'plum-cocoa', name: 'Plum Cocoa', primary: '#8a536f', secondary: '#603a4e', text: '#fff4fb' }
+]
+
+const defaultButtonPreset =
+  buttonColorPresets.find((preset) => preset.id === 'google-ocean') ?? buttonColorPresets[0]
+
+const defaultButtonColorTheme: ButtonColorTheme = {
+  presetId: defaultButtonPreset.id,
+  primary: defaultButtonPreset.primary,
+  secondary: defaultButtonPreset.secondary,
+  text: defaultButtonPreset.text
+}
+const eventImagePlaceholder = `data:image/svg+xml;utf8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+    <defs>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#1f2937"/>
+        <stop offset="100%" stop-color="#111827"/>
+      </linearGradient>
+    </defs>
+    <rect width="1200" height="800" fill="url(#bg)"/>
+    <g fill="none" stroke="#64748b" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="360" y="230" width="480" height="340" rx="36"/>
+      <circle cx="495" cy="355" r="46"/>
+      <path d="M396 522l112-114 80 82 82-84 134 116"/>
+    </g>
+    <text x="600" y="665" fill="#cbd5e1" font-family="Inter,system-ui,sans-serif" font-size="44" text-anchor="middle">
+      Image unavailable
+    </text>
+  </svg>`
+)}`
 
 const samplePayloads: Record<string, Record<string, unknown>> = {
   users: {
@@ -266,6 +329,11 @@ type OrderCustomerOption = {
 }
 
 type WebRoleName = 'Customers' | 'Organizations' | 'Admin'
+type SortDirection = 'asc' | 'desc'
+type ResourceSort = {
+  column: string
+  direction: SortDirection
+}
 
 const roleAccess: Record<
   WebRoleName,
@@ -337,6 +405,11 @@ const requiredFieldsByResource: Record<string, string[]> = {
 
 type ApiListResponse = {
   data?: ApiRecord[]
+  pagination?: {
+    limit?: number
+    offset?: number
+    has_more?: boolean
+  }
   error?: string
   message?: string
 }
@@ -399,6 +472,69 @@ const hiddenTableColumns = new Set([
   'password_hash'
 ])
 
+const defaultSubgridRowsPerPage = 8
+const minSubgridRowsPerPage = 3
+const maxSubgridRowsPerPage = 100
+const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
+const emptyColumnFilterState: Record<string, string> = {}
+
+function loadAdminSubgridRowsPerPage() {
+  if (typeof window === 'undefined') return defaultSubgridRowsPerPage
+  const raw = window.localStorage.getItem(adminGridRowsStorageKey)
+  if (!raw) return defaultSubgridRowsPerPage
+  const parsed = Number.parseInt(raw, 10)
+  if (Number.isNaN(parsed)) return defaultSubgridRowsPerPage
+  return Math.min(maxSubgridRowsPerPage, Math.max(minSubgridRowsPerPage, parsed))
+}
+
+function loadButtonColorTheme(): ButtonColorTheme {
+  if (typeof window === 'undefined') return defaultButtonColorTheme
+
+  const raw = window.localStorage.getItem('waah_button_theme')
+  if (!raw) return defaultButtonColorTheme
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<ButtonColorTheme>
+    const primary = normalizeHexColor(parsed.primary) ?? defaultButtonColorTheme.primary
+    const secondary = normalizeHexColor(parsed.secondary) ?? defaultButtonColorTheme.secondary
+    const text = normalizeHexColor(parsed.text) ?? defaultButtonColorTheme.text
+    const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : 'custom'
+
+    return { presetId, primary, secondary, text }
+  } catch {
+    return defaultButtonColorTheme
+  }
+}
+
+function applyButtonThemeToDocument(theme: ButtonColorTheme) {
+  if (typeof document === 'undefined') return
+
+  const root = document.body
+  const shadow = hexToRgba(theme.secondary, 0.28)
+  const border = hexToRgba(theme.secondary, 0.34)
+
+  root.style.setProperty('--waah-btn-primary', theme.primary)
+  root.style.setProperty('--waah-btn-secondary', theme.secondary)
+  root.style.setProperty('--waah-btn-text', theme.text)
+  root.style.setProperty('--waah-btn-shadow', shadow)
+  root.style.setProperty('--waah-btn-border', border)
+}
+
+function normalizeHexColor(value: unknown) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : null
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = normalizeHexColor(hex)
+  if (!normalized) return `rgba(0, 0, 0, ${alpha})`
+  const red = Number.parseInt(normalized.slice(1, 3), 16)
+  const green = Number.parseInt(normalized.slice(3, 5), 16)
+  const blue = Number.parseInt(normalized.slice(5, 7), 16)
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
+}
+
 function App() {
   const [path, setPath] = useState(window.location.pathname)
   const [user, setUser] = useState<AuthUser>(null)
@@ -408,6 +544,7 @@ function App() {
     if (typeof window === 'undefined') return 'dark'
     return window.localStorage.getItem('waah_theme') === 'light' ? 'light' : 'dark'
   })
+  const [buttonColorTheme, setButtonColorTheme] = useState<ButtonColorTheme>(() => loadButtonColorTheme())
 
   useEffect(() => {
     const onPopState = () => setPath(window.location.pathname)
@@ -419,6 +556,11 @@ function App() {
     document.body.dataset.theme = theme
     window.localStorage.setItem('waah_theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    applyButtonThemeToDocument(buttonColorTheme)
+    window.localStorage.setItem('waah_button_theme', JSON.stringify(buttonColorTheme))
+  }, [buttonColorTheme])
 
   useEffect(() => {
     async function loadSession() {
@@ -469,6 +611,8 @@ function App() {
             onLogout={logout}
             theme={theme}
             onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            buttonColorTheme={buttonColorTheme}
+            onButtonColorThemeChange={setButtonColorTheme}
           />
           )
         ) : (
@@ -521,6 +665,10 @@ function PublicApp({
   const [selectedEventDetailId, setSelectedEventDetailId] = useState<string | null>(null)
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
+  const [eventSearchQuery, setEventSearchQuery] = useState('')
+  const [eventTypeFilter, setEventTypeFilter] = useState('all')
+  const [eventTimeFilter, setEventTimeFilter] = useState<'all' | 'weekend' | 'month'>('all')
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
   const [isReserveOpen, setIsReserveOpen] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [reservationForm, setReservationForm] = useState({
@@ -543,6 +691,46 @@ function PublicApp({
     () => ticketTypes.find((ticketType) => ticketType.id === selectedTicketTypeId) ?? ticketTypes[0],
     [ticketTypes, selectedTicketTypeId]
   )
+  const eventTypeOptions = useMemo(() => {
+    const options = new Set<string>()
+    for (const event of events) {
+      if (typeof event.event_type !== 'string') continue
+      const value = event.event_type.trim()
+      if (!value) continue
+      options.add(value)
+    }
+    return [...options].sort((left, right) => left.localeCompare(right))
+  }, [events])
+  const filteredEvents = useMemo(() => {
+    const search = eventSearchQuery.trim().toLowerCase()
+    const now = Date.now()
+
+    return events.filter((event) => {
+      if (eventTypeFilter !== 'all') {
+        const type = typeof event.event_type === 'string' ? event.event_type.trim() : ''
+        if (type !== eventTypeFilter) return false
+      }
+
+      if (eventTimeFilter === 'weekend' && !isEventWithinRange(event, now, 7)) return false
+      if (eventTimeFilter === 'month' && !isEventWithinRange(event, now, 30)) return false
+
+      if (!search) return true
+      const haystack = [
+        event.name,
+        event.description,
+        event.location_name,
+        event.organization_name,
+        event.event_type
+      ]
+        .filter((value) => typeof value === 'string' && value.trim())
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(search)
+    })
+  }, [eventSearchQuery, eventTimeFilter, eventTypeFilter, events])
+  const hasEventFilters =
+    eventSearchQuery.trim().length > 0 || eventTypeFilter !== 'all' || eventTimeFilter !== 'all'
   const featuredEvents = useMemo(() => {
     const eventsWithImages = events.filter((event) => {
       const bannerUrl = typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
@@ -554,6 +742,84 @@ function PublicApp({
     return events
   }, [events])
   const activeFeaturedEvent = featuredEvents[featuredSlideIndex] ?? selectedEvent ?? events[0]
+  const eventRails = useMemo(() => {
+    const now = Date.now()
+    const maxEventsPerRail = 16
+    const sortedEvents = [...filteredEvents].sort((left, right) => {
+      const leftTime =
+        typeof left.start_datetime === 'string' && left.start_datetime
+          ? new Date(left.start_datetime).getTime()
+          : Number.MAX_SAFE_INTEGER
+      const rightTime =
+        typeof right.start_datetime === 'string' && right.start_datetime
+          ? new Date(right.start_datetime).getTime()
+          : Number.MAX_SAFE_INTEGER
+      return leftTime - rightTime
+    })
+    const featuredEvents = sortedEvents.filter((event) => isTruthyValue(event.is_featured))
+    const weekendEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 7))
+    const monthEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 30))
+    const typeGroups = new Map<string, PublicEvent[]>()
+    const locationGroups = new Map<string, PublicEvent[]>()
+
+    for (const event of sortedEvents) {
+      const typeName = typeof event.event_type === 'string' ? event.event_type.trim() : ''
+      if (typeName) {
+        const current = typeGroups.get(typeName) ?? []
+        current.push(event)
+        typeGroups.set(typeName, current)
+      }
+
+      const locationName =
+        typeof event.location_name === 'string' && event.location_name.trim()
+          ? event.location_name.trim()
+          : typeof event.organization_name === 'string'
+            ? event.organization_name.trim()
+            : ''
+      if (locationName) {
+        const current = locationGroups.get(locationName) ?? []
+        current.push(event)
+        locationGroups.set(locationName, current)
+      }
+    }
+
+    const topTypes = [...typeGroups.entries()]
+      .filter(([, group]) => group.length >= 2)
+      .sort((left, right) => right[1].length - left[1].length)
+      .slice(0, 2)
+    const topLocations = [...locationGroups.entries()]
+      .filter(([, group]) => group.length >= 2)
+      .sort((left, right) => right[1].length - left[1].length)
+      .slice(0, 2)
+
+    const rails: Array<{ id: string; label: string; events: PublicEvent[] }> = []
+    const addRail = (id: string, label: string, candidates: PublicEvent[]) => {
+      if (candidates.length === 0) return
+      rails.push({ id, label, events: candidates.slice(0, maxEventsPerRail) })
+    }
+
+    addRail('featured-drops', 'Featured drops', featuredEvents.length > 0 ? featuredEvents : sortedEvents)
+    addRail('this-weekend', 'This weekend', weekendEvents)
+    addRail('happening-soon', 'Happening soon', monthEvents)
+
+    for (const [typeName, group] of topTypes) {
+      addRail(`type-${typeName.toLowerCase().replaceAll(/\s+/g, '-')}`, `${formatResourceName(typeName)} picks`, group)
+    }
+
+    for (const [locationName, group] of topLocations) {
+      addRail(
+        `location-${locationName.toLowerCase().replaceAll(/\s+/g, '-')}`,
+        `More in ${locationName}`,
+        group
+      )
+    }
+
+    if (rails.length < 3 && sortedEvents.length > 0) {
+      addRail('all-upcoming', 'All upcoming events', sortedEvents)
+    }
+
+    return rails
+  }, [filteredEvents])
   const featuredImages = useMemo(
     () =>
       featuredEvents.length > 0
@@ -572,6 +838,10 @@ function PublicApp({
         )
   const reserveBlockedMessage = getReserveBlockedMessage()
   const canReserve = !reserveBlockedMessage
+  const eventRailRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const pausedEventRailsRef = useRef<Set<string>>(new Set())
+  const canAccessAdmin = hasAdminConsoleAccess(user)
+  const canAccessTickets = hasCustomerTicketsAccess(user)
 
   useEffect(() => {
     async function loadPublicEvents() {
@@ -644,6 +914,44 @@ function PublicApp({
     return () => window.clearInterval(timer)
   }, [featuredEvents.length])
 
+  useEffect(() => {
+    if (eventRails.length === 0) return
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+    const timer = window.setInterval(() => {
+      for (const rail of eventRails) {
+        if (pausedEventRailsRef.current.has(rail.id)) continue
+        const railElement = eventRailRefs.current[rail.id]
+        if (!railElement) continue
+
+        const maxScrollLeft = Math.max(railElement.scrollWidth - railElement.clientWidth, 0)
+        if (maxScrollLeft <= 6) continue
+
+        const scrollAmount = Math.max(railElement.clientWidth * 0.68, 220)
+        const nextScrollLeft = railElement.scrollLeft + scrollAmount
+
+        if (nextScrollLeft >= maxScrollLeft - 6) {
+          railElement.scrollTo({ left: 0, behavior: 'smooth' })
+          continue
+        }
+
+        railElement.scrollBy({ left: scrollAmount, behavior: 'smooth' })
+      }
+    }, 4200)
+
+    return () => window.clearInterval(timer)
+  }, [eventRails])
+
+  function scrollEventRail(railId: string, direction: 'left' | 'right') {
+    const rail = eventRailRefs.current[railId]
+    if (!rail) return
+    const scrollAmount = Math.max(rail.clientWidth * 0.86, 280)
+    rail.scrollBy({
+      left: direction === 'right' ? scrollAmount : -scrollAmount,
+      behavior: 'smooth'
+    })
+  }
+
   return (
     <main className="app-shell">
       <nav className="topbar" aria-label="Main navigation">
@@ -654,7 +962,9 @@ function PublicApp({
         <div className="nav-links">
           <a href="#featured">Featured</a>
           <a href="#events">Events</a>
-          <a href="#checkout">Checkout</a>
+          <button type="button" onClick={() => setIsCheckoutOpen(true)}>
+            Checkout
+          </button>
         </div>
         {isAuthLoading ? (
           <div className="nav-session-placeholder" aria-hidden="true" />
@@ -664,10 +974,22 @@ function PublicApp({
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
-            <a className="nav-action" href="/admin">
-              Admin
-            </a>
-            <button className="secondary-button compact-button" type="button" onClick={() => void onLogout()}>
+            {canAccessTickets ? (
+              <a className="nav-action tickets-nav-action" href="/admin">
+                <Ticket size={16} />
+                <span>Tickets</span>
+              </a>
+            ) : canAccessAdmin ? (
+              <a className="nav-action admin-nav-action" href="/admin">
+                <LayoutDashboard size={16} />
+                <span>Admin</span>
+              </a>
+            ) : null}
+            <button
+              className="secondary-button compact-button logout-nav-button"
+              type="button"
+              onClick={() => void onLogout()}
+            >
               Logout
             </button>
           </div>
@@ -705,7 +1027,7 @@ function PublicApp({
                 onClick={() => {
                   if (!activeFeaturedEvent?.id) return
                   setSelectedEventId(activeFeaturedEvent.id)
-                  window.location.hash = '#checkout'
+                  setIsCheckoutOpen(true)
                 }}
               >
                 See tickets
@@ -733,6 +1055,11 @@ function PublicApp({
                   <img
                     alt={featuredEvents[index]?.name ? `${featuredEvents[index]?.name} banner` : 'Featured event'}
                     src={image}
+                    onError={(event) => {
+                      if (event.currentTarget.dataset.fallbackApplied === '1') return
+                      event.currentTarget.dataset.fallbackApplied = '1'
+                      event.currentTarget.src = eventImagePlaceholder
+                    }}
                   />
                 </div>
               ))}
@@ -741,143 +1068,239 @@ function PublicApp({
         </article>
       </section>
 
-      <section className="content-grid">
-        <div className="panel events-panel" id="events">
-          <div className="section-heading">
-            <p className="eyebrow">Featured drops</p>
-            <h2>Upcoming events</h2>
-          </div>
-          <div className="event-list">
-            {isEventsLoading ? (
+      <section className="content-grid events-only-grid">
+        {isEventsLoading ? (
+          <div className="panel events-panel" id="events">
+            <div className="section-heading">
+              <p className="eyebrow">Discover</p>
+              <h2>Browse events</h2>
+            </div>
+            <div className="event-list">
               <div className="public-empty">Loading published events...</div>
-            ) : events.length === 0 ? (
+            </div>
+          </div>
+        ) : events.length === 0 ? (
+          <div className="panel events-panel" id="events">
+            <div className="section-heading">
+              <p className="eyebrow">Discover</p>
+              <h2>Browse events</h2>
+            </div>
+            <div className="event-list">
               <div className="public-empty">No published events available yet.</div>
-            ) : (
-              <div className="event-card-grid">
-                {events.map((event, index) => (
-                  <article
-                    className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
-                    key={event.id}
-                  >
-                    <div className="event-card-media">
-                      <img
-                        alt={event.name ? `${event.name} image` : 'Event image'}
-                        loading="lazy"
-                        src={getEventImageUrl(event, index)}
-                      />
-                      {isTruthyValue(event.is_featured) ? (
-                        <span className="event-card-badge">
-                          <Star size={13} />
-                          Featured
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="event-card-body">
-                      <div className="event-date">{formatEventDate(event.start_datetime)}</div>
-                      <div className="event-card-copy">
-                        <h3>{event.name}</h3>
-                        <p>{event.location_name ?? event.organization_name ?? 'Venue pending'}</p>
-                        <div className="event-card-meta">
-                          <span>{formatEventTime(event.start_datetime)}</span>
-                          <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General'}</span>
-                          <span>{event.ticket_type_count ? `${event.ticket_type_count} ticket types` : 'Tickets pending'}</span>
-                        </div>
-                        <div className="event-card-price">
-                          {typeof event.starting_price_paisa === 'number'
-                            ? `From ${formatMoney(event.starting_price_paisa)}`
-                            : 'Price announced soon'}
-                        </div>
-                      </div>
-                      <div className="event-card-actions">
-                        <button
-                          className="secondary-button compact-button"
-                          type="button"
-                          onClick={() => {
-                            setSelectedEventId(event.id ?? null)
-                            window.location.hash = '#checkout'
-                          }}
-                        >
-                          Choose
-                        </button>
-                        <button
-                          className="secondary-button compact-button"
-                          type="button"
-                          onClick={() => setSelectedEventDetailId(event.id ?? null)}
-                        >
-                          <Eye size={15} />
-                          Details
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+            </div>
+          </div>
+        ) : (
+          <div className="events-sections" id="events">
+            <section className="panel events-panel event-filter-panel">
+              <div className="section-heading">
+                <p className="eyebrow">Discover</p>
+                <h2>Browse events</h2>
               </div>
+              <div className="events-toolbar">
+                <label className="events-toolbar-field">
+                  <span>Search</span>
+                  <input
+                    placeholder="Search by event, venue, organizer..."
+                    type="text"
+                    value={eventSearchQuery}
+                    onChange={(event) => setEventSearchQuery(event.target.value)}
+                  />
+                </label>
+                <label className="events-toolbar-field">
+                  <span>Type</span>
+                  <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
+                    <option value="all">All types</option>
+                    {eventTypeOptions.map((type) => (
+                      <option key={type} value={type}>
+                        {formatResourceName(type)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="events-toolbar-field">
+                  <span>When</span>
+                  <select
+                    value={eventTimeFilter}
+                    onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
+                  >
+                    <option value="all">Any time</option>
+                    <option value="weekend">This weekend</option>
+                    <option value="month">This month</option>
+                  </select>
+                </label>
+                <button
+                  className="secondary-button compact-button"
+                  disabled={!hasEventFilters}
+                  type="button"
+                  onClick={() => {
+                    setEventSearchQuery('')
+                    setEventTypeFilter('all')
+                    setEventTimeFilter('all')
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </section>
+
+            {eventRails.length === 0 ? (
+              <section className="panel events-panel">
+                <div className="public-empty">
+                  No events match your filters.
+                </div>
+              </section>
+            ) : (
+              eventRails.map((rail) => (
+                <section className="panel events-panel event-row-section" key={rail.id}>
+                  <header className="event-rail-header section-heading">
+                    <div>
+                      <p className="eyebrow">Discover</p>
+                      <h2>{rail.label}</h2>
+                    </div>
+                    <div className="event-rail-controls" aria-label={`${rail.label} controls`}>
+                      <button
+                        aria-label={`Scroll ${rail.label} left`}
+                        className="event-rail-control"
+                        type="button"
+                        onClick={() => scrollEventRail(rail.id, 'left')}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <button
+                        aria-label={`Scroll ${rail.label} right`}
+                        className="event-rail-control"
+                        type="button"
+                        onClick={() => scrollEventRail(rail.id, 'right')}
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  </header>
+                  <div
+                    className="event-rail-track"
+                    ref={(element) => {
+                      eventRailRefs.current[rail.id] = element
+                    }}
+                    onMouseEnter={() => pausedEventRailsRef.current.add(rail.id)}
+                    onMouseLeave={() => pausedEventRailsRef.current.delete(rail.id)}
+                    onFocusCapture={() => pausedEventRailsRef.current.add(rail.id)}
+                    onBlurCapture={(event) => {
+                      const nextTarget = event.relatedTarget as Node | null
+                      if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                        pausedEventRailsRef.current.delete(rail.id)
+                      }
+                    }}
+                  >
+                    {rail.events.map((event, index) => (
+                      <article
+                        className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
+                        key={event.id}
+                      >
+                        <div className="event-card-media">
+                          <button
+                            aria-label={`View details for ${event.name ?? 'event'}`}
+                            className="event-card-media-button"
+                            type="button"
+                            onClick={() => setSelectedEventDetailId(event.id ?? null)}
+                          >
+                            <img
+                              alt={event.name ? `${event.name} image` : 'Event image'}
+                              loading="lazy"
+                              src={getEventImageUrl(event, index)}
+                              onError={(event) => {
+                                if (event.currentTarget.dataset.fallbackApplied === '1') return
+                                event.currentTarget.dataset.fallbackApplied = '1'
+                                event.currentTarget.src = eventImagePlaceholder
+                              }}
+                            />
+                          </button>
+                          {isTruthyValue(event.is_featured) ? (
+                            <span className="event-card-badge">
+                              <Star size={13} />
+                              Featured
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="event-card-body">
+                          <div className="event-card-copy">
+                            <h3>{event.name}</h3>
+                            <div className="event-card-meta">
+                              <span className="event-date">{formatEventDate(event.start_datetime)}</span>
+                              <span>{formatEventTime(event.start_datetime)}</span>
+                              <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
+                            </div>
+                            <div className="event-card-price">
+                              {typeof event.starting_price_paisa === 'number'
+                                ? `From ${formatMoney(event.starting_price_paisa)}`
+                                : 'Price announced soon'}
+                            </div>
+                          </div>
+                          <div className="event-card-actions">
+                            <button
+                              aria-label="Choose tickets"
+                              className="event-icon-button"
+                              title="Choose tickets"
+                              type="button"
+                              onClick={() => {
+                                setSelectedEventId(event.id ?? null)
+                                setIsCheckoutOpen(true)
+                              }}
+                            >
+                              <Ticket size={15} />
+                            </button>
+                            <button
+                              aria-label="View event details"
+                              className="event-icon-button"
+                              title="View event details"
+                              type="button"
+                              onClick={() => setSelectedEventDetailId(event.id ?? null)}
+                            >
+                              <Eye size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))
             )}
           </div>
-        </div>
-
-        <div className="panel checkout-panel" id="checkout">
-          <div className="section-heading">
-            <p className="eyebrow">Ticket checkout</p>
-            <h2>{selectedEvent?.name ?? 'Select an event'}</h2>
-            {selectedEvent ? (
-              <p className="checkout-event-meta">
-                {selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'} ·{' '}
-                {formatEventDate(selectedEvent.start_datetime)} · {formatEventTime(selectedEvent.start_datetime)}
-              </p>
-            ) : null}
-          </div>
-          <div className="checkout-stack">
-            <label className="public-select-label">
-              <span>Ticket type</span>
-              <select
-                value={selectedTicketType?.id ?? ''}
-                onChange={(event) => setSelectedTicketTypeId(event.target.value)}
-              >
-                {ticketTypes.length === 0 ? (
-                  <option value="">No ticket types</option>
-                ) : (
-                  ticketTypes.map((ticketType) => (
-                    <option key={ticketType.id} value={ticketType.id}>
-                      {ticketType.name} - {formatMoney(ticketType.price_paisa ?? 0)}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-            <label className="public-select-label">
-              <span>Quantity</span>
-              <input
-                min="1"
-                max={selectedTicketType?.max_per_order ? String(selectedTicketType.max_per_order) : '10'}
-                type="number"
-                value={quantity}
-                onChange={(event) => setQuantity(Math.max(Number(event.target.value), 1))}
-              />
-            </label>
-            <div className="checkout-line">
-              <span>{selectedTicketType?.name ?? 'Ticket'}</span>
-              <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
-            </div>
-            <div className="checkout-line">
-              <span>Available</span>
-              <strong>{remainingTickets === null ? 'Open' : remainingTickets}</strong>
-            </div>
-            <div className="checkout-total">
-              <span>Total</span>
-              <strong>{formatMoney(totalPaisa)}</strong>
-            </div>
-          </div>
-          <button disabled={!canReserve} type="button" onClick={() => openReservation()}>
-            {isSubmittingOrder
-              ? 'Creating order...'
-              : isTicketTypesLoading
-                ? 'Loading ticket types...'
-                : 'Reserve tickets'}
-          </button>
-          {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : null}
-        </div>
+        )}
       </section>
+
+      {isCheckoutOpen ? (
+        <CheckoutModal
+          event={selectedEvent}
+          isSubmittingOrder={isSubmittingOrder}
+          isTicketTypesLoading={isTicketTypesLoading}
+          quantity={quantity}
+          remainingTickets={remainingTickets}
+          reserveBlockedMessage={reserveBlockedMessage}
+          selectedTicketType={selectedTicketType}
+          ticketTypes={ticketTypes}
+          totalPaisa={totalPaisa}
+          onChangeQuantity={(nextQuantity) => setQuantity(nextQuantity)}
+          onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
+          onClose={() => setIsCheckoutOpen(false)}
+          onReserve={() => {
+            setIsCheckoutOpen(false)
+            openReservation()
+          }}
+        />
+      ) : null}
+
+      {!isCheckoutOpen ? (
+        <button
+          aria-label="Open checkout"
+          className="checkout-pill-launcher"
+          type="button"
+          onClick={() => setIsCheckoutOpen(true)}
+        >
+          <Ticket size={16} />
+          <span>Checkout</span>
+        </button>
+      ) : null}
 
       {isReserveOpen ? (
         <ReservationModal
@@ -906,7 +1329,7 @@ function PublicApp({
               setSelectedEventId(String(selectedEventDetails.id))
             }
             setSelectedEventDetailId(null)
-            window.location.hash = '#checkout'
+            setIsCheckoutOpen(true)
           }}
         />
       ) : null}
@@ -1045,7 +1468,15 @@ function EventDetailsModal({
           </button>
         </header>
         <div className="event-details-media">
-          <img alt={event.name ? `${event.name} banner` : 'Event'} src={imageUrl} />
+          <img
+            alt={event.name ? `${event.name} banner` : 'Event'}
+            src={imageUrl}
+            onError={(event) => {
+              if (event.currentTarget.dataset.fallbackApplied === '1') return
+              event.currentTarget.dataset.fallbackApplied = '1'
+              event.currentTarget.src = eventImagePlaceholder
+            }}
+          />
         </div>
         <div className="event-details-content">
           <div className="event-details-meta">
@@ -1060,9 +1491,112 @@ function EventDetailsModal({
           <button type="button" onClick={onClose}>Close</button>
           <button className="primary-admin-button" type="button" onClick={onViewTickets}>
             <Ticket size={17} />
-            View tickets
+            Buy tickets
           </button>
         </footer>
+      </section>
+    </div>
+  )
+}
+
+function CheckoutModal({
+  event,
+  ticketTypes,
+  selectedTicketType,
+  quantity,
+  remainingTickets,
+  totalPaisa,
+  reserveBlockedMessage,
+  isTicketTypesLoading,
+  isSubmittingOrder,
+  onClose,
+  onChangeTicketType,
+  onChangeQuantity,
+  onReserve
+}: {
+  event?: PublicEvent
+  ticketTypes: TicketType[]
+  selectedTicketType?: TicketType
+  quantity: number
+  remainingTickets: number | null
+  totalPaisa: number
+  reserveBlockedMessage: string
+  isTicketTypesLoading: boolean
+  isSubmittingOrder: boolean
+  onClose: () => void
+  onChangeTicketType: (id: string) => void
+  onChangeQuantity: (value: number) => void
+  onReserve: () => void
+}) {
+  const canReserve = !reserveBlockedMessage
+
+  return (
+    <div className="modal-backdrop checkout-backdrop" role="presentation">
+      <section className="record-modal checkout-modal checkout-side-modal" role="dialog" aria-modal="true">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Ticket checkout</p>
+            <h2>{event?.name ?? 'Select an event'}</h2>
+            {event ? (
+              <p className="checkout-event-meta">
+                {event.location_name ?? event.organization_name ?? 'Venue pending'} ·{' '}
+                {formatEventDate(event.start_datetime)} · {formatEventTime(event.start_datetime)}
+              </p>
+            ) : null}
+          </div>
+          <button aria-label="Close modal" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="checkout-stack">
+          <label className="public-select-label">
+            <span>Ticket type</span>
+            <select value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
+              {ticketTypes.length === 0 ? (
+                <option value="">No ticket types</option>
+              ) : (
+                ticketTypes.map((ticketType) => (
+                  <option key={ticketType.id} value={ticketType.id}>
+                    {ticketType.name} - {formatMoney(ticketType.price_paisa ?? 0)}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <label className="public-select-label">
+            <span>Quantity</span>
+            <input
+              min="1"
+              max={selectedTicketType?.max_per_order ? String(selectedTicketType.max_per_order) : '10'}
+              type="number"
+              value={quantity}
+              onChange={(event) => onChangeQuantity(Math.max(Number(event.target.value), 1))}
+            />
+          </label>
+          <div className="checkout-line">
+            <span>{selectedTicketType?.name ?? 'Ticket'}</span>
+            <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
+          </div>
+          <div className="checkout-line">
+            <span>Available</span>
+            <strong>{remainingTickets === null ? 'Open' : remainingTickets}</strong>
+          </div>
+          <div className="checkout-total">
+            <span>Total</span>
+            <strong>{formatMoney(totalPaisa)}</strong>
+          </div>
+        </div>
+        <footer className="record-modal-actions checkout-modal-actions">
+          <button type="button" onClick={onClose}>Close</button>
+          <button className="primary-admin-button" disabled={!canReserve} type="button" onClick={onReserve}>
+            {isSubmittingOrder
+              ? 'Creating order...'
+              : isTicketTypesLoading
+                ? 'Loading ticket types...'
+                : 'Reserve tickets'}
+          </button>
+        </footer>
+        {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : null}
       </section>
     </div>
   )
@@ -1138,6 +1672,7 @@ function AuthModal({
 }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [status, setStatus] = useState('Use email/password or continue with Google.')
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
   const [googleConfig, setGoogleConfig] = useState<GoogleAuthConfig>({
     configured: false,
     redirect_uri: null
@@ -1165,6 +1700,8 @@ function AuthModal({
   }, [])
 
   async function submitAuth() {
+    if (isSubmittingAuth) return
+
     const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
     const body =
       mode === 'login'
@@ -1177,6 +1714,8 @@ function AuthModal({
             password: form.password,
           }
 
+    setIsSubmittingAuth(true)
+
     try {
       const { data } = await fetchJson<{ user: AuthUser }>(endpoint, {
         method: 'POST',
@@ -1186,6 +1725,8 @@ function AuthModal({
       onAuthenticated(data.user)
     } catch (error) {
       setStatus(getErrorMessage(error))
+    } finally {
+      setIsSubmittingAuth(false)
     }
   }
 
@@ -1197,7 +1738,7 @@ function AuthModal({
             <p className="admin-breadcrumb">Account</p>
             <h2>{mode === 'login' ? 'Login' : 'Create account'}</h2>
           </div>
-          <button aria-label="Close modal" disabled={isUploading} type="button" onClick={onClose}>
+          <button aria-label="Close modal" disabled={isSubmittingAuth} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
@@ -1246,22 +1787,40 @@ function AuthModal({
             </label>
           </div>
           <div className="auth-actions">
-            <button className="primary-admin-button" type="button" onClick={() => void submitAuth()}>
-              {mode === 'login' ? 'Login' : 'Register'}
-            </button>
-            <button type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-              {mode === 'login' ? 'Need an account?' : 'Have an account?'}
-            </button>
-            <button
-              className="google-auth-button"
-              disabled={!googleConfig.configured}
-              type="button"
-              onClick={() => {
-                window.location.href = '/api/auth/google/start'
-              }}
-            >
-              Continue with Google
-            </button>
+            <div className="auth-local-actions">
+              <button
+                className="primary-admin-button"
+                disabled={isSubmittingAuth}
+                type="button"
+                onClick={() => void submitAuth()}
+              >
+                {isSubmittingAuth ? <span aria-hidden="true" className="button-spinner" /> : null}
+                {isSubmittingAuth ? 'Please wait...' : mode === 'login' ? 'Login' : 'Register'}
+              </button>
+              <button
+                className="auth-switch-button"
+                disabled={isSubmittingAuth}
+                type="button"
+                onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+              >
+                {mode === 'login' ? 'Need an account? Register' : 'Have an account? Login'}
+              </button>
+            </div>
+            <div className="auth-divider" role="separator" aria-label="Authentication methods">
+              <span>or continue with</span>
+            </div>
+            <div className="auth-sso-actions">
+              <button
+                className="google-auth-button"
+                disabled={!googleConfig.configured || isSubmittingAuth}
+                type="button"
+                onClick={() => {
+                  window.location.href = '/api/auth/google/start'
+                }}
+              >
+                Continue with Google
+              </button>
+            </div>
           </div>
           {!googleConfig.configured ? (
             <p>Google SSO needs a client ID and secret before this button can be used.</p>
@@ -1344,13 +1903,17 @@ function AdminApp({
   onLoginClick,
   onLogout,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  buttonColorTheme,
+  onButtonColorThemeChange
 }: {
   user: AuthUser
   onLoginClick: () => void
   onLogout: () => void
   theme: 'dark' | 'light'
   onToggleTheme: () => void
+  buttonColorTheme: ButtonColorTheme
+  onButtonColorThemeChange: Dispatch<SetStateAction<ButtonColorTheme>>
 }) {
   const [resources, setResources] = useState(fallbackResources)
   const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
@@ -1368,8 +1931,18 @@ function AdminApp({
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [lookupOptions, setLookupOptions] = useState<Record<string, ApiRecord[]>>({})
   const [filter, setFilter] = useState('')
+  const [columnFiltersByResource, setColumnFiltersByResource] = useState<Record<string, Record<string, string>>>({})
+  const [tableSortByResource, setTableSortByResource] = useState<Record<string, ResourceSort>>({})
+  const [tablePageByResource, setTablePageByResource] = useState<Record<string, number>>({})
+  const [tableHasMoreByResource, setTableHasMoreByResource] = useState<Record<string, boolean>>({})
   const [orderCustomerFilter, setOrderCustomerFilter] = useState('')
   const [orderCustomerOptions, setOrderCustomerOptions] = useState<OrderCustomerOption[]>([])
+  const [subgridRowsPerPage, setSubgridRowsPerPage] = useState<number>(() => loadAdminSubgridRowsPerPage())
+  const [subgridRowsInput, setSubgridRowsInput] = useState<string>(() => String(loadAdminSubgridRowsPerPage()))
+  const [subgridPage, setSubgridPage] = useState<{ users: number; menuItems: number }>({
+    users: 1,
+    menuItems: 1
+  })
   const [status, setStatus] = useState('Ready')
   const [isLoading, setIsLoading] = useState(false)
   const [isSavingRecord, setIsSavingRecord] = useState(false)
@@ -1392,14 +1965,10 @@ function AdminApp({
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const isSettingsView = selectedResource === SETTINGS_VIEW
+  const activeButtonPreset =
+    buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
 
-  const filteredRecords = useMemo(() => {
-    const query = filter.trim().toLowerCase()
-    if (!query) return records
-    return records.filter((record) => JSON.stringify(record).toLowerCase().includes(query))
-  }, [filter, records])
-
-  const defaultTableColumns = useMemo(() => getTableColumns(filteredRecords), [filteredRecords])
+  const defaultTableColumns = useMemo(() => getTableColumns(records), [records])
   const availableColumns = useMemo(
     () => getAvailableColumns(resourceColumnsCatalog[selectedResource] ?? [], records),
     [records, resourceColumnsCatalog, selectedResource]
@@ -1413,6 +1982,44 @@ function AdminApp({
     },
     [availableColumns, defaultTableColumns, isAdminUser, selectedColumns, selectedWebRole]
   )
+  const activeColumnFilters = columnFiltersByResource[selectedResource] ?? emptyColumnFilterState
+  const hasActiveColumnFilters = Object.keys(activeColumnFilters).length > 0
+  const activeColumnFilterEntries = useMemo(
+    () => Object.entries(activeColumnFilters).filter(([, value]) => value.trim().length > 0),
+    [activeColumnFilters]
+  )
+  const activeColumnFilterQueryKey = useMemo(
+    () =>
+      activeColumnFilterEntries
+        .map(([column, value]) => `${column}:${value.trim().toLowerCase()}`)
+        .sort()
+        .join('|'),
+    [activeColumnFilterEntries]
+  )
+  const activeSort = tableSortByResource[selectedResource] ?? null
+  const tableRowsPerPage = 12
+  const currentTablePage = Math.max(1, tablePageByResource[selectedResource] ?? 1)
+  const currentTableHasMore = tableHasMoreByResource[selectedResource] ?? false
+  const webRoleUsersForSelectedRole = useMemo(
+    () => webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId),
+    [selectedWebRoleId, webRoleUsers]
+  )
+  const webRoleMenuItemsForSelectedRole = useMemo(
+    () => webRoleMenuItems.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId),
+    [selectedWebRoleId, webRoleMenuItems]
+  )
+  const totalUserSubgridPages = Math.max(1, Math.ceil(webRoleUsersForSelectedRole.length / subgridRowsPerPage))
+  const totalMenuSubgridPages = Math.max(1, Math.ceil(webRoleMenuItemsForSelectedRole.length / subgridRowsPerPage))
+  const pagedWebRoleUsers = useMemo(() => {
+    const safePage = Math.min(subgridPage.users, totalUserSubgridPages)
+    const startIndex = (safePage - 1) * subgridRowsPerPage
+    return webRoleUsersForSelectedRole.slice(startIndex, startIndex + subgridRowsPerPage)
+  }, [subgridPage.users, subgridRowsPerPage, totalUserSubgridPages, webRoleUsersForSelectedRole])
+  const pagedWebRoleMenuItems = useMemo(() => {
+    const safePage = Math.min(subgridPage.menuItems, totalMenuSubgridPages)
+    const startIndex = (safePage - 1) * subgridRowsPerPage
+    return webRoleMenuItemsForSelectedRole.slice(startIndex, startIndex + subgridRowsPerPage)
+  }, [subgridPage.menuItems, subgridRowsPerPage, totalMenuSubgridPages, webRoleMenuItemsForSelectedRole])
   const totalRecords = records.length
   const statusBreakdown = useMemo(() => getStatusBreakdown(records), [records])
   const recentTrend = useMemo(() => getRecentRecordTrend(records), [records])
@@ -1478,8 +2085,17 @@ function AdminApp({
       setStatus('R2 settings')
       return
     }
-    void loadRecords(selectedResource)
-  }, [isSettingsView, selectedResource])
+    void loadRecords(selectedResource, currentTablePage)
+  }, [
+    isSettingsView,
+    selectedResource,
+    currentTablePage,
+    orderCustomerFilter,
+    filter,
+    activeSort?.column,
+    activeSort?.direction,
+    activeColumnFilterQueryKey
+  ])
 
   useEffect(() => {
     if (selectedResource !== 'orders') {
@@ -1508,6 +2124,36 @@ function AdminApp({
   useEffect(() => {
     setIsColumnPickerOpen(false)
   }, [selectedResource])
+
+  useEffect(() => {
+    window.localStorage.setItem(adminGridRowsStorageKey, String(subgridRowsPerPage))
+  }, [subgridRowsPerPage])
+
+  useEffect(() => {
+    setTablePageByResource((current) => {
+      if ((current[selectedResource] ?? 1) === 1) return current
+      return {
+        ...current,
+        [selectedResource]: 1
+      }
+    })
+  }, [selectedResource, filter, activeSort?.column, activeSort?.direction, activeColumnFilterQueryKey, orderCustomerFilter])
+
+  useEffect(() => {
+    setSubgridPage({ users: 1, menuItems: 1 })
+  }, [selectedWebRoleId])
+
+  useEffect(() => {
+    if (subgridPage.users > totalUserSubgridPages) {
+      setSubgridPage((current) => ({ ...current, users: totalUserSubgridPages }))
+    }
+  }, [subgridPage.users, totalUserSubgridPages])
+
+  useEffect(() => {
+    if (subgridPage.menuItems > totalMenuSubgridPages) {
+      setSubgridPage((current) => ({ ...current, menuItems: totalMenuSubgridPages }))
+    }
+  }, [subgridPage.menuItems, totalMenuSubgridPages])
 
   useEffect(() => {
     if (isSettingsView) return
@@ -1601,27 +2247,116 @@ function AdminApp({
     }
   }
 
-  async function loadRecords(resource = selectedResource, customerFilter = orderCustomerFilter) {
+  function applyButtonPreset(presetId: string) {
+    const preset = buttonColorPresets.find((item) => item.id === presetId)
+    if (!preset) return
+
+    onButtonColorThemeChange({
+      presetId: preset.id,
+      primary: preset.primary,
+      secondary: preset.secondary,
+      text: preset.text
+    })
+    setStatus(`Applied ${preset.name} button colors`)
+  }
+
+  function selectButtonThemeOption(value: string) {
+    if (value === 'custom') {
+      onButtonColorThemeChange((current) => ({ ...current, presetId: 'custom' }))
+      setStatus('Custom button colors selected')
+      return
+    }
+    applyButtonPreset(value)
+  }
+
+  function updateButtonThemeColor(field: keyof Omit<ButtonColorTheme, 'presetId'>, value: string) {
+    onButtonColorThemeChange((current) => ({
+      ...current,
+      presetId: 'custom',
+      [field]: value
+    }))
+  }
+
+  function resetButtonTheme() {
+    onButtonColorThemeChange(defaultButtonColorTheme)
+    setStatus(`Applied ${buttonColorPresets[0].name} button colors`)
+  }
+
+  function saveSubgridRowsPerPage() {
+    const parsed = Number.parseInt(subgridRowsInput, 10)
+    if (Number.isNaN(parsed)) {
+      setSettingsError('Rows per subgrid page must be a number.')
+      setStatus('Rows per subgrid page must be a number.')
+      return
+    }
+
+    const nextValue = Math.min(maxSubgridRowsPerPage, Math.max(minSubgridRowsPerPage, parsed))
+    setSubgridRowsPerPage(nextValue)
+    setSubgridRowsInput(String(nextValue))
+    setSettingsError('')
+    setStatus(`Subgrid page size set to ${nextValue} rows`)
+  }
+
+  async function loadRecords(resource = selectedResource, page = currentTablePage) {
     setIsLoading(true)
-    setStatus(`Loading ${formatResourceName(resource)}`)
+    setStatus(`Loading ${formatResourceName(resource)} page ${page}`)
 
     try {
-      const endpoint =
-        selectedWebRole === 'Customers' && resource === 'customers' && user?.id
-          ? `/api/customers?user_id=${encodeURIComponent(user.id)}&limit=50`
-          : `/api/${resource}?limit=50`
+      const query = new URLSearchParams()
+      query.set('limit', String(tableRowsPerPage))
+      query.set('offset', String(Math.max(0, (page - 1) * tableRowsPerPage)))
+
+      const sortState = tableSortByResource[resource]
+      if (sortState?.column) {
+        query.set('order_by', sortState.column)
+        query.set('order_dir', sortState.direction)
+      }
+
+      if (resource === selectedResource) {
+        const globalQuery = filter.trim()
+        if (globalQuery) {
+          query.set('q', globalQuery)
+        }
+
+        const columnFilters = columnFiltersByResource[resource] ?? {}
+        for (const [column, value] of Object.entries(columnFilters)) {
+          const filterValue = value.trim()
+          if (filterValue) {
+            query.set(`filter_${column}`, filterValue)
+          }
+        }
+      }
+
+      if (selectedWebRole === 'Customers' && resource === 'customers' && user?.id) {
+        query.set('user_id', user.id)
+      }
+
+      if (resource === 'orders' && orderCustomerFilter.trim()) {
+        query.set('customer_id', orderCustomerFilter.trim())
+      }
+
+      const endpoint = `/api/${resource}?${query.toString()}`
       const { data } = await fetchJson<ApiListResponse>(endpoint)
       const loadedRecords = data.data ?? []
+      const hasMore = Boolean(data.pagination?.has_more)
 
       setRecords(loadedRecords)
+      setTableHasMoreByResource((current) => ({
+        ...current,
+        [resource]: hasMore
+      }))
       if (resource === 'web_roles') {
         const firstWebRoleId = String(loadedRecords[0]?.id ?? '')
         setSelectedWebRoleId((current) => current || firstWebRoleId)
       }
 
-      setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded`)
+      setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded on page ${page}`)
     } catch (error) {
       setRecords([])
+      setTableHasMoreByResource((current) => ({
+        ...current,
+        [resource]: false
+      }))
       setStatus(getErrorMessage(error))
     } finally {
       setIsLoading(false)
@@ -1758,11 +2493,6 @@ function AdminApp({
   }
 
   function openEditModal(record: ApiRecord) {
-    if (selectedResource === 'files') {
-      setStatus('File records are created only through successful uploads.')
-      return
-    }
-
     if (!selectedPermissions.can_edit) {
       setStatus(`${selectedWebRole} cannot edit ${formatResourceName(selectedResource)}.`)
       return
@@ -2053,6 +2783,49 @@ function AdminApp({
     })
   }
 
+  function setColumnFilter(column: string, value: string) {
+    setColumnFiltersByResource((current) => {
+      const existing = { ...(current[selectedResource] ?? {}) }
+      if (value.trim()) {
+        existing[column] = value
+      } else {
+        delete existing[column]
+      }
+      return {
+        ...current,
+        [selectedResource]: existing
+      }
+    })
+  }
+
+  function clearColumnFilters() {
+    setColumnFiltersByResource((current) => ({
+      ...current,
+      [selectedResource]: {}
+    }))
+  }
+
+  function toggleSort(column: string) {
+    setTableSortByResource((current) => {
+      const existing = current[selectedResource]
+      if (!existing || existing.column !== column) {
+        return {
+          ...current,
+          [selectedResource]: { column, direction: 'asc' }
+        }
+      }
+      if (existing.direction === 'asc') {
+        return {
+          ...current,
+          [selectedResource]: { column, direction: 'desc' }
+        }
+      }
+      const next = { ...current }
+      delete next[selectedResource]
+      return next
+    })
+  }
+
   async function handleFileUploadSuccess(uploadedFile: ApiRecord) {
     const fileName = typeof uploadedFile.file_name === 'string' ? uploadedFile.file_name : 'file'
     setStatus(`Uploaded ${fileName} to R2 storage.`)
@@ -2179,77 +2952,194 @@ function AdminApp({
         </header>
 
         {isSettingsView ? (
-          <section className="admin-card settings-card">
-            <div className="admin-card-header">
-              <div>
-                <h2>R2 Storage Settings</h2>
-                <p>{isSettingsLoading ? 'Loading settings...' : status}</p>
+          <>
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>R2 Storage Settings</h2>
+                  <p>{isSettingsLoading ? 'Loading settings...' : status}</p>
+                </div>
               </div>
-            </div>
-            <div className="settings-grid">
-              <label>
-                <span>R2 binding name</span>
-                <input disabled type="text" value={r2Settings.r2_binding_name} />
-              </label>
-              <label>
-                <span>R2 binding status</span>
-                <input
-                  disabled
-                  type="text"
-                  value={r2Settings.r2_binding_configured ? 'Configured' : 'Not configured in Wrangler'}
-                />
-              </label>
-              <label>
-                <span>R2 bucket name</span>
-                <input
-                  disabled
-                  type="text"
-                  value={r2Settings.r2_bucket_name}
-                />
-              </label>
-              <label>
-                <span>R2 public base URL</span>
-                <input
+              <div className="settings-grid">
+                <label>
+                  <span>R2 binding name</span>
+                  <input disabled type="text" value={r2Settings.r2_binding_name} />
+                </label>
+                <label>
+                  <span>R2 binding status</span>
+                  <input
+                    disabled
+                    type="text"
+                    value={r2Settings.r2_binding_configured ? 'Configured' : 'Not configured in Wrangler'}
+                  />
+                </label>
+                <label>
+                  <span>R2 bucket name</span>
+                  <input
+                    disabled
+                    type="text"
+                    value={r2Settings.r2_bucket_name}
+                  />
+                </label>
+                <label>
+                  <span>R2 public base URL</span>
+                  <input
+                    disabled={isSettingsLoading || isSettingsSaving}
+                    placeholder="https://cdn.example.com"
+                    type="text"
+                    value={r2Settings.r2_public_base_url}
+                    onChange={(event) =>
+                      setR2Settings((current) => ({ ...current, r2_public_base_url: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Ticket QR base URL</span>
+                  <input
+                    disabled={isSettingsLoading || isSettingsSaving}
+                    placeholder="https://tickets.example.com/checkin"
+                    type="text"
+                    value={r2Settings.ticket_qr_base_url}
+                    onChange={(event) =>
+                      setR2Settings((current) => ({ ...current, ticket_qr_base_url: event.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+              {r2Settings.runtime_note ? <p className="upload-hint">{r2Settings.runtime_note}</p> : null}
+              {settingsError ? <p className="record-modal-error">{settingsError}</p> : null}
+              <footer className="record-modal-actions">
+                <button disabled={isSettingsLoading || isSettingsSaving} type="button" onClick={() => void loadR2Settings()}>
+                  <RefreshCw className={isSettingsLoading ? 'spinning-icon' : ''} size={17} />
+                  Reload
+                </button>
+                <button
+                  className="primary-admin-button"
                   disabled={isSettingsLoading || isSettingsSaving}
-                  placeholder="https://cdn.example.com"
-                  type="text"
-                  value={r2Settings.r2_public_base_url}
-                  onChange={(event) =>
-                    setR2Settings((current) => ({ ...current, r2_public_base_url: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                <span>Ticket QR base URL</span>
-                <input
-                  disabled={isSettingsLoading || isSettingsSaving}
-                  placeholder="https://tickets.example.com/checkin"
-                  type="text"
-                  value={r2Settings.ticket_qr_base_url}
-                  onChange={(event) =>
-                    setR2Settings((current) => ({ ...current, ticket_qr_base_url: event.target.value }))
-                  }
-                />
-              </label>
-            </div>
-            {r2Settings.runtime_note ? <p className="upload-hint">{r2Settings.runtime_note}</p> : null}
-            {settingsError ? <p className="record-modal-error">{settingsError}</p> : null}
-            <footer className="record-modal-actions">
-              <button disabled={isSettingsLoading || isSettingsSaving} type="button" onClick={() => void loadR2Settings()}>
-                <RefreshCw className={isSettingsLoading ? 'spinning-icon' : ''} size={17} />
-                Reload
-              </button>
-              <button
-                className="primary-admin-button"
-                disabled={isSettingsLoading || isSettingsSaving}
-                type="button"
-                onClick={() => void saveR2Settings()}
-              >
-                {isSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-                {isSettingsSaving ? 'Saving...' : 'Save settings'}
-              </button>
-            </footer>
-          </section>
+                  type="button"
+                  onClick={() => void saveR2Settings()}
+                >
+                  {isSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                  {isSettingsSaving ? 'Saving...' : 'Save settings'}
+                </button>
+              </footer>
+            </section>
+
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Button Color Presets</h2>
+                  <p>
+                    Choose one of 10 curated combinations or fine-tune button colors with the pickers.
+                  </p>
+                </div>
+              </div>
+              <div className="settings-grid color-settings-grid">
+                <label>
+                  <span>Preset</span>
+                  <select
+                    value={buttonColorPresets.some((preset) => preset.id === buttonColorTheme.presetId) ? buttonColorTheme.presetId : 'custom'}
+                    onChange={(event) => selectButtonThemeOption(event.target.value)}
+                  >
+                    {buttonColorPresets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Primary button</span>
+                  <input
+                    type="color"
+                    value={buttonColorTheme.primary}
+                    onChange={(event) => updateButtonThemeColor('primary', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Secondary button</span>
+                  <input
+                    type="color"
+                    value={buttonColorTheme.secondary}
+                    onChange={(event) => updateButtonThemeColor('secondary', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Button text</span>
+                  <input
+                    type="color"
+                    value={buttonColorTheme.text}
+                    onChange={(event) => updateButtonThemeColor('text', event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="color-preset-grid">
+                {buttonColorPresets.map((preset) => (
+                  <button
+                    className={buttonColorTheme.presetId === preset.id ? 'active' : ''}
+                    key={preset.id}
+                    style={{
+                      ['--preset-primary' as string]: preset.primary,
+                      ['--preset-secondary' as string]: preset.secondary,
+                      ['--preset-text' as string]: preset.text
+                    }}
+                    type="button"
+                    onClick={() => applyButtonPreset(preset.id)}
+                  >
+                    <span>{preset.name}</span>
+                  </button>
+                ))}
+              </div>
+              <footer className="record-modal-actions">
+                <button
+                  disabled={!activeButtonPreset}
+                  type="button"
+                  onClick={() => {
+                    if (!activeButtonPreset) return
+                    applyButtonPreset(activeButtonPreset.id)
+                  }}
+                >
+                  Apply selected preset
+                </button>
+                <button className="primary-admin-button" type="button" onClick={() => resetButtonTheme()}>
+                  <Save size={17} />
+                  Reset to default
+                </button>
+              </footer>
+            </section>
+
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Grid Preferences</h2>
+                  <p>Global admin preference for subgrid pagination.</p>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  <span>Rows per subgrid page</span>
+                  <input
+                    min={String(minSubgridRowsPerPage)}
+                    max={String(maxSubgridRowsPerPage)}
+                    type="number"
+                    value={subgridRowsInput}
+                    onChange={(event) => setSubgridRowsInput(event.target.value)}
+                  />
+                </label>
+              </div>
+              <footer className="record-modal-actions">
+                <button
+                  className="primary-admin-button"
+                  type="button"
+                  onClick={saveSubgridRowsPerPage}
+                >
+                  <Save size={17} />
+                  Save grid preference
+                </button>
+              </footer>
+            </section>
+          </>
         ) : (
           <>
             <div className="admin-summary-grid">
@@ -2360,7 +3250,6 @@ function AdminApp({
                         onChange={(event) => {
                           const nextCustomerId = event.target.value
                           setOrderCustomerFilter(nextCustomerId)
-                          void loadRecords('orders', nextCustomerId)
                         }}
                       >
                         <option value="">All customers</option>
@@ -2375,6 +3264,14 @@ function AdminApp({
                   <button type="button" onClick={() => void loadRecords()}>
                     <RefreshCw className={isLoading ? 'spinning-icon' : ''} size={17} />
                     Refresh
+                  </button>
+                  <button
+                    disabled={!hasActiveColumnFilters}
+                    type="button"
+                    onClick={clearColumnFilters}
+                  >
+                    <FilterX size={17} />
+                    Clear filters
                   </button>
                   {isAdminUser && selectedWebRole === 'Admin' ? (
                     <div className="column-picker">
@@ -2419,21 +3316,57 @@ function AdminApp({
                   <thead>
                     <tr>
                       {tableColumns.map((column) => (
-                        <th key={column}>{formatResourceName(column)}</th>
+                        <th key={column}>
+                          <button
+                            aria-label={`Sort by ${formatResourceName(column)}`}
+                            className="admin-sort-button"
+                            type="button"
+                            onClick={() => toggleSort(column)}
+                          >
+                            <span>{formatResourceName(column)}</span>
+                            {activeSort?.column !== column ? (
+                              <ArrowUpDown size={14} />
+                            ) : activeSort.direction === 'asc' ? (
+                              <ArrowUp size={14} />
+                            ) : (
+                              <ArrowDown size={14} />
+                            )}
+                          </button>
+                        </th>
                       ))}
                       <th>Actions</th>
                     </tr>
+                    <tr className="admin-filter-row">
+                      {tableColumns.map((column) => (
+                        <th key={`${column}-filter`}>
+                          <input
+                            aria-label={`Filter ${formatResourceName(column)}`}
+                            placeholder={`Filter ${formatResourceName(column)}`}
+                            type="text"
+                            value={activeColumnFilters[column] ?? ''}
+                            onChange={(event) => setColumnFilter(column, event.target.value)}
+                          />
+                        </th>
+                      ))}
+                      <th />
+                    </tr>
                   </thead>
                   <tbody>
-                    {filteredRecords.length === 0 ? (
+                    {records.length === 0 ? (
                       <tr>
                         <td colSpan={tableColumns.length + 1}>
                           <div className="table-empty">No records found</div>
                         </td>
                       </tr>
                     ) : (
-                      filteredRecords.map((record) => (
-                        <tr key={String(record.id ?? JSON.stringify(record))}>
+                      records.map((record) => (
+                        <tr
+                          key={String(record.id ?? JSON.stringify(record))}
+                          onDoubleClick={() => {
+                            if (!selectedPermissions.can_edit) return
+                            openEditModal(record)
+                          }}
+                        >
                           {tableColumns.map((column) => (
                             <td key={column}>{formatCellValue(column, record[column])}</td>
                           ))}
@@ -2441,7 +3374,7 @@ function AdminApp({
                             <div className="crud-icons">
                               <button
                                 aria-label="Edit record"
-                                disabled={!selectedPermissions.can_edit || selectedResource === 'files'}
+                                disabled={!selectedPermissions.can_edit}
                                 title="Edit"
                                 type="button"
                                 onClick={() => openEditModal(record)}
@@ -2480,6 +3413,39 @@ function AdminApp({
                   </tbody>
                 </table>
               </div>
+              <div className="admin-pagination">
+                <span>
+                  Page {currentTablePage}
+                </span>
+                <div className="admin-pagination-actions">
+                  <button
+                    disabled={currentTablePage <= 1}
+                    type="button"
+                    onClick={() =>
+                      setTablePageByResource((current) => ({
+                        ...current,
+                        [selectedResource]: Math.max(1, currentTablePage - 1)
+                      }))
+                    }
+                  >
+                    <ChevronLeft size={16} />
+                    Prev
+                  </button>
+                  <button
+                    disabled={!currentTableHasMore}
+                    type="button"
+                    onClick={() =>
+                      setTablePageByResource((current) => ({
+                        ...current,
+                        [selectedResource]: currentTablePage + 1
+                      }))
+                    }
+                  >
+                    Next
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
             </section>
 
             {selectedResource === 'web_roles' ? (
@@ -2509,22 +3475,53 @@ function AdminApp({
                         </tr>
                       </thead>
                       <tbody>
-                        {webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length === 0 ? (
+                        {webRoleUsersForSelectedRole.length === 0 ? (
                           <tr>
                             <td colSpan={2}>No user assignments for this role</td>
                           </tr>
                         ) : (
-                          webRoleUsers
-                            .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
-                            .map((item) => (
-                              <tr key={String(item.id ?? `${item.user_id}-${item.web_role_id}`)}>
-                                <td>{formatCellValue('user_id', item.user_id)}</td>
-                                <td>{formatCellValue('web_role_id', item.web_role_id)}</td>
-                              </tr>
-                            ))
+                          pagedWebRoleUsers.map((item) => (
+                            <tr key={String(item.id ?? `${item.user_id}-${item.web_role_id}`)}>
+                              <td>{formatCellValue('user_id', item.user_id)}</td>
+                              <td>{formatCellValue('web_role_id', item.web_role_id)}</td>
+                            </tr>
+                          ))
                         )}
                       </tbody>
                     </table>
+                    <div className="admin-pagination subgrid-pagination">
+                      <span>
+                        Page {Math.min(subgridPage.users, totalUserSubgridPages)} of {totalUserSubgridPages}
+                      </span>
+                      <div className="admin-pagination-actions">
+                        <button
+                          disabled={subgridPage.users <= 1}
+                          type="button"
+                          onClick={() =>
+                            setSubgridPage((current) => ({
+                              ...current,
+                              users: Math.max(1, current.users - 1)
+                            }))
+                          }
+                        >
+                          <ChevronLeft size={15} />
+                          Prev
+                        </button>
+                        <button
+                          disabled={subgridPage.users >= totalUserSubgridPages}
+                          type="button"
+                          onClick={() =>
+                            setSubgridPage((current) => ({
+                              ...current,
+                              users: Math.min(totalUserSubgridPages, current.users + 1)
+                            }))
+                          }
+                        >
+                          Next
+                          <ChevronRight size={15} />
+                        </button>
+                      </div>
+                    </div>
                   </article>
                   <article className="admin-subgrid-card">
                     <h4>Web Role Menu Items</h4>
@@ -2539,26 +3536,56 @@ function AdminApp({
                         </tr>
                       </thead>
                       <tbody>
-                        {webRoleMenuItems.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length ===
-                        0 ? (
+                        {webRoleMenuItemsForSelectedRole.length === 0 ? (
                           <tr>
                             <td colSpan={5}>No menu permissions for this role</td>
                           </tr>
                         ) : (
-                          webRoleMenuItems
-                            .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
-                            .map((item) => (
-                              <tr key={String(item.id ?? `${item.web_role_id}-${item.resource_name}`)}>
-                                <td>{formatCellValue('resource_name', item.resource_name)}</td>
-                                <td>{formatCellValue('can_view', item.can_view)}</td>
-                                <td>{formatCellValue('can_create', item.can_create)}</td>
-                                <td>{formatCellValue('can_edit', item.can_edit)}</td>
-                                <td>{formatCellValue('can_delete', item.can_delete)}</td>
-                              </tr>
-                            ))
+                          pagedWebRoleMenuItems.map((item) => (
+                            <tr key={String(item.id ?? `${item.web_role_id}-${item.resource_name}`)}>
+                              <td>{formatCellValue('resource_name', item.resource_name)}</td>
+                              <td>{formatCellValue('can_view', item.can_view)}</td>
+                              <td>{formatCellValue('can_create', item.can_create)}</td>
+                              <td>{formatCellValue('can_edit', item.can_edit)}</td>
+                              <td>{formatCellValue('can_delete', item.can_delete)}</td>
+                            </tr>
+                          ))
                         )}
                       </tbody>
                     </table>
+                    <div className="admin-pagination subgrid-pagination">
+                      <span>
+                        Page {Math.min(subgridPage.menuItems, totalMenuSubgridPages)} of {totalMenuSubgridPages}
+                      </span>
+                      <div className="admin-pagination-actions">
+                        <button
+                          disabled={subgridPage.menuItems <= 1}
+                          type="button"
+                          onClick={() =>
+                            setSubgridPage((current) => ({
+                              ...current,
+                              menuItems: Math.max(1, current.menuItems - 1)
+                            }))
+                          }
+                        >
+                          <ChevronLeft size={15} />
+                          Prev
+                        </button>
+                        <button
+                          disabled={subgridPage.menuItems >= totalMenuSubgridPages}
+                          type="button"
+                          onClick={() =>
+                            setSubgridPage((current) => ({
+                              ...current,
+                              menuItems: Math.min(totalMenuSubgridPages, current.menuItems + 1)
+                            }))
+                          }
+                        >
+                          Next
+                          <ChevronRight size={15} />
+                        </button>
+                      </div>
+                    </div>
                   </article>
                 </div>
               </section>
@@ -3154,6 +4181,13 @@ function getEventImageUrl(event: PublicEvent | null | undefined, fallbackIndex =
   return featuredSlideImages[fallbackIndex % featuredSlideImages.length]
 }
 
+function isEventWithinRange(event: PublicEvent, now: number, days: number) {
+  if (typeof event.start_datetime !== 'string' || !event.start_datetime) return false
+  const startTime = new Date(event.start_datetime).getTime()
+  if (Number.isNaN(startTime) || startTime < now) return false
+  return startTime <= now + days * 24 * 60 * 60 * 1000
+}
+
 function formatEventDate(value: unknown) {
   if (!value || typeof value !== 'string') return 'TBA'
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(value))
@@ -3162,6 +4196,20 @@ function formatEventDate(value: unknown) {
 function formatEventTime(value: unknown) {
   if (!value || typeof value !== 'string') return 'TBA'
   return new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+}
+
+function formatEventRailLabel(value: Date) {
+  return new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(value)
+}
+
+function hasAdminConsoleAccess(user: AuthUser) {
+  const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
+  return ['admin', 'organizations', 'organizer', 'organisation', 'organisations'].includes(role)
+}
+
+function hasCustomerTicketsAccess(user: AuthUser) {
+  const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
+  return ['customers', 'customer'].includes(role)
 }
 
 function formatMoney(paisa: number) {
