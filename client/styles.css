@@ -500,7 +500,7 @@ h1 {
 
 .event-card {
   display: grid;
-  grid-template-rows: 180px auto;
+  grid-template-rows: 128px auto;
   border: 1px solid rgba(99, 102, 143, 0.16);
   border-radius: 12px;
   background: #ffffff;
@@ -560,6 +560,30 @@ h1 {
   margin: 0;
   color: #64748b;
   font-size: 0.86rem;
+}
+
+.event-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.event-card-meta span {
+  border: 1px solid rgba(99, 102, 143, 0.24);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #4b5563;
+  background: rgba(99, 102, 143, 0.08);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.event-card-price {
+  margin-top: 8px;
+  color: #475569;
+  font-size: 0.84rem;
+  font-weight: 800;
 }
 
 .event-card-actions {
@@ -2158,7 +2182,7 @@ h1 {
 }
 
 .event-card {
-  grid-template-rows: 160px auto;
+  grid-template-rows: 104px auto;
 }
 
 .event-date {
@@ -2902,6 +2926,16 @@ body[data-theme='light'] .checkout-event-meta {
   color: #475569;
 }
 
+body[data-theme='light'] .event-card-meta span {
+  border-color: rgba(71, 85, 105, 0.2);
+  color: #334155;
+  background: rgba(71, 85, 105, 0.08);
+}
+
+body[data-theme='light'] .event-card-price {
+  color: #0f172a;
+}
+
 body[data-theme='light'] .event-card-badge {
   border-color: rgba(26, 115, 232, 0.36);
   background: rgba(26, 115, 232, 0.84);
@@ -2989,6 +3023,16 @@ body[data-theme='dark'] .checkout-hint,
 body[data-theme='dark'] .public-select-label span,
 body[data-theme='dark'] .checkout-event-meta {
   color: #a8b7d8;
+}
+
+body[data-theme='dark'] .event-card-meta span {
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #c4d3f4;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+body[data-theme='dark'] .event-card-price {
+  color: #e2e8f0;
 }
 
 body[data-theme='dark'] .event-card-badge {

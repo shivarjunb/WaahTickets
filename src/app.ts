@@ -37,10 +37,10 @@ app.get('/api/public/events', async (c) => {
   }
 
   const cache = createCache(c.env)
-  const versions = await cache.getResourceVersions(['events', 'organizations', 'event_locations'])
+  const versions = await cache.getResourceVersions(['events', 'organizations', 'event_locations', 'ticket_types'])
   const cacheKey =
     `cache:public:events:v${versions.events}` +
-    `:org-v${versions.organizations}:loc-v${versions.event_locations}`
+    `:org-v${versions.organizations}:loc-v${versions.event_locations}:tt-v${versions.ticket_types}`
   const cached = await cache.getJson<{ data: unknown[] }>(cacheKey)
   if (cached) {
     c.header('X-Cache', 'HIT')
@@ -72,7 +72,19 @@ app.get('/api/public/events', async (c) => {
         WHERE event_locations.event_id = events.id
         ORDER BY event_locations.created_at ASC
         LIMIT 1
-      ) AS location_address
+      ) AS location_address,
+      (
+        SELECT MIN(ticket_types.price_paisa)
+        FROM ticket_types
+        WHERE ticket_types.event_id = events.id
+          AND ticket_types.is_active = 1
+      ) AS starting_price_paisa,
+      (
+        SELECT COUNT(1)
+        FROM ticket_types
+        WHERE ticket_types.event_id = events.id
+          AND ticket_types.is_active = 1
+      ) AS ticket_type_count
     FROM events
     LEFT JOIN organizations ON organizations.id = events.organization_id
     LEFT JOIN files ON files.id = events.banner_file_id
@@ -86,6 +98,40 @@ app.get('/api/public/events', async (c) => {
   c.header('X-Cache', 'MISS')
 
   return c.json(payload)
+})
+
+app.get('/api/public/events/:id/banner', async (c) => {
+  if (!c.env.DB || !c.env.FILES_BUCKET) {
+    return c.json({ error: 'Banner storage is not available.' }, 503)
+  }
+
+  const eventId = c.req.param('id')
+  const banner = await c.env.DB
+    .prepare(
+      `SELECT files.storage_key, files.mime_type
+       FROM events
+       JOIN files ON files.id = events.banner_file_id
+       WHERE events.id = ?
+         AND events.status = 'published'
+       LIMIT 1`
+    )
+    .bind(eventId)
+    .first<{ storage_key: string | null; mime_type: string | null }>()
+
+  if (!banner?.storage_key) {
+    return c.text('Banner not found.', 404)
+  }
+
+  const object = await c.env.FILES_BUCKET.get(banner.storage_key)
+  if (!object) {
+    return c.text('Banner not found.', 404)
+  }
+
+  const headers = new Headers()
+  headers.set('Content-Type', banner.mime_type?.trim() || object.httpMetadata?.contentType || 'application/octet-stream')
+  headers.set('Cache-Control', 'public, max-age=300')
+
+  return new Response(object.body, { status: 200, headers })
 })
 
 app.get('/api/public/events/:id/ticket-types', async (c) => {

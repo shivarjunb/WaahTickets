@@ -242,11 +242,14 @@ type PublicEvent = ApiRecord & {
   location_name?: string
   location_address?: string
   banner_public_url?: string
+  banner_file_id?: string
   start_datetime?: string
   end_datetime?: string
   description?: string
   event_type?: string
   is_featured?: number | boolean | string
+  starting_price_paisa?: number
+  ticket_type_count?: number
 }
 
 type TicketType = ApiRecord & {
@@ -774,6 +777,16 @@ function PublicApp({
                       <div className="event-card-copy">
                         <h3>{event.name}</h3>
                         <p>{event.location_name ?? event.organization_name ?? 'Venue pending'}</p>
+                        <div className="event-card-meta">
+                          <span>{formatEventTime(event.start_datetime)}</span>
+                          <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General'}</span>
+                          <span>{event.ticket_type_count ? `${event.ticket_type_count} ticket types` : 'Tickets pending'}</span>
+                        </div>
+                        <div className="event-card-price">
+                          {typeof event.starting_price_paisa === 'number'
+                            ? `From ${formatMoney(event.starting_price_paisa)}`
+                            : 'Price announced soon'}
+                        </div>
                       </div>
                       <div className="event-card-actions">
                         <button
@@ -3130,6 +3143,12 @@ function getEventImageUrl(event: PublicEvent | null | undefined, fallbackIndex =
   const bannerUrl = typeof event?.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
   if (bannerUrl && isValidHttpUrl(bannerUrl)) {
     return bannerUrl
+  }
+
+  const eventId = typeof event?.id === 'string' ? event.id.trim() : ''
+  const bannerFileId = typeof event?.banner_file_id === 'string' ? event.banner_file_id.trim() : ''
+  if (eventId && bannerFileId) {
+    return `/api/public/events/${encodeURIComponent(eventId)}/banner`
   }
 
   return featuredSlideImages[fallbackIndex % featuredSlideImages.length]

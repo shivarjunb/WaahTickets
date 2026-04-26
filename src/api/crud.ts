@@ -382,6 +382,31 @@ crudRoutes.post('/files/upload', async (c) => {
   const cache = createCache(c.env)
   await cache.bumpResourceVersion('files')
 
+  if (linkedEventId && (fileType === 'event_banner' || fileType === 'event_image')) {
+    const linkedEvent = await executeMutation(c, () =>
+      db
+        .prepare(`UPDATE events SET banner_file_id = ?, updated_at = ? WHERE id = ? RETURNING id`)
+        .bind(fileId, now, linkedEventId)
+        .first<{ id: string }>()
+    )
+
+    if (linkedEvent instanceof Response) {
+      return linkedEvent
+    }
+
+    if (!linkedEvent) {
+      return c.json(
+        {
+          error: 'Event not found.',
+          message: 'The image was uploaded but could not be linked because the event does not exist.'
+        },
+        404
+      )
+    }
+
+    await cache.bumpResourceVersion('events')
+  }
+
   return c.json({ data: sanitizeRowForTable('files', inserted) }, 201)
 })
 
