@@ -738,8 +738,10 @@ function PublicApp({
           customer_id: customerId,
           event_id: selectedEvent.id,
           event_location_id: selectedEvent.location_id,
+          status: 'paid',
           subtotal_amount_paisa: total,
           total_amount_paisa: total,
+          currency: selectedTicketType.currency ?? 'NPR',
           order_datetime: new Date().toISOString()
         })
       })

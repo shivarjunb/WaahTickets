@@ -2,5 +2,6 @@ node_modules
 dist
 .env
 .dev.vars
+.wrangler/
 secrets.toml
 .DS_Store

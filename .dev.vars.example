@@ -1,3 +1,6 @@
-GOOGLE_CLIENT_ID="your-google-oauth-client-id.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET="your-google-oauth-client-secret"
+GOOGLE_CLIENT_ID="1068189559210-2b4qreupt0r9h3g14gp344b5ev9kcck8.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="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"
+UPSTASH_REDIS_REST_TOKEN="gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg"
 AUTH_REDIRECT_ORIGIN="http://localhost:8787"
+EMAIL_FROM="WaahTickets <tickets@your-domain.com>"
+SENDGRID_API_KEY="SG.xxxxx.yyyyy"
