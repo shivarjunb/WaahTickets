@@ -60,6 +60,7 @@ export async function maybeEnqueueOrderNotification(args: {
   const { env, tableName, row } = args
 
   if (!env.DB || !env.EMAIL_QUEUE) {
+    console.warn('[notifications] enqueue skipped: missing DB or EMAIL_QUEUE binding')
     return
   }
 
@@ -104,6 +105,7 @@ export async function maybeEnqueueOrderNotification(args: {
     .first<{ order_number: string; customer_email: string | null }>()
 
   if (!orderContext?.customer_email) {
+    console.warn('[notifications] enqueue skipped: customer email missing', { orderId, tableName })
     return
   }
 
@@ -122,6 +124,7 @@ export async function maybeEnqueueOrderNotification(args: {
     .first<{ id: string }>()
 
   if (existing) {
+    console.log('[notifications] enqueue skipped: active queue entry already exists', { orderId })
     return
   }
 
@@ -167,8 +170,15 @@ export async function maybeEnqueueOrderNotification(args: {
       recipientEmail: orderContext.customer_email,
       queuedAt: now
     })
+    console.log('[notifications] enqueued order notification', {
+      orderId,
+      queueEntryId,
+      messageId,
+      recipientEmail: orderContext.customer_email
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    console.error('[notifications] queue send failed', { orderId, queueEntryId, messageId, error: message })
     await markQueueEntryFailed(env.DB, queueEntryId, messageId, 0, message)
     throw error
   }
@@ -176,13 +186,16 @@ export async function maybeEnqueueOrderNotification(args: {
 
 export async function consumeOrderNotifications(batch: MessageBatch<unknown>, env: Bindings) {
   if (!env.DB) {
+    console.error('[notifications] consumer missing DB binding; retrying batch')
     batch.retryAll()
     return
   }
 
+  console.log('[notifications] consumer batch received', { size: batch.messages.length })
   for (const message of batch.messages) {
     const payload = message.body
     if (!isEmailQueueMessage(payload)) {
+      console.warn('[notifications] dropping invalid queue payload')
       message.ack()
       continue
     }
@@ -212,9 +225,20 @@ export async function consumeOrderNotifications(batch: MessageBatch<unknown>, en
         providerMessageId: providerResult.providerMessageId
       })
 
+      console.log('[notifications] email sent', {
+        orderId: payload.orderId,
+        queueEntryId: payload.queueEntryId,
+        providerMessageId: providerResult.providerMessageId
+      })
       message.ack()
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error('[notifications] consumer error', {
+        orderId: payload.orderId,
+        queueEntryId: payload.queueEntryId,
+        attempts: message.attempts,
+        error: errorMessage
+      })
 
       if (message.attempts >= MAX_RETRY_ATTEMPTS) {
         await markQueueEntryFailed(env.DB, payload.queueEntryId, payload.messageId, message.attempts, errorMessage)
