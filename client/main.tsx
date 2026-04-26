@@ -1,6 +1,8 @@
 import { StrictMode, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
+  Activity,
+  BarChart3,
   CalendarDays,
   Database,
   Edit3,
@@ -35,6 +37,12 @@ const fallbackResources = [
   'ticket_scans',
   'coupons',
   'coupon_redemptions'
+]
+
+const featuredSlideImages = [
+  'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
+  'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=1600&q=80',
+  'https://images.unsplash.com/photo-1429962714451-bb934ecdc4ec?auto=format&fit=crop&w=1600&q=80'
 ]
 
 const samplePayloads: Record<string, Record<string, unknown>> = {
@@ -388,6 +396,7 @@ function PublicApp({
   const [events, setEvents] = useState<PublicEvent[]>([])
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
   const [isEventsLoading, setIsEventsLoading] = useState(true)
+  const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
@@ -469,6 +478,14 @@ function PublicApp({
     void loadTicketTypes()
   }, [selectedEvent?.id])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setFeaturedSlideIndex((current) => (current + 1) % featuredSlideImages.length)
+    }, 3800)
+
+    return () => window.clearInterval(timer)
+  }, [])
+
   return (
     <main className="app-shell">
       <nav className="topbar" aria-label="Main navigation">
@@ -477,6 +494,7 @@ function PublicApp({
           <span>Waahtickets</span>
         </a>
         <div className="nav-links">
+          <a href="#featured">Featured</a>
           <a href="#events">Events</a>
           <a href="#insights">Insights</a>
           <a href="#checkout">Checkout</a>
@@ -499,68 +517,46 @@ function PublicApp({
         )}
       </nav>
 
-      <section className="hero">
-        <div className="hero-copy">
-          <p className="eyebrow">{publicStatus}</p>
-          <h1>
-            {isEventsLoading
-              ? 'Loading featured event...'
-              : selectedEvent?.name ?? ''}
-          </h1>
-          <p className="hero-text">
-            {isEventsLoading
-              ? 'Pulling live event data from D1.'
-              : selectedEvent?.description ?? ''}
-          </p>
-          <div className="hero-actions">
-            <a className="primary-button" href="#events">
-              Browse events
-            </a>
-            {isAuthLoading ? (
-              <span className="hero-action-placeholder" aria-hidden="true" />
-            ) : user ? (
-              <a className="secondary-button" href="/admin">
-                Open admin
+      <section className="featured-shell" id="featured">
+        <article className="featured-event-card" aria-label="Featured event">
+          <div className="featured-content">
+            <p className="eyebrow">{publicStatus}</p>
+            <h1 className="featured-title">
+              {isEventsLoading ? 'Loading featured event...' : selectedEvent?.name ?? ''}
+            </h1>
+            <div className="hero-actions">
+              <a className="secondary-button featured-cta" href="#checkout">
+                See tickets
               </a>
-            ) : (
-              <button className="secondary-button" type="button" onClick={onLoginClick}>
-                Login or register
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="event-preview" aria-label="Featured ticket preview">
-          <div className="ticket">
-            <div className="ticket-header">
-              <span>Tonight</span>
-              <strong>Admit 2</strong>
             </div>
-            <div>
-              <p className="ticket-kicker">
-                {isEventsLoading
-                  ? 'Loading venue'
-                  : selectedEvent?.location_name ?? selectedEvent?.organization_name ?? 'Live event'}
-              </p>
-              <h2>{isEventsLoading ? 'Loading event' : selectedEvent?.name ?? 'No event selected'}</h2>
-            </div>
-            <div className="ticket-grid">
-              <span>Date</span>
-              <strong>{formatEventDate(selectedEvent?.start_datetime)}</strong>
-              <span>Doors</span>
-              <strong>{formatEventTime(selectedEvent?.start_datetime)}</strong>
-              <span>From</span>
-              <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
-            </div>
-            <div className="scan-row">
-              <span />
-              <span />
-              <span />
-              <span />
-              <span />
+            <div className="featured-dots" aria-label="Featured image slides">
+              {featuredSlideImages.map((_, index) => (
+                <button
+                  aria-label={`Slide ${index + 1}`}
+                  className={index === featuredSlideIndex ? 'featured-dot active' : 'featured-dot'}
+                  key={`featured-dot-${index}`}
+                  type="button"
+                  onClick={() => setFeaturedSlideIndex(index)}
+                />
+              ))}
             </div>
           </div>
-        </div>
+          <div className="featured-media">
+            <button className="featured-favorite" type="button" aria-label="Save featured event">
+              ♡
+            </button>
+            <div
+              className="featured-media-track"
+              style={{ transform: `translateX(-${featuredSlideIndex * 100}%)` }}
+            >
+              {featuredSlideImages.map((image, index) => (
+                <div className="featured-media-frame" key={`featured-slide-${index}`}>
+                  <img alt="" src={image} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </article>
       </section>
 
       <section className="stats-row" id="insights" aria-label="Waahtickets metrics">
@@ -1025,6 +1021,13 @@ function AdminApp({
 
   const tableColumns = useMemo(() => getTableColumns(filteredRecords), [filteredRecords])
   const totalRecords = records.length
+  const statusBreakdown = useMemo(() => getStatusBreakdown(records), [records])
+  const recentTrend = useMemo(() => getRecentRecordTrend(records), [records])
+  const recentTrendMax = useMemo(
+    () => Math.max(1, ...recentTrend.map((item) => item.count)),
+    [recentTrend]
+  )
+  const latestRecordActivity = useMemo(() => getLatestRecordActivity(records), [records])
   const visibleResources = useMemo(
     () => resources.filter((resource) => roleAccess[selectedWebRole][resource]),
     [resources, selectedWebRole]
@@ -1367,7 +1370,66 @@ function AdminApp({
               <strong>/api/{selectedResource}</strong>
             </div>
           </div>
+          <div className="info-box">
+            <Activity size={24} />
+            <div>
+              <span>Latest activity</span>
+              <strong>{latestRecordActivity}</strong>
+            </div>
+          </div>
         </div>
+
+        <section className="admin-analytics-grid" aria-label="Admin charts">
+          <article className="admin-chart-card">
+            <header>
+              <h2>
+                <BarChart3 size={18} />
+                Record trend (7 days)
+              </h2>
+              <p>Daily record activity based on timestamps available in this resource.</p>
+            </header>
+            <div className="admin-bar-chart" role="img" aria-label="Seven-day record trend bar chart">
+              {recentTrend.map((point) => (
+                <div className="admin-bar-group" key={point.label}>
+                  <div
+                    className="admin-bar"
+                    style={{
+                      height: `${Math.max(8, Math.round((point.count / recentTrendMax) * 100))}%`
+                    }}
+                    title={`${point.label}: ${point.count}`}
+                  />
+                  <span>{point.label}</span>
+                </div>
+              ))}
+            </div>
+          </article>
+          <article className="admin-chart-card">
+            <header>
+              <h2>
+                <Activity size={18} />
+                Status breakdown
+              </h2>
+              <p>Current distribution for rows with a status-like field.</p>
+            </header>
+            <div className="admin-status-list">
+              {statusBreakdown.length === 0 ? (
+                <p className="admin-chart-empty">No status fields found in this dataset.</p>
+              ) : (
+                statusBreakdown.map((item) => (
+                  <div className="admin-status-row" key={item.label}>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{item.count} records</span>
+                    </div>
+                    <div className="admin-status-meter">
+                      <span style={{ width: `${item.percentage}%` }} />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </article>
+        </section>
 
         <section className="admin-card">
           <div className="admin-card-header">
@@ -1559,6 +1621,8 @@ function RecordModal({
               ) : (
                 <input
                   disabled={mode === 'edit' && field === 'id'}
+                  step={isDateTimeField(field) ? 60 : undefined}
+                  type={isDateTimeField(field) ? 'datetime-local' : 'text'}
                   value={formValues[field] ?? ''}
                   onChange={(event) =>
                     setFormValues({
@@ -1592,7 +1656,11 @@ function getFieldSelectOptions(resource: string, field: string) {
 
 function toFormValues(record: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(record).map(([key, value]) => [key, value === null || value === undefined ? '' : String(value)])
+    Object.entries(record).map(([key, value]) => {
+      if (value === null || value === undefined) return [key, '']
+      const stringValue = String(value)
+      return [key, isDateTimeField(key) ? toDateTimeLocalValue(stringValue) : stringValue]
+    })
   )
 }
 
@@ -1629,6 +1697,10 @@ function coerceFieldValue(field: string, value: string, originalValue: unknown) 
     return isTruthyValue(value) ? 1 : 0
   }
 
+  if (isDateTimeField(field)) {
+    return toIsoDateTimeValue(value)
+  }
+
   return coerceValue(value, originalValue)
 }
 
@@ -1642,6 +1714,88 @@ function getTableColumns(records: ApiRecord[]) {
   const columns = [...preferredColumns, ...remaining].slice(0, 6)
 
   return columns.length > 0 ? columns : ['name', 'status']
+}
+
+function getStatusBreakdown(records: ApiRecord[]) {
+  const counts = new Map<string, number>()
+
+  for (const record of records) {
+    const rawStatus = record.status ?? record.payment_status ?? record.order_status ?? record.state
+    if (!rawStatus) continue
+    const label = String(rawStatus)
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+
+  const total = [...counts.values()].reduce((sum, value) => sum + value, 0)
+  if (!total) return []
+
+  return [...counts.entries()]
+    .map(([label, count]) => ({
+      label,
+      count,
+      percentage: Math.max(4, Math.round((count / total) * 100))
+    }))
+    .sort((first, second) => second.count - first.count)
+    .slice(0, 5)
+}
+
+function getRecentRecordTrend(records: ApiRecord[]) {
+  const days = 7
+  const now = new Date()
+  const dayBuckets = Array.from({ length: days }, (_, index) => {
+    const date = new Date(now)
+    date.setDate(now.getDate() - (days - 1 - index))
+    const key = date.toISOString().slice(0, 10)
+    return {
+      key,
+      label: date.toLocaleDateString('en-US', { weekday: 'short' }),
+      count: 0
+    }
+  })
+  const bucketByKey = new Map(dayBuckets.map((bucket) => [bucket.key, bucket]))
+
+  for (const record of records) {
+    const candidate =
+      record.created_at ??
+      record.updated_at ??
+      record.start_datetime ??
+      record.end_datetime ??
+      record.order_datetime
+    if (!candidate || typeof candidate !== 'string') continue
+    const parsed = new Date(candidate)
+    if (Number.isNaN(parsed.getTime())) continue
+    const key = parsed.toISOString().slice(0, 10)
+    const bucket = bucketByKey.get(key)
+    if (bucket) bucket.count += 1
+  }
+
+  return dayBuckets
+}
+
+function getLatestRecordActivity(records: ApiRecord[]) {
+  let latestTimestamp = 0
+
+  for (const record of records) {
+    const candidate =
+      record.updated_at ??
+      record.created_at ??
+      record.start_datetime ??
+      record.end_datetime ??
+      record.order_datetime
+    if (!candidate || typeof candidate !== 'string') continue
+    const parsed = new Date(candidate).getTime()
+    if (!Number.isNaN(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
+  if (!latestTimestamp) return 'No timestamp'
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(latestTimestamp))
 }
 
 function formatCellValue(column: string, value: unknown) {
@@ -1677,6 +1831,28 @@ function isBooleanField(field: string) {
     field.startsWith('can_') ||
     ['email_verified', 'phone_verified'].includes(field)
   )
+}
+
+function isDateTimeField(field: string) {
+  return field.endsWith('_datetime') || field.endsWith('_at')
+}
+
+function toDateTimeLocalValue(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  const hours = String(parsed.getHours()).padStart(2, '0')
+  const minutes = String(parsed.getMinutes()).padStart(2, '0')
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+function toIsoDateTimeValue(value: string) {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString()
 }
 
 function isTruthyValue(value: unknown) {
