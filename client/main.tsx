@@ -301,6 +301,7 @@ const hiddenTableColumns = new Set([
 function App() {
   const [path, setPath] = useState(window.location.pathname)
   const [user, setUser] = useState<AuthUser>(null)
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthOpen, setIsAuthOpen] = useState(false)
 
   useEffect(() => {
@@ -316,6 +317,8 @@ function App() {
         setUser(data.user)
       } catch {
         setUser(null)
+      } finally {
+        setIsAuthLoading(false)
       }
     }
 
@@ -339,13 +342,30 @@ function App() {
   return (
     <>
       {path.startsWith('/admin') ? (
-        user ? (
+        isAuthLoading ? (
+          <main className="auth-gate">
+            <section className="auth-gate-panel">
+              <a className="brand" href="/">
+                <span className="brand-mark">W</span>
+                <span>Waahtickets</span>
+              </a>
+              <p className="eyebrow">Admin access</p>
+              <h1>Checking session</h1>
+              <p>Validating your account before loading the dashboard.</p>
+            </section>
+          </main>
+        ) : user ? (
           <AdminApp user={user} onLoginClick={() => setIsAuthOpen(true)} onLogout={logout} />
         ) : (
           <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
         )
       ) : (
-        <PublicApp user={user} onLoginClick={() => setIsAuthOpen(true)} onLogout={logout} />
+        <PublicApp
+          user={user}
+          isAuthLoading={isAuthLoading}
+          onLoginClick={() => setIsAuthOpen(true)}
+          onLogout={logout}
+        />
       )}
       {isAuthOpen ? (
         <AuthModal
@@ -362,10 +382,12 @@ function App() {
 
 function PublicApp({
   user,
+  isAuthLoading,
   onLoginClick,
   onLogout
 }: {
   user: AuthUser
+  isAuthLoading: boolean
   onLoginClick: () => void
   onLogout: () => void
 }) {
@@ -461,7 +483,9 @@ function PublicApp({
           <a href="#insights">Insights</a>
           <a href="#checkout">Checkout</a>
         </div>
-        {user ? (
+        {isAuthLoading ? (
+          <div className="nav-session-placeholder" aria-hidden="true" />
+        ) : user ? (
           <div className="nav-session-actions">
             <a className="nav-action" href="/admin">
               Admin
@@ -489,7 +513,9 @@ function PublicApp({
             <a className="primary-button" href="#events">
               Browse events
             </a>
-            {user ? (
+            {isAuthLoading ? (
+              <span className="hero-action-placeholder" aria-hidden="true" />
+            ) : user ? (
               <a className="secondary-button" href="/admin">
                 Open admin
               </a>
@@ -1690,10 +1716,15 @@ async function fetchJson<T>(url: string, options?: RequestInit) {
   if (!contentType.includes('application/json')) {
     const text = await response.text()
     const preview = text.trim().slice(0, 80)
+    const lowerPreview = preview.toLowerCase()
 
     throw new Error(
       preview.startsWith('<!doctype') || preview.startsWith('<html')
         ? 'The API returned the React HTML page. Run the app through Wrangler or start Wrangler on port 8787 for Vite proxying.'
+        : contentType.includes('text/plain') &&
+            response.status >= 500 &&
+            (lowerPreview.includes('internal server error') || lowerPreview === '')
+          ? 'The API is returning a plain-text 500 error. Start/restart Wrangler on port 8787 and run local D1 migrations (`npm run db:migrate:local`).'
         : `Expected JSON but received ${contentType || 'an unknown content type'}: ${preview || response.statusText}`
     )
   }

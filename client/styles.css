@@ -94,6 +94,13 @@ textarea {
   gap: 10px;
 }
 
+.nav-session-placeholder {
+  width: 180px;
+  min-height: 40px;
+  border-radius: 8px;
+  background: rgba(24, 63, 53, 0.1);
+}
+
 .compact-button {
   min-height: 40px;
   border: 0;
@@ -167,6 +174,15 @@ h1 {
 .hero-actions {
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.hero-action-placeholder {
+  display: inline-block;
+  width: 164px;
+  min-height: 48px;
+  border: 1px solid rgba(24, 63, 53, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 254, 248, 0.64);
 }
 
 .primary-button,

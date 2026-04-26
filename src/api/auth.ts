@@ -39,24 +39,24 @@ type GoogleUserInfo = {
 export const authRoutes = new Hono<{ Bindings: Bindings }>()
 
 authRoutes.post('/register', async (c) => {
-  const body = await c.req.json<{
-    first_name?: string
-    last_name?: string
-    email?: string
-    phone_number?: string
-    password?: string
-  }>()
-
-  if (!body.email || !body.password) {
-    return c.json({ error: 'Email and password are required.' }, 400)
-  }
-
-  const userId = crypto.randomUUID()
-  const now = new Date().toISOString()
-  const webrole = 'Customers'
-  const passwordHash = await hashPassword(body.password)
-
   try {
+    const body = await c.req.json<{
+      first_name?: string
+      last_name?: string
+      email?: string
+      phone_number?: string
+      password?: string
+    }>()
+
+    if (!body.email || !body.password) {
+      return c.json({ error: 'Email and password are required.' }, 400)
+    }
+
+    const userId = crypto.randomUUID()
+    const now = new Date().toISOString()
+    const webrole = 'Customers'
+    const passwordHash = await hashPassword(body.password)
+
     await c.env.DB.prepare(
       `INSERT INTO users (
         id, first_name, last_name, email, phone_number, password_hash, webrole,
@@ -99,31 +99,48 @@ authRoutes.post('/register', async (c) => {
     return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token)
   } catch (error) {
     console.error(error)
-    return c.json({ error: 'Registration failed.' }, 409)
+    return c.json(
+      {
+        error: 'Registration failed.',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      },
+      500
+    )
   }
 })
 
 authRoutes.post('/login', async (c) => {
-  const body = await c.req.json<{ email?: string; password?: string }>()
+  try {
+    const body = await c.req.json<{ email?: string; password?: string }>()
 
-  if (!body.email || !body.password) {
-    return c.json({ error: 'Email and password are required.' }, 400)
+    if (!body.email || !body.password) {
+      return c.json({ error: 'Email and password are required.' }, 400)
+    }
+
+    const user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ? LIMIT 1')
+      .bind(body.email.toLowerCase())
+      .first<UserRow>()
+
+    if (!user?.password_hash || !(await verifyPassword(body.password, user.password_hash))) {
+      return c.json({ error: 'Invalid email or password.' }, 401)
+    }
+
+    await c.env.DB.prepare('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?')
+      .bind(new Date().toISOString(), new Date().toISOString(), user.id)
+      .run()
+
+    const session = await createSession(c.env.DB, user.id, 'password')
+    return withSessionCookie(c, { user: sanitizeUser(user) }, session.token)
+  } catch (error) {
+    console.error(error)
+    return c.json(
+      {
+        error: 'Login failed.',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      },
+      500
+    )
   }
-
-  const user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ? LIMIT 1')
-    .bind(body.email.toLowerCase())
-    .first<UserRow>()
-
-  if (!user?.password_hash || !(await verifyPassword(body.password, user.password_hash))) {
-    return c.json({ error: 'Invalid email or password.' }, 401)
-  }
-
-  await c.env.DB.prepare('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?')
-    .bind(new Date().toISOString(), new Date().toISOString(), user.id)
-    .run()
-
-  const session = await createSession(c.env.DB, user.id, 'password')
-  return withSessionCookie(c, { user: sanitizeUser(user) }, session.token)
 })
 
 authRoutes.post('/logout', async (c) => {
