@@ -18,7 +18,10 @@
     }
   ],
   "vars": {
-    "UPSTASH_REDIS_REST_URL": "gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg",
-    "AUTH_REDIRECT_ORIGIN": "https://waahtickets.bhattarai-shiva.workers.dev"
+    "UPSTASH_REDIS_REST_URL": "https://flying-pipefish-93304.upstash.io",
+    "UPSTASH_REDIS_REST_TOKEN":"gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg",
+    "GOOGLE_CLIENT_ID":"1068189559210-2b4qreupt0r9h3g14gp344b5ev9kcck8.apps.googleusercontent.com",
+  "GOOGLE_CLIENT_SECRET":"yGOCSPX--5BMYZ7awZKuqgDLEFv9Qh7j3jvQ",
+  "AUTH_REDIRECT_ORIGIN":"https://waahtickets.bhattarai-shiva.workers.dev/",
   }
 }
