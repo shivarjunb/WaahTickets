@@ -8,6 +8,7 @@
     "dev:server": "tsx src/index.ts",
     "dev:cloudflare": "npm run build && wrangler dev",
     "build": "vite build && tsc",
+    "build:test": "npm run build && npm test",
     "test": "vitest run",
     "test:button-flow:local": "./scripts/test-create-order-button-flow-local.sh",
     "start": "node dist/index.js",

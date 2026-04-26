@@ -92,6 +92,21 @@ crudRoutes.get('/resources', (c) => {
   })
 })
 
+crudRoutes.get('/resources/columns', (c) => {
+  const scope = c.get('authScope')
+  const visibleResources = listResources().filter((resource) => isTableVisibleForScope(resource, scope))
+  const columnsByResource = Object.fromEntries(
+    visibleResources.map((resource) => {
+      const table = resolveTable(resource)
+      return [resource, table ? [...table.columns] : []]
+    })
+  )
+
+  return c.json({
+    columns: columnsByResource
+  })
+})
+
 crudRoutes.get('/:resource', async (c) => {
   const table = resolveTable(c.req.param('resource'))
   if (!table) {
@@ -223,8 +238,10 @@ crudRoutes.post('/:resource', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
-  await maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result })
-  await maybeEnqueueAccountCreatedNotification({ env: c.env, tableName: table.table, row: result })
+  await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
+  await safeMaybeEnqueue(c, () =>
+    maybeEnqueueAccountCreatedNotification({ env: c.env, tableName: table.table, row: result })
+  )
 
   return c.json({ data: sanitizeRowForTable(table.table, result) }, 201)
 })
@@ -326,7 +343,7 @@ crudRoutes.patch('/:resource/:id', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
-  await maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result })
+  await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
 
   return c.json({ data: sanitizeRowForTable(table.table, result) })
 })
@@ -352,6 +369,10 @@ crudRoutes.delete('/:resource/:id', async (c) => {
 
   if (table.table === 'users') {
     return deleteUserRecord(c, db, c.req.param('id'), scope)
+  }
+
+  if (table.table === 'orders') {
+    return deleteOrderRecord(c, db, c.req.param('id'), accessPolicy)
   }
 
   const result = await executeMutation(
@@ -453,6 +474,57 @@ async function deleteUserRecord(c: AppContext, db: D1Database, userId: string, s
   }
 
   return c.json({ data: sanitizeRowForTable('users', result) })
+}
+
+async function deleteOrderRecord(c: AppContext, db: D1Database, orderId: string, accessPolicy: AccessPolicy) {
+  const order = await db
+    .prepare(`SELECT * FROM orders WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`)
+    .bind(orderId, ...accessPolicy.bindings)
+    .first()
+
+  if (!order) {
+    return c.json({ error: 'Record not found.' }, 404)
+  }
+
+  const result = await executeMutation(
+    c,
+    async () => {
+      await db
+        .prepare('DELETE FROM ticket_scans WHERE ticket_id IN (SELECT id FROM tickets WHERE order_id = ?)')
+        .bind(orderId)
+        .run()
+      await db.prepare('DELETE FROM tickets WHERE order_id = ?').bind(orderId).run()
+      await db.prepare('DELETE FROM coupon_redemptions WHERE order_id = ?').bind(orderId).run()
+      await db.prepare('DELETE FROM payments WHERE order_id = ?').bind(orderId).run()
+      await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(orderId).run()
+
+      return db
+        .prepare(`DELETE FROM orders WHERE id = ? AND ${accessPolicy.clause} RETURNING *`)
+        .bind(orderId, ...accessPolicy.bindings)
+        .first()
+    },
+    'delete'
+  )
+
+  if (result instanceof Response) {
+    return result
+  }
+
+  if (!result) {
+    return c.json({ error: 'Record not found.' }, 404)
+  }
+
+  const cache = createCache(c.env)
+  await Promise.all([
+    cache.bumpResourceVersion('ticket_scans'),
+    cache.bumpResourceVersion('tickets'),
+    cache.bumpResourceVersion('coupon_redemptions'),
+    cache.bumpResourceVersion('payments'),
+    cache.bumpResourceVersion('order_items'),
+    cache.bumpResourceVersion('orders')
+  ])
+
+  return c.json({ data: sanitizeRowForTable('orders', result) })
 }
 
 async function findUserBlockingReferences(db: D1Database, userId: string) {
@@ -566,6 +638,15 @@ async function executeMutation<T>(
     }
 
     throw error
+  }
+}
+
+async function safeMaybeEnqueue(c: AppContext, operation: () => Promise<void>) {
+  try {
+    await operation()
+  } catch (error) {
+    console.error('[notifications] non-blocking enqueue failure', error)
+    c.header('X-Notification-Error', '1')
   }
 }
 

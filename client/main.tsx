@@ -1174,6 +1174,7 @@ function AdminApp({
   onToggleTheme: () => void
 }) {
   const [resources, setResources] = useState(fallbackResources)
+  const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
   const isAdminUser = user?.webrole === 'Admin'
   const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(user?.webrole ?? 'Customers')
   const [selectedResource, setSelectedResource] = useState('events')
@@ -1209,7 +1210,10 @@ function AdminApp({
   }, [filter, records])
 
   const defaultTableColumns = useMemo(() => getTableColumns(filteredRecords), [filteredRecords])
-  const availableColumns = useMemo(() => getAvailableColumns(records), [records])
+  const availableColumns = useMemo(
+    () => getAvailableColumns(resourceColumnsCatalog[selectedResource] ?? [], records),
+    [records, resourceColumnsCatalog, selectedResource]
+  )
   const selectedColumns = selectedColumnsByResource[selectedResource] ?? defaultTableColumns
   const tableColumns = useMemo(
     () => {
@@ -1252,9 +1256,15 @@ function AdminApp({
   useEffect(() => {
     async function loadResources() {
       try {
-        const { data } = await fetchJson<{ resources?: string[] }>('/api/resources')
-        if (Array.isArray(data.resources) && data.resources.length > 0) {
-          setResources(data.resources)
+        const [{ data: resourcesData }, { data: columnsData }] = await Promise.all([
+          fetchJson<{ resources?: string[] }>('/api/resources'),
+          fetchJson<{ columns?: Record<string, string[]> }>('/api/resources/columns')
+        ])
+        if (Array.isArray(resourcesData.resources) && resourcesData.resources.length > 0) {
+          setResources(resourcesData.resources)
+        }
+        if (columnsData.columns && typeof columnsData.columns === 'object') {
+          setResourceColumnsCatalog(columnsData.columns)
         }
       } catch (error) {
         setStatus(getErrorMessage(error))
@@ -2393,9 +2403,9 @@ function getTableColumns(records: ApiRecord[]) {
   return columns.length > 0 ? columns : ['name', 'status']
 }
 
-function getAvailableColumns(records: ApiRecord[]) {
-  const available = new Set(records.flatMap((record) => Object.keys(record)))
-  return [...available].filter((column) => !hiddenTableColumns.has(column))
+function getAvailableColumns(schemaColumns: string[], records: ApiRecord[]) {
+  const available = new Set([...schemaColumns, ...records.flatMap((record) => Object.keys(record))])
+  return [...available].filter((column) => column !== 'password_hash' && column !== 'google_sub')
 }
 
 function getStatusBreakdown(records: ApiRecord[]) {
