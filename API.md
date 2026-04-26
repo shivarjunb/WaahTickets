@@ -122,6 +122,14 @@ The queue consumer sends one customer email containing:
 - receipt summary
 - attached PDF ticket pack
 
+User account lifecycle emails are also queued:
+
+- account created (new `users` record or `/api/auth/register` creation)
+- account deleted (`DELETE /api/users/:id`)
+- account-created email includes a verify button linking to `/api/auth/verify-email?token=...`
+
+These lifecycle emails are published to the same Cloudflare queue and processed by the same Worker queue consumer.
+
 Required configuration:
 
 - `EMAIL_QUEUE` queue binding (configured in `wrangler.jsonc`)
@@ -178,6 +186,7 @@ POST /api/auth/register
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
+GET  /api/auth/verify-email?token=...
 ```
 
 Google SSO endpoints:
