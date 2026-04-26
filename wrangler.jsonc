@@ -3,6 +3,7 @@
   "name": "waahtickets",
   "main": "./src/worker.ts",
   "compatibility_date": "2026-04-25",
+  "keep_vars": true,
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",
@@ -19,7 +20,6 @@
   ],
   "vars": {
     "UPSTASH_REDIS_REST_URL": "https://flying-pipefish-93304.upstash.io",
-    "UPSTASH_REDIS_REST_TOKEN":"gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg",
   "AUTH_REDIRECT_ORIGIN":"https://waahtickets.bhattarai-shiva.workers.dev/",
   }
 }
