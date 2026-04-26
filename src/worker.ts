@@ -2,9 +2,11 @@ import { app } from './app.js'
 import { consumeOrderNotifications } from './notifications/service.js'
 import type { Bindings } from './types/bindings.js'
 
-export default {
+const worker: ExportedHandler<Bindings> = {
   fetch: app.fetch,
-  queue(batch: MessageBatch, env: Bindings) {
-    return consumeOrderNotifications(batch, env)
+  async queue(batch, env, _ctx) {
+    await consumeOrderNotifications(batch, env)
   }
 }
+
+export default worker
