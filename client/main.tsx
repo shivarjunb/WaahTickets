@@ -701,33 +701,49 @@ function PublicApp({
     if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return
 
     const suffix = Date.now().toString(36)
-    const customerId = `customer-${suffix}`
+    let customerId = `customer-${suffix}`
     const orderId = `order-${suffix}`
     const unitPrice = selectedTicketType.price_paisa ?? 0
     const total = unitPrice * quantity
 
     try {
-      await fetchJson<ApiMutationResponse>('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: customerId,
-          ...reservationForm,
-          webrole: 'Customers'
-        })
-      })
+      const existingUsers = await fetchJson<ApiListResponse>(
+        `/api/users?email=${encodeURIComponent(reservationForm.email)}&limit=1`
+      )
+      const existingUserId = existingUsers.data.data?.[0]?.id
 
-      await fetchJson<ApiMutationResponse>('/api/customers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: `customer-profile-${suffix}`,
-          user_id: customerId,
-          display_name: `${reservationForm.first_name} ${reservationForm.last_name}`.trim(),
-          email: reservationForm.email,
-          phone_number: reservationForm.phone_number
+      if (typeof existingUserId === 'string' && existingUserId) {
+        customerId = existingUserId
+      } else {
+        await fetchJson<ApiMutationResponse>('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: customerId,
+            ...reservationForm,
+            webrole: 'Customers'
+          })
         })
-      })
+      }
+
+      const existingCustomers = await fetchJson<ApiListResponse>(
+        `/api/customers?user_id=${encodeURIComponent(customerId)}&limit=1`
+      )
+      const existingCustomerId = existingCustomers.data.data?.[0]?.id
+
+      if (!(typeof existingCustomerId === 'string' && existingCustomerId)) {
+        await fetchJson<ApiMutationResponse>('/api/customers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: `customer-profile-${suffix}`,
+            user_id: customerId,
+            display_name: `${reservationForm.first_name} ${reservationForm.last_name}`.trim(),
+            email: reservationForm.email,
+            phone_number: reservationForm.phone_number
+          })
+        })
+      }
 
       await fetchJson<ApiMutationResponse>('/api/orders', {
         method: 'POST',
