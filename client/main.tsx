@@ -344,14 +344,8 @@ function App() {
       {path.startsWith('/admin') ? (
         isAuthLoading ? (
           <main className="auth-gate">
-            <section className="auth-gate-panel">
-              <a className="brand" href="/">
-                <span className="brand-mark">W</span>
-                <span>Waahtickets</span>
-              </a>
-              <p className="eyebrow">Admin access</p>
-              <h1>Checking session</h1>
-              <p>Validating your account before loading the dashboard.</p>
+            <section className="auth-gate-panel admin-loading-panel" aria-label="Loading admin dashboard">
+              <div className="thin-spinner" role="status" aria-label="Loading" />
             </section>
           </main>
         ) : user ? (
@@ -393,6 +387,7 @@ function PublicApp({
 }) {
   const [events, setEvents] = useState<PublicEvent[]>([])
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
+  const [isEventsLoading, setIsEventsLoading] = useState(true)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
@@ -425,6 +420,7 @@ function PublicApp({
 
   useEffect(() => {
     async function loadPublicEvents() {
+      setIsEventsLoading(true)
       try {
         const { data } = await fetchJson<ApiListResponse>('/api/public/events')
         const loadedEvents = ((data.data ?? []) as PublicEvent[]).filter(
@@ -436,10 +432,12 @@ function PublicApp({
         setPublicStatus(
           loadedEvents.length > 0
             ? `${loadedEvents.length} events available`
-            : 'No events yet. Use admin seed data to publish your first event.'
+            : ''
         )
       } catch (error) {
         setPublicStatus(getErrorMessage(error))
+      } finally {
+        setIsEventsLoading(false)
       }
     }
 
@@ -504,10 +502,15 @@ function PublicApp({
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">{publicStatus}</p>
-          <h1>{selectedEvent?.name ?? 'Find your next ticket in one clean flow.'}</h1>
+          <h1>
+            {isEventsLoading
+              ? 'Loading featured event...'
+              : selectedEvent?.name ?? ''}
+          </h1>
           <p className="hero-text">
-            {selectedEvent?.description ??
-              'Waahtickets now reads real events, locations, and ticket types from D1 so the storefront reflects your admin data.'}
+            {isEventsLoading
+              ? 'Pulling live event data from D1.'
+              : selectedEvent?.description ?? ''}
           </p>
           <div className="hero-actions">
             <a className="primary-button" href="#events">
@@ -535,9 +538,11 @@ function PublicApp({
             </div>
             <div>
               <p className="ticket-kicker">
-                {selectedEvent?.location_name ?? selectedEvent?.organization_name ?? 'Live event'}
+                {isEventsLoading
+                  ? 'Loading venue'
+                  : selectedEvent?.location_name ?? selectedEvent?.organization_name ?? 'Live event'}
               </p>
-              <h2>{selectedEvent?.name ?? 'No event selected'}</h2>
+              <h2>{isEventsLoading ? 'Loading event' : selectedEvent?.name ?? 'No event selected'}</h2>
             </div>
             <div className="ticket-grid">
               <span>Date</span>
@@ -580,11 +585,9 @@ function PublicApp({
             <h2>Upcoming events</h2>
           </div>
           <div className="event-list">
-            {events.length === 0 ? (
-              <div className="public-empty">
-                Create or seed events in admin, then return here to see them in the storefront.
-              </div>
-            ) : (
+            {isEventsLoading ? (
+              <div className="public-empty">Loading published events...</div>
+            ) : events.length === 0 ? null : (
               events.map((event) => (
               <article
                 className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
