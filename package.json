@@ -9,6 +9,7 @@
     "dev:cloudflare": "npm run build && wrangler dev",
     "build": "vite build && tsc",
     "test": "vitest run",
+    "test:button-flow:local": "./scripts/test-create-order-button-flow-local.sh",
     "start": "node dist/index.js",
     "deploy": "npm run build && wrangler deploy",
     "db:create": "wrangler d1 create waahtickets-db",
