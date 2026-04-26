@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState } from 'react'
+import { StrictMode, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Activity,
@@ -11,6 +11,7 @@ import {
   CreditCard,
   Database,
   Edit3,
+  Eye,
   FileText,
   Home,
   LayoutDashboard,
@@ -28,6 +29,7 @@ import {
   SquareMinus,
   SquarePlus,
   Sun,
+  Star,
   Ticket,
   Trash2,
   Upload,
@@ -146,7 +148,8 @@ const samplePayloads: Record<string, Record<string, unknown>> = {
     event_type: 'concert',
     start_datetime: '2026-06-01T18:00:00.000Z',
     end_datetime: '2026-06-01T22:00:00.000Z',
-    status: 'draft'
+    status: 'draft',
+    is_featured: 0
   },
   event_locations: {
     event_id: 'replace-with-existing-event-id',
@@ -235,6 +238,7 @@ type ApiRecord = Record<string, unknown> & {
 
 type PublicEvent = ApiRecord & {
   organization_name?: string
+  location_id?: string
   location_name?: string
   location_address?: string
   banner_public_url?: string
@@ -242,6 +246,7 @@ type PublicEvent = ApiRecord & {
   end_datetime?: string
   description?: string
   event_type?: string
+  is_featured?: number | boolean | string
 }
 
 type TicketType = ApiRecord & {
@@ -510,6 +515,7 @@ function PublicApp({
   const [isTicketTypesLoading, setIsTicketTypesLoading] = useState(false)
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+  const [selectedEventDetailId, setSelectedEventDetailId] = useState<string | null>(null)
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
   const [isReserveOpen, setIsReserveOpen] = useState(false)
@@ -526,17 +532,32 @@ function PublicApp({
     () => events.find((event) => event.id === selectedEventId) ?? events[0],
     [events, selectedEventId]
   )
+  const selectedEventDetails = useMemo(
+    () => events.find((event) => event.id === selectedEventDetailId) ?? null,
+    [events, selectedEventDetailId]
+  )
   const selectedTicketType = useMemo(
     () => ticketTypes.find((ticketType) => ticketType.id === selectedTicketTypeId) ?? ticketTypes[0],
     [ticketTypes, selectedTicketTypeId]
   )
-  const featuredImages = useMemo(() => {
-    const uploadedEventImages = events
-      .map((event) => (typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''))
-      .filter((value) => value.length > 0)
-
-    return uploadedEventImages.length > 0 ? uploadedEventImages : featuredSlideImages
+  const featuredEvents = useMemo(() => {
+    const eventsWithImages = events.filter((event) => {
+      const bannerUrl = typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
+      return bannerUrl.length > 0 && isValidHttpUrl(bannerUrl)
+    })
+    const markedFeaturedEvents = eventsWithImages.filter((event) => isTruthyValue(event.is_featured))
+    if (markedFeaturedEvents.length > 0) return markedFeaturedEvents
+    if (eventsWithImages.length > 0) return eventsWithImages
+    return events
   }, [events])
+  const activeFeaturedEvent = featuredEvents[featuredSlideIndex] ?? selectedEvent ?? events[0]
+  const featuredImages = useMemo(
+    () =>
+      featuredEvents.length > 0
+        ? featuredEvents.map((event, index) => getEventImageUrl(event, index))
+        : featuredSlideImages,
+    [featuredEvents]
+  )
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
   const remainingTickets =
     selectedTicketType?.quantity_available === undefined
@@ -557,9 +578,11 @@ function PublicApp({
         const loadedEvents = ((data.data ?? []) as PublicEvent[]).filter(
           (event) => event.status === 'published'
         )
+        const defaultEvent =
+          loadedEvents.find((event) => isTruthyValue(event.is_featured)) ?? loadedEvents[0] ?? null
 
         setEvents(loadedEvents)
-        setSelectedEventId(loadedEvents[0]?.id ?? null)
+        setSelectedEventId(defaultEvent?.id ?? null)
         setPublicStatus(
           loadedEvents.length > 0
             ? `${loadedEvents.length} events available`
@@ -606,17 +629,17 @@ function PublicApp({
 
   useEffect(() => {
     setFeaturedSlideIndex(0)
-  }, [featuredImages.length])
+  }, [featuredEvents.length])
 
   useEffect(() => {
-    if (featuredImages.length <= 1) return
+    if (featuredEvents.length <= 1) return
 
     const timer = window.setInterval(() => {
-      setFeaturedSlideIndex((current) => (current + 1) % featuredImages.length)
+      setFeaturedSlideIndex((current) => (current + 1) % featuredEvents.length)
     }, 3800)
 
     return () => window.clearInterval(timer)
-  }, [featuredImages.length])
+  }, [featuredEvents.length])
 
   return (
     <main className="app-shell">
@@ -663,12 +686,27 @@ function PublicApp({
           <div className="featured-content">
             <p className="eyebrow">{publicStatus}</p>
             <h1 className="featured-title">
-              {isEventsLoading ? 'Loading featured event...' : selectedEvent?.name ?? ''}
+              {isEventsLoading ? 'Loading featured event...' : activeFeaturedEvent?.name ?? ''}
             </h1>
+            <p className="featured-meta">
+              {activeFeaturedEvent?.location_name ?? activeFeaturedEvent?.organization_name ?? 'Venue pending'} ·{' '}
+              {formatEventDate(activeFeaturedEvent?.start_datetime)} · {formatEventTime(activeFeaturedEvent?.start_datetime)}
+            </p>
+            {activeFeaturedEvent?.description ? (
+              <p className="featured-description">{activeFeaturedEvent.description}</p>
+            ) : null}
             <div className="hero-actions">
-              <a className="secondary-button featured-cta" href="#checkout">
+              <button
+                className="secondary-button featured-cta"
+                type="button"
+                onClick={() => {
+                  if (!activeFeaturedEvent?.id) return
+                  setSelectedEventId(activeFeaturedEvent.id)
+                  window.location.hash = '#checkout'
+                }}
+              >
                 See tickets
-              </a>
+              </button>
             </div>
             <div className="featured-dots" aria-label="Featured image slides">
               {featuredImages.map((_, index) => (
@@ -683,16 +721,16 @@ function PublicApp({
             </div>
           </div>
           <div className="featured-media">
-            <button className="featured-favorite" type="button" aria-label="Save featured event">
-              ♡
-            </button>
             <div
               className="featured-media-track"
               style={{ transform: `translateX(-${featuredSlideIndex * 100}%)` }}
             >
               {featuredImages.map((image, index) => (
                 <div className="featured-media-frame" key={`featured-slide-${index}`}>
-                  <img alt="" src={image} />
+                  <img
+                    alt={featuredEvents[index]?.name ? `${featuredEvents[index]?.name} banner` : 'Featured event'}
+                    src={image}
+                  />
                 </div>
               ))}
             </div>
@@ -709,26 +747,58 @@ function PublicApp({
           <div className="event-list">
             {isEventsLoading ? (
               <div className="public-empty">Loading published events...</div>
-            ) : events.length === 0 ? null : (
-              events.map((event) => (
-              <article
-                className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
-                key={event.id}
-              >
-                <button
-                  className="event-card-button"
-                  type="button"
-                  onClick={() => setSelectedEventId(event.id ?? null)}
-                >
-                  <div className="event-date">{formatEventDate(event.start_datetime)}</div>
-                <div>
-                    <h3>{event.name}</h3>
-                    <p>{event.location_name ?? event.organization_name ?? 'Venue pending'}</p>
-                </div>
-                  <strong>{event.status ?? 'draft'}</strong>
-                </button>
-              </article>
-              ))
+            ) : events.length === 0 ? (
+              <div className="public-empty">No published events available yet.</div>
+            ) : (
+              <div className="event-card-grid">
+                {events.map((event, index) => (
+                  <article
+                    className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
+                    key={event.id}
+                  >
+                    <div className="event-card-media">
+                      <img
+                        alt={event.name ? `${event.name} image` : 'Event image'}
+                        loading="lazy"
+                        src={getEventImageUrl(event, index)}
+                      />
+                      {isTruthyValue(event.is_featured) ? (
+                        <span className="event-card-badge">
+                          <Star size={13} />
+                          Featured
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="event-card-body">
+                      <div className="event-date">{formatEventDate(event.start_datetime)}</div>
+                      <div className="event-card-copy">
+                        <h3>{event.name}</h3>
+                        <p>{event.location_name ?? event.organization_name ?? 'Venue pending'}</p>
+                      </div>
+                      <div className="event-card-actions">
+                        <button
+                          className="secondary-button compact-button"
+                          type="button"
+                          onClick={() => {
+                            setSelectedEventId(event.id ?? null)
+                            window.location.hash = '#checkout'
+                          }}
+                        >
+                          Choose
+                        </button>
+                        <button
+                          className="secondary-button compact-button"
+                          type="button"
+                          onClick={() => setSelectedEventDetailId(event.id ?? null)}
+                        >
+                          <Eye size={15} />
+                          Details
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -737,6 +807,12 @@ function PublicApp({
           <div className="section-heading">
             <p className="eyebrow">Ticket checkout</p>
             <h2>{selectedEvent?.name ?? 'Select an event'}</h2>
+            {selectedEvent ? (
+              <p className="checkout-event-meta">
+                {selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'} ·{' '}
+                {formatEventDate(selectedEvent.start_datetime)} · {formatEventTime(selectedEvent.start_datetime)}
+              </p>
+            ) : null}
           </div>
           <div className="checkout-stack">
             <label className="public-select-label">
@@ -804,6 +880,21 @@ function PublicApp({
             setIsReserveOpen(false)
           }}
           onSubmit={() => void submitReservation()}
+        />
+      ) : null}
+
+      {selectedEventDetails ? (
+        <EventDetailsModal
+          event={selectedEventDetails}
+          imageUrl={getEventImageUrl(selectedEventDetails)}
+          onClose={() => setSelectedEventDetailId(null)}
+          onViewTickets={() => {
+            if (selectedEventDetails.id) {
+              setSelectedEventId(String(selectedEventDetails.id))
+            }
+            setSelectedEventDetailId(null)
+            window.location.hash = '#checkout'
+          }}
         />
       ) : null}
     </main>
@@ -915,6 +1006,53 @@ function PublicApp({
     if (!selectedTicketType?.id) return 'Add a ticket type for this event in admin before reservations.'
     return ''
   }
+}
+
+function EventDetailsModal({
+  event,
+  imageUrl,
+  onClose,
+  onViewTickets
+}: {
+  event: PublicEvent
+  imageUrl: string
+  onClose: () => void
+  onViewTickets: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal event-details-modal" role="dialog" aria-modal="true">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">{event.location_name ?? event.organization_name ?? 'Event details'}</p>
+            <h2>{event.name ?? 'Event details'}</h2>
+          </div>
+          <button aria-label="Close modal" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="event-details-media">
+          <img alt={event.name ? `${event.name} banner` : 'Event'} src={imageUrl} />
+        </div>
+        <div className="event-details-content">
+          <div className="event-details-meta">
+            <span>{formatEventDate(event.start_datetime)}</span>
+            <span>{formatEventTime(event.start_datetime)}</span>
+            <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General event'}</span>
+            <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
+          </div>
+          <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
+        </div>
+        <footer className="record-modal-actions">
+          <button type="button" onClick={onClose}>Close</button>
+          <button className="primary-admin-button" type="button" onClick={onViewTickets}>
+            <Ticket size={17} />
+            View tickets
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
 }
 
 function ReservationModal({
@@ -2461,7 +2599,7 @@ function RecordModal({
   onFileUploaded: (uploadedFile: ApiRecord) => Promise<void>
   record: ApiRecord | null
   resource: string
-  setFormValues: (value: Record<string, string>) => void
+  setFormValues: Dispatch<SetStateAction<Record<string, string>>>
   webRole: WebRoleName
   onClose: () => void
   onSave: () => void
@@ -2511,10 +2649,21 @@ function RecordModal({
       await onFileUploaded(uploadedFile)
 
       if (resource === 'events' && uploadedFileId) {
-        setFormValues({
-          ...formValues,
+        setFormValues((current) => ({
+          ...current,
           banner_file_id: uploadedFileId
-        })
+        }))
+
+        if (record?.id) {
+          await fetchJson<ApiMutationResponse>(`/api/events/${record.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ banner_file_id: uploadedFileId })
+          })
+          setUploadStatus(`Upload successful and linked to event: ${String(uploadedFile.file_name ?? uploadFile.name)}`)
+        } else {
+          setUploadStatus(`Upload successful. Save event to link banner: ${String(uploadedFile.file_name ?? uploadFile.name)}`)
+        }
       }
 
     } catch (error) {
@@ -2538,129 +2687,131 @@ function RecordModal({
           </button>
         </header>
 
-        {supportsUpload ? (
-          <section className="file-upload-panel" aria-label="R2 file upload">
-            <label>
-              <span>{resource === 'events' ? 'Event image' : 'File'}</span>
-              <input
-                accept={resource === 'events' ? 'image/*' : undefined}
-                disabled={isSaving || isUploading}
-                type="file"
-                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-              />
-            </label>
-            {resource === 'files' ? (
+        <div className="record-modal-body">
+          {supportsUpload ? (
+            <section className="file-upload-panel" aria-label="R2 file upload">
               <label>
-                <span>File type</span>
+                <span>{resource === 'events' ? 'Event image' : 'File'}</span>
                 <input
+                  accept={resource === 'events' ? 'image/*' : undefined}
                   disabled={isSaving || isUploading}
-                  type="text"
-                  value={uploadType}
-                  onChange={(event) => setUploadType(event.target.value)}
+                  type="file"
+                  onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
                 />
               </label>
-            ) : (
-              <p className="upload-hint">Upload an image and it will be linked as this event banner.</p>
-            )}
-            <button
-              className="primary-admin-button"
-              disabled={!uploadFile || isSaving || isUploading}
-              type="button"
-              onClick={() => void uploadToR2()}
-            >
-              {isUploading ? <span aria-hidden="true" className="button-spinner" /> : <Upload size={17} />}
-              {isUploading ? 'Uploading...' : 'Upload to R2'}
-            </button>
-            {resource === 'events' && formValues.banner_file_id ? (
-              <p className="upload-hint">Current banner file id: {formValues.banner_file_id}</p>
-            ) : null}
-            {uploadStatus ? (
-              <p className={uploadState === 'error' ? 'upload-status upload-status-error' : 'upload-status'}>
-                {uploadStatus}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
-
-        {!isUploadOnlyModal ? (
-          <div className="modal-form-grid">
-            {fields.map((field) => (
-              <label key={field}>
-                <span>
-                  {formatResourceName(field)}
-                  {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
-                </span>
-                {getFieldSelectOptions(resource, field).length ? (
-                  <select
-                    disabled={isSaving || !canEditField(field)}
-                    value={formValues[field] ?? ''}
-                    onChange={(event) =>
-                      setFormValues({
-                        ...formValues,
-                        [field]: event.target.value
-                      })
-                    }
-                  >
-                    <option value="">Select {formatResourceName(field)}</option>
-                    {getFieldSelectOptions(resource, field).map((option) => (
-                      <option key={option} value={option}>
-                        {formatResourceName(option)}
-                      </option>
-                    ))}
-                  </select>
-                ) : lookupOptions[field]?.length ? (
-                  <select
-                    disabled={isSaving || !canEditField(field)}
-                    value={formValues[field] ?? ''}
-                    onChange={(event) => {
-                      const nextValue = event.target.value
-
-                      setFormValues({
-                        ...formValues,
-                        [field]: nextValue
-                      })
-                    }}
-                  >
-                    <option value="">Select {formatResourceName(field)}</option>
-                    {lookupOptions[field].map((option) => (
-                      <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
-                        {getLookupLabel(option)}
-                      </option>
-                    ))}
-                  </select>
-                ) : isBooleanField(field) ? (
-                  <button
-                    className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
-                    disabled={isSaving || !canEditField(field)}
-                    type="button"
-                    onClick={() =>
-                      setFormValues({
-                        ...formValues,
-                        [field]: isTruthyValue(formValues[field]) ? '0' : '1'
-                      })
-                    }
-                  >
-                    {isTruthyValue(formValues[field]) ? 'True' : 'False'}
-                  </button>
-                ) : (
+              {resource === 'files' ? (
+                <label>
+                  <span>File type</span>
                   <input
-                    disabled={isSaving || !canEditField(field)}
-                    step={isDateTimeField(field) ? 60 : undefined}
-                    type={isDateTimeField(field) ? 'datetime-local' : 'text'}
-                    value={formValues[field] ?? ''}
-                    onChange={(event) =>
-                      setFormValues({
-                        ...formValues,
-                        [field]: event.target.value
-                      })
-                    }
+                    disabled={isSaving || isUploading}
+                    type="text"
+                    value={uploadType}
+                    onChange={(event) => setUploadType(event.target.value)}
                   />
-                )}
-              </label>
-            ))}
-          </div>
-        ) : null}
-        {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
+                </label>
+              ) : (
+                <p className="upload-hint">Upload an image and it will be linked as this event banner.</p>
+              )}
+              <button
+                className="primary-admin-button"
+                disabled={!uploadFile || isSaving || isUploading}
+                type="button"
+                onClick={() => void uploadToR2()}
+              >
+                {isUploading ? <span aria-hidden="true" className="button-spinner" /> : <Upload size={17} />}
+                {isUploading ? 'Uploading...' : 'Upload to R2'}
+              </button>
+              {resource === 'events' && formValues.banner_file_id ? (
+                <p className="upload-hint">Current banner file id: {formValues.banner_file_id}</p>
+              ) : null}
+              {uploadStatus ? (
+                <p className={uploadState === 'error' ? 'upload-status upload-status-error' : 'upload-status'}>
+                  {uploadStatus}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
+          {!isUploadOnlyModal ? (
+            <div className="modal-form-grid">
+              {fields.map((field) => (
+                <label key={field}>
+                  <span>
+                    {formatResourceName(field)}
+                    {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
+                  </span>
+                  {getFieldSelectOptions(resource, field).length ? (
+                    <select
+                      disabled={isSaving || !canEditField(field)}
+                      value={formValues[field] ?? ''}
+                      onChange={(event) =>
+                        setFormValues((current) => ({
+                          ...current,
+                          [field]: event.target.value
+                        }))
+                      }
+                    >
+                      <option value="">Select {formatResourceName(field)}</option>
+                      {getFieldSelectOptions(resource, field).map((option) => (
+                        <option key={option} value={option}>
+                          {formatResourceName(option)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : lookupOptions[field]?.length ? (
+                    <select
+                      disabled={isSaving || !canEditField(field)}
+                      value={formValues[field] ?? ''}
+                      onChange={(event) => {
+                        const nextValue = event.target.value
+
+                        setFormValues((current) => ({
+                          ...current,
+                          [field]: nextValue
+                        }))
+                      }}
+                    >
+                      <option value="">Select {formatResourceName(field)}</option>
+                      {lookupOptions[field].map((option) => (
+                        <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
+                          {getLookupLabel(option)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : isBooleanField(field) ? (
+                    <button
+                      className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
+                      disabled={isSaving || !canEditField(field)}
+                      type="button"
+                      onClick={() =>
+                        setFormValues((current) => ({
+                          ...current,
+                          [field]: isTruthyValue(formValues[field]) ? '0' : '1'
+                        }))
+                      }
+                    >
+                      {isTruthyValue(formValues[field]) ? 'True' : 'False'}
+                    </button>
+                  ) : (
+                    <input
+                      disabled={isSaving || !canEditField(field)}
+                      step={isDateTimeField(field) ? 60 : undefined}
+                      type={isDateTimeField(field) ? 'datetime-local' : 'text'}
+                      value={formValues[field] ?? ''}
+                      onChange={(event) =>
+                        setFormValues((current) => ({
+                          ...current,
+                          [field]: event.target.value
+                        }))
+                      }
+                    />
+                  )}
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
+        </div>
 
         <footer className="record-modal-actions">
           <button disabled={isSaving || isUploading} type="button" onClick={onClose}>
@@ -2973,6 +3124,15 @@ function isValidHttpUrl(value: string) {
   } catch {
     return false
   }
+}
+
+function getEventImageUrl(event: PublicEvent | null | undefined, fallbackIndex = 0) {
+  const bannerUrl = typeof event?.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
+  if (bannerUrl && isValidHttpUrl(bannerUrl)) {
+    return bannerUrl
+  }
+
+  return featuredSlideImages[fallbackIndex % featuredSlideImages.length]
 }
 
 function formatEventDate(value: unknown) {

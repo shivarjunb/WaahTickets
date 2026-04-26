@@ -12,6 +12,12 @@ Runtime settings (including R2 and ticket QR URL settings) are persisted in:
 migrations/0006_app_settings.sql
 ```
 
+Event featuring support (`events.is_featured`) is added in:
+
+```bash
+migrations/0007_events_featured_flag.sql
+```
+
 ## Local D1
 
 Apply migrations to Wrangler's local D1 database:

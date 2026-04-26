@@ -141,6 +141,7 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'start_datetime',
       'end_datetime',
       'status',
+      'is_featured',
       'banner_file_id',
       'created_by',
       'created_at',

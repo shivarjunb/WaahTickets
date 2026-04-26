@@ -52,15 +52,32 @@ app.get('/api/public/events', async (c) => {
       events.*,
       organizations.name AS organization_name,
       files.public_url AS banner_public_url,
-      event_locations.id AS location_id,
-      event_locations.name AS location_name,
-      event_locations.address AS location_address
+      (
+        SELECT event_locations.id
+        FROM event_locations
+        WHERE event_locations.event_id = events.id
+        ORDER BY event_locations.created_at ASC
+        LIMIT 1
+      ) AS location_id,
+      (
+        SELECT event_locations.name
+        FROM event_locations
+        WHERE event_locations.event_id = events.id
+        ORDER BY event_locations.created_at ASC
+        LIMIT 1
+      ) AS location_name,
+      (
+        SELECT event_locations.address
+        FROM event_locations
+        WHERE event_locations.event_id = events.id
+        ORDER BY event_locations.created_at ASC
+        LIMIT 1
+      ) AS location_address
     FROM events
     LEFT JOIN organizations ON organizations.id = events.organization_id
     LEFT JOIN files ON files.id = events.banner_file_id
-    LEFT JOIN event_locations ON event_locations.event_id = events.id
     WHERE events.status = 'published'
-    ORDER BY events.start_datetime ASC
+    ORDER BY events.is_featured DESC, events.start_datetime ASC
     LIMIT 24`
   ).all()
 
