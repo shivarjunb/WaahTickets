@@ -844,6 +844,16 @@ function PublicApp({
   const canAccessTickets = hasCustomerTicketsAccess(user)
 
   useEffect(() => {
+    if (!user?.id) return
+    setReservationForm((current) => ({
+      first_name: current.first_name || (user.first_name ?? ''),
+      last_name: current.last_name || (user.last_name ?? ''),
+      email: current.email || (user.email ?? ''),
+      phone_number: current.phone_number
+    }))
+  }, [user?.id, user?.first_name, user?.last_name, user?.email])
+
+  useEffect(() => {
     async function loadPublicEvents() {
       setIsEventsLoading(true)
       try {
@@ -1347,9 +1357,13 @@ function PublicApp({
 
   async function submitReservation() {
     if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id || isSubmittingOrder) return
+    if (!user?.id) {
+      setPublicStatus('Sign in to reserve tickets.')
+      return
+    }
 
     const suffix = Date.now().toString(36)
-    let customerId = `customer-${suffix}`
+    const customerId = user.id
     const orderId = `order-${suffix}`
     const unitPrice = selectedTicketType.price_paisa ?? 0
     const total = unitPrice * quantity
@@ -1357,44 +1371,6 @@ function PublicApp({
     setIsSubmittingOrder(true)
 
     try {
-      const existingUsers = await fetchJson<ApiListResponse>(
-        `/api/users?email=${encodeURIComponent(reservationForm.email)}&limit=1`
-      )
-      const existingUserId = existingUsers.data.data?.[0]?.id
-
-      if (typeof existingUserId === 'string' && existingUserId) {
-        customerId = existingUserId
-      } else {
-        await fetchJson<ApiMutationResponse>('/api/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: customerId,
-            ...reservationForm,
-            webrole: 'Customers'
-          })
-        })
-      }
-
-      const existingCustomers = await fetchJson<ApiListResponse>(
-        `/api/customers?user_id=${encodeURIComponent(customerId)}&limit=1`
-      )
-      const existingCustomerId = existingCustomers.data.data?.[0]?.id
-
-      if (!(typeof existingCustomerId === 'string' && existingCustomerId)) {
-        await fetchJson<ApiMutationResponse>('/api/customers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: `customer-profile-${suffix}`,
-            user_id: customerId,
-            display_name: `${reservationForm.first_name} ${reservationForm.last_name}`.trim(),
-            email: reservationForm.email,
-            phone_number: reservationForm.phone_number
-          })
-        })
-      }
-
       await fetchJson<ApiMutationResponse>('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1435,6 +1411,7 @@ function PublicApp({
   }
 
   function getReserveBlockedMessage() {
+    if (!user?.id) return 'Sign in to reserve tickets.'
     if (isSubmittingOrder) return 'Order is being created. Please wait.'
     if (!selectedEvent?.id) return 'Select an event first.'
     if (!selectedEvent.location_id) return 'Add a location for this event in admin before reservations.'

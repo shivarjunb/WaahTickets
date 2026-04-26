@@ -1292,7 +1292,7 @@ async function authorizeCreateRecord(
   }
 
   if (scope.webrole === 'Customers') {
-    return c.json({ error: 'Forbidden for this role.' }, 403)
+    return authorizeCustomerCreateRecord(c, db, scope, tableName, record)
   }
 
   const inScope = async (query: string, value: unknown) => {
@@ -1354,6 +1354,84 @@ async function authorizeCreateRecord(
         return c.json({ error: 'Forbidden for this event.' }, 403)
       }
       return null
+    default:
+      return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+}
+
+async function authorizeCustomerCreateRecord(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  tableName: string,
+  record: JsonRecord
+) {
+  switch (tableName) {
+    case 'orders': {
+      const customerId = typeof record.customer_id === 'string' ? record.customer_id : ''
+      const eventId = typeof record.event_id === 'string' ? record.event_id : ''
+      const eventLocationId = typeof record.event_location_id === 'string' ? record.event_location_id : ''
+
+      if (!customerId || customerId !== scope.userId) {
+        return c.json({ error: 'Orders must belong to the authenticated user.' }, 403)
+      }
+
+      if (!eventId) {
+        return c.json({ error: 'event_id is required.' }, 400)
+      }
+
+      const eventExists = await db
+        .prepare('SELECT 1 AS ok FROM events WHERE id = ? LIMIT 1')
+        .bind(eventId)
+        .first<{ ok: number }>()
+      if (!eventExists?.ok) {
+        return c.json({ error: 'Forbidden for this event.' }, 403)
+      }
+
+      if (eventLocationId) {
+        const locationExists = await db
+          .prepare(
+            `SELECT 1 AS ok
+             FROM event_locations
+             WHERE id = ?
+               AND event_id = ?
+             LIMIT 1`
+          )
+          .bind(eventLocationId, eventId)
+          .first<{ ok: number }>()
+        if (!locationExists?.ok) {
+          return c.json({ error: 'Forbidden for this event location.' }, 403)
+        }
+      }
+
+      return null
+    }
+    case 'order_items': {
+      const orderId = typeof record.order_id === 'string' ? record.order_id : ''
+      const ticketTypeId = typeof record.ticket_type_id === 'string' ? record.ticket_type_id : ''
+      if (!orderId || !ticketTypeId) {
+        return c.json({ error: 'order_id and ticket_type_id are required.' }, 400)
+      }
+
+      const inScope = await db
+        .prepare(
+          `SELECT 1 AS ok
+           FROM orders
+           JOIN ticket_types ON ticket_types.id = ?
+           WHERE orders.id = ?
+             AND orders.customer_id = ?
+             AND ticket_types.event_id = orders.event_id
+           LIMIT 1`
+        )
+        .bind(ticketTypeId, orderId, scope.userId)
+        .first<{ ok: number }>()
+
+      if (!inScope?.ok) {
+        return c.json({ error: 'Forbidden for this order.' }, 403)
+      }
+
+      return null
+    }
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)
   }
