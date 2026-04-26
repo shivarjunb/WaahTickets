@@ -108,6 +108,26 @@ web-role-menu-items -> web_role_menu_items
 
 The API automatically fills `id`, `created_at`, and `updated_at` when those columns exist and the request does not provide them.
 
+## Automated Email Notifications
+
+When a paid/confirmed `orders` record or a verified/successful `payments` record is created or updated, the API now:
+
+1. Creates a `messages` entry.
+2. Creates a `notification_queue` entry.
+3. Publishes a job to Cloudflare Queue `waahtickets-email-queue`.
+
+The queue consumer sends one customer email containing:
+
+- order confirmation details
+- receipt summary
+- attached PDF ticket pack
+
+Required configuration:
+
+- `EMAIL_QUEUE` queue binding (configured in `wrangler.jsonc`)
+- `EMAIL_FROM` env var
+- `SENDGRID_API_KEY` Wrangler secret
+
 ## Upstash Redis Cache
 
 The API uses Upstash Redis read-through caching for:

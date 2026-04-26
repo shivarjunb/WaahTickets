@@ -31,3 +31,22 @@ When running `npm run dev:server`, export:
 export UPSTASH_REDIS_REST_URL="https://YOUR-UPSTASH-ENDPOINT.upstash.io"
 export UPSTASH_REDIS_REST_TOKEN="YOUR-UPSTASH-TOKEN"
 ```
+
+## Queue + Email Variables
+
+Order confirmations are queued through Cloudflare Queues and sent by the Worker queue consumer.
+
+- `EMAIL_FROM` (plain env var)
+- `SENDGRID_API_KEY` (Wrangler secret)
+
+Create queue once:
+
+```bash
+npx wrangler queues create waahtickets-email-queue
+```
+
+Set secret:
+
+```bash
+npx wrangler secret put SENDGRID_API_KEY
+```

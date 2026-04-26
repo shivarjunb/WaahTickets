@@ -18,8 +18,25 @@
       "migrations_dir": "migrations"
     }
   ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "EMAIL_QUEUE",
+        "queue": "waahtickets-email-queue"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "waahtickets-email-queue",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5
+      }
+    ]
+  },
   "vars": {
     "UPSTASH_REDIS_REST_URL": "https://flying-pipefish-93304.upstash.io",
   "AUTH_REDIRECT_ORIGIN":"https://waahtickets.bhattarai-shiva.workers.dev/",
+  "EMAIL_FROM":"sales@meghpal.com",
   }
 }
