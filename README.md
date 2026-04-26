@@ -53,6 +53,24 @@ Set secret:
 npx wrangler secret put SENDGRID_API_KEY
 ```
 
+For local Wrangler development (`npm run dev:cloudflare`), set in `.dev.vars`:
+
+```bash
+EMAIL_FROM="WaahTickets <tickets@your-domain.com>"
+SENDGRID_API_KEY="SG.xxxxx.yyyyy"
+```
+
+For deployed environments, keep `EMAIL_FROM` in `wrangler.jsonc` `vars` and set `SENDGRID_API_KEY` with:
+
+```bash
+npx wrangler secret put SENDGRID_API_KEY
+```
+
+Admin runtime diagnostics:
+
+- `GET /api/settings/notifications`
+- Returns `email_queue_bound`, `sendgrid_api_key_configured`, `email_from_configured`, `can_attempt_send`, `runtime_note`.
+
 Run local queue integration tests:
 
 ```bash

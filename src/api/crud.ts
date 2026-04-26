@@ -5,6 +5,7 @@ import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
 import {
   enqueueAccountDeletedNotification,
+  getNotificationDeliveryReadiness,
   maybeEnqueueAccountCreatedNotification,
   maybeEnqueueOrderNotification
 } from '../notifications/service.js'
@@ -152,6 +153,31 @@ crudRoutes.get('/settings/r2', async (c) => {
         runtimeMode === 'local'
           ? 'Local dev writes to preview/local R2 storage. Use `wrangler dev --remote` or deploy to write to Cloudflare R2.'
           : 'Remote runtime writes directly to the configured Cloudflare R2 bucket.'
+    }
+  })
+})
+
+crudRoutes.get('/settings/notifications', async (c) => {
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const readiness = getNotificationDeliveryReadiness(c.env)
+  const runtimeMode = getRequestRuntimeMode(c.req.url)
+
+  const runtimeNote = readiness.canAttemptSend
+    ? 'Notification queue and email provider bindings are configured.'
+    : `Notification delivery is blocked. Missing: ${readiness.missing.join(', ')}.`
+
+  return c.json({
+    data: {
+      email_queue_bound: readiness.emailQueueBound,
+      sendgrid_api_key_configured: readiness.sendgridApiKeyConfigured,
+      email_from_configured: readiness.emailFromConfigured,
+      can_attempt_send: readiness.canAttemptSend,
+      runtime_mode: runtimeMode,
+      runtime_note: runtimeMode === 'local' ? `${runtimeNote} Local checks use Wrangler dev bindings.` : runtimeNote
     }
   })
 })

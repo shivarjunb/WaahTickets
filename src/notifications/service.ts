@@ -80,15 +80,50 @@ type NotificationRuntimeSettings = {
   ticketQrBaseUrl: string | null
 }
 
+export type NotificationDeliveryReadiness = {
+  dbBound: boolean
+  emailQueueBound: boolean
+  sendgridApiKeyConfigured: boolean
+  emailFromConfigured: boolean
+  canAttemptSend: boolean
+  missing: string[]
+}
+
+export function getNotificationDeliveryReadiness(env: Bindings): NotificationDeliveryReadiness {
+  const dbBound = Boolean(env.DB)
+  const emailQueueBound = Boolean(env.EMAIL_QUEUE)
+  const sendgridApiKeyConfigured = typeof env.SENDGRID_API_KEY === 'string' && env.SENDGRID_API_KEY.trim().length > 0
+  const emailFromConfigured = typeof env.EMAIL_FROM === 'string' && env.EMAIL_FROM.trim().length > 0
+  const missing = [
+    !dbBound ? 'DB' : null,
+    !emailQueueBound ? 'EMAIL_QUEUE' : null,
+    !sendgridApiKeyConfigured ? 'SENDGRID_API_KEY' : null,
+    !emailFromConfigured ? 'EMAIL_FROM' : null
+  ].filter((entry): entry is string => Boolean(entry))
+
+  return {
+    dbBound,
+    emailQueueBound,
+    sendgridApiKeyConfigured,
+    emailFromConfigured,
+    canAttemptSend: dbBound && emailQueueBound && sendgridApiKeyConfigured && emailFromConfigured,
+    missing
+  }
+}
+
 export async function maybeEnqueueOrderNotification(args: {
   env: Bindings
   tableName: string
   row: unknown
 }) {
   const { env, tableName, row } = args
+  const readiness = getNotificationDeliveryReadiness(env)
+  const emailQueue = env.EMAIL_QUEUE
 
-  if (!env.DB || !env.EMAIL_QUEUE) {
-    console.warn('[notifications] enqueue skipped: missing DB or EMAIL_QUEUE binding')
+  if (!readiness.dbBound || !readiness.emailQueueBound || !emailQueue) {
+    console.warn('[notifications] enqueue skipped: required bindings missing', {
+      missing: readiness.missing.filter((entry) => entry === 'DB' || entry === 'EMAIL_QUEUE')
+    })
     return
   }
 
@@ -191,7 +226,7 @@ export async function maybeEnqueueOrderNotification(args: {
     .run()
 
   try {
-    await env.EMAIL_QUEUE.send({
+    await emailQueue.send({
       queueEntryId,
       messageId,
       orderId,
@@ -297,8 +332,12 @@ async function enqueueAccountNotification(args: {
     return
   }
 
-  if (!env.DB || !env.EMAIL_QUEUE) {
-    console.warn('[notifications] account enqueue skipped: missing DB or EMAIL_QUEUE binding')
+  const readiness = getNotificationDeliveryReadiness(env)
+  const emailQueue = env.EMAIL_QUEUE
+  if (!readiness.dbBound || !readiness.emailQueueBound || !emailQueue) {
+    console.warn('[notifications] account enqueue skipped: required bindings missing', {
+      missing: readiness.missing.filter((entry) => entry === 'DB' || entry === 'EMAIL_QUEUE')
+    })
     return
   }
 
@@ -369,7 +408,7 @@ async function enqueueAccountNotification(args: {
       verifyUrl: args.verifyUrl,
       queuedAt: now
     }
-    await env.EMAIL_QUEUE.send(payload)
+    await emailQueue.send(payload)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('[notifications] account queue send failed', {
@@ -1027,19 +1066,18 @@ async function sendOrderEmail(args: {
 }) {
   const { env, to, subject, text, html, pdfBytes, orderNumber } = args
 
-  if (!env.SENDGRID_API_KEY) {
-    throw new Error('Missing SENDGRID_API_KEY binding.')
+  const readiness = getNotificationDeliveryReadiness(env)
+  if (!readiness.sendgridApiKeyConfigured || !readiness.emailFromConfigured) {
+    throw new Error(buildEmailDeliveryConfigErrorMessage(readiness))
   }
 
-  if (!env.EMAIL_FROM) {
-    throw new Error('Missing EMAIL_FROM binding.')
-  }
-
-  const from = parseEmailFrom(env.EMAIL_FROM)
+  const apiKey = env.SENDGRID_API_KEY as string
+  const emailFrom = env.EMAIL_FROM as string
+  const from = parseEmailFrom(emailFrom)
   const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -1087,19 +1125,18 @@ async function sendAccountEmail(args: {
 }) {
   const { env, to, subject, text, html } = args
 
-  if (!env.SENDGRID_API_KEY) {
-    throw new Error('Missing SENDGRID_API_KEY binding.')
+  const readiness = getNotificationDeliveryReadiness(env)
+  if (!readiness.sendgridApiKeyConfigured || !readiness.emailFromConfigured) {
+    throw new Error(buildEmailDeliveryConfigErrorMessage(readiness))
   }
 
-  if (!env.EMAIL_FROM) {
-    throw new Error('Missing EMAIL_FROM binding.')
-  }
-
-  const from = parseEmailFrom(env.EMAIL_FROM)
+  const apiKey = env.SENDGRID_API_KEY as string
+  const emailFrom = env.EMAIL_FROM as string
+  const from = parseEmailFrom(emailFrom)
   const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -1400,4 +1437,9 @@ function parseEmailFrom(value: string) {
     name: match[1].trim().replace(/^"|"$/g, ''),
     email: match[2].trim()
   }
+}
+
+function buildEmailDeliveryConfigErrorMessage(readiness: NotificationDeliveryReadiness) {
+  const providerMissing = readiness.missing.filter((entry) => entry === 'SENDGRID_API_KEY' || entry === 'EMAIL_FROM')
+  return `Email delivery is blocked. Missing bindings: ${providerMissing.join(', ')}.`
 }
