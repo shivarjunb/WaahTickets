@@ -245,6 +245,11 @@ type TicketType = ApiRecord & {
   max_per_order?: number
 }
 
+type OrderCustomerOption = {
+  id: string
+  label: string
+}
+
 type WebRoleName = 'Customers' | 'Organizations' | 'Admin'
 
 const roleAccess: Record<
@@ -1162,6 +1167,8 @@ function AdminApp({
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [lookupOptions, setLookupOptions] = useState<Record<string, ApiRecord[]>>({})
   const [filter, setFilter] = useState('')
+  const [orderCustomerFilter, setOrderCustomerFilter] = useState('')
+  const [orderCustomerOptions, setOrderCustomerOptions] = useState<OrderCustomerOption[]>([])
   const [status, setStatus] = useState('Ready')
   const [isLoading, setIsLoading] = useState(false)
   const [isSavingRecord, setIsSavingRecord] = useState(false)
@@ -1235,6 +1242,16 @@ function AdminApp({
   }, [selectedResource])
 
   useEffect(() => {
+    if (selectedResource !== 'orders') {
+      setOrderCustomerFilter('')
+      setOrderCustomerOptions([])
+      return
+    }
+
+    void loadOrderCustomerOptions(records)
+  }, [records, selectedResource])
+
+  useEffect(() => {
     if (!visibleResources.includes(selectedResource)) {
       setSelectedResource(visibleResources[0] ?? 'events')
     }
@@ -1246,12 +1263,17 @@ function AdminApp({
     }
   }, [isAdminUser, user?.webrole])
 
-  async function loadRecords(resource = selectedResource) {
+  async function loadRecords(resource = selectedResource, customerFilter = orderCustomerFilter) {
     setIsLoading(true)
     setStatus(`Loading ${formatResourceName(resource)}`)
 
     try {
-      const { data } = await fetchJson<ApiListResponse>(`/api/${resource}?limit=50`)
+      const query = new URLSearchParams({ limit: '50' })
+      if (resource === 'orders' && customerFilter) {
+        query.set('customer_id', customerFilter)
+      }
+
+      const { data } = await fetchJson<ApiListResponse>(`/api/${resource}?${query.toString()}`)
       setRecords(data.data ?? [])
       setStatus(`${data.data?.length ?? 0} ${formatResourceName(resource)} loaded`)
     } catch (error) {
@@ -1287,6 +1309,77 @@ function AdminApp({
         currentTotalPaisa: 0
       })
     }
+  }
+
+  async function loadOrderCustomerOptions(orderRows: ApiRecord[]) {
+    const fromOrders = new Map<string, string>()
+    for (const row of orderRows) {
+      const customerId = typeof row.customer_id === 'string' ? row.customer_id : null
+      if (!customerId || fromOrders.has(customerId)) continue
+      fromOrders.set(customerId, `Customer ${customerId.slice(0, 8)}`)
+    }
+
+    let customerRows: ApiRecord[] = []
+    let userRows: ApiRecord[] = []
+
+    try {
+      const { data } = await fetchJson<ApiListResponse>('/api/customers?limit=500')
+      customerRows = data.data ?? []
+    } catch {
+      customerRows = []
+    }
+
+    try {
+      const { data } = await fetchJson<ApiListResponse>('/api/users?limit=500')
+      userRows = data.data ?? []
+    } catch {
+      userRows = []
+    }
+
+    const usersById = new Map<string, ApiRecord>()
+    for (const userRow of userRows) {
+      if (typeof userRow.id === 'string') {
+        usersById.set(userRow.id, userRow)
+      }
+    }
+
+    const options = new Map<string, string>()
+    for (const [id, label] of fromOrders.entries()) {
+      options.set(id, label)
+    }
+
+    for (const customerRow of customerRows) {
+      const userId = typeof customerRow.user_id === 'string' ? customerRow.user_id : null
+      if (!userId) continue
+
+      const linkedUser = usersById.get(userId)
+      const displayName =
+        (typeof customerRow.display_name === 'string' && customerRow.display_name.trim()) ||
+        (typeof linkedUser?.first_name === 'string' && linkedUser.first_name.trim()) ||
+        ''
+      const email =
+        (typeof linkedUser?.email === 'string' && linkedUser.email.trim()) ||
+        (typeof customerRow.email === 'string' && customerRow.email.trim()) ||
+        ''
+      const label = [displayName, email].filter(Boolean).join(' - ') || `Customer ${userId.slice(0, 8)}`
+      options.set(userId, label)
+    }
+
+    for (const userRow of userRows) {
+      if (typeof userRow.id !== 'string') continue
+      const firstName = typeof userRow.first_name === 'string' ? userRow.first_name.trim() : ''
+      const lastName = typeof userRow.last_name === 'string' ? userRow.last_name.trim() : ''
+      const fullName = [firstName, lastName].filter(Boolean).join(' ').trim()
+      const email = typeof userRow.email === 'string' ? userRow.email.trim() : ''
+      const label = [fullName, email].filter(Boolean).join(' - ') || `Customer ${userRow.id.slice(0, 8)}`
+      options.set(userRow.id, label)
+    }
+
+    setOrderCustomerOptions(
+      [...options.entries()]
+        .map(([id, label]) => ({ id, label }))
+        .sort((left, right) => left.label.localeCompare(right.label))
+    )
   }
 
   function openCreateModal() {
@@ -1756,6 +1849,27 @@ function AdminApp({
                   onChange={(event) => setFilter(event.target.value)}
                 />
               </label>
+              {selectedResource === 'orders' ? (
+                <label className="admin-search admin-filter">
+                  <Users size={17} />
+                  <select
+                    aria-label="Filter orders by customer"
+                    value={orderCustomerFilter}
+                    onChange={(event) => {
+                      const nextCustomerId = event.target.value
+                      setOrderCustomerFilter(nextCustomerId)
+                      void loadRecords('orders', nextCustomerId)
+                    }}
+                  >
+                    <option value="">All customers</option>
+                    {orderCustomerOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <button type="button" onClick={() => void loadRecords()}>
                 <RefreshCw size={17} />
                 Refresh

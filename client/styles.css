@@ -1274,6 +1274,13 @@ h1 {
   outline: 0;
 }
 
+.admin-search select {
+  min-width: 220px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
 .admin-table-wrap {
   overflow: auto;
 }
@@ -2200,6 +2207,11 @@ h1 {
   background: transparent;
 }
 
+.admin-search select {
+  color: #e2e8f0;
+  background: transparent;
+}
+
 .admin-table th,
 .admin-table td {
   border-bottom-color: rgba(148, 163, 184, 0.15);
@@ -2397,6 +2409,10 @@ body[data-theme='light'] .admin-search {
 }
 
 body[data-theme='light'] .admin-search input {
+  color: #0f172a;
+}
+
+body[data-theme='light'] .admin-search select {
   color: #0f172a;
 }
 
