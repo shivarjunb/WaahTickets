@@ -19,7 +19,6 @@
   ],
   "vars": {
     "UPSTASH_REDIS_REST_URL": "gQAAAAAAAWx4AAIgcDI1ODA4Mzc2MDA5MDg0ZTFiOWFhOTViYjllODJjY2NkYg",
-   
     "AUTH_REDIRECT_ORIGIN":"https://waahtickets.bhattarai-shiva.workers.dev/",
   }
 }
