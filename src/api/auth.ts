@@ -1,13 +1,8 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { hashPassword, hashToken, verifyPassword } from '../auth/password.js'
-
-type Bindings = {
-  DB: D1Database
-  GOOGLE_CLIENT_ID?: string
-  GOOGLE_CLIENT_SECRET?: string
-  AUTH_REDIRECT_ORIGIN?: string
-}
+import { enqueueAccountCreatedNotification } from '../notifications/service.js'
+import type { Bindings } from '../types/bindings.js'
 
 type AppContext = Context<{ Bindings: Bindings }>
 
@@ -94,6 +89,13 @@ authRoutes.post('/register', async (c) => {
     }
 
     await attachRole(c.env.DB, userId, webrole)
+    await enqueueAccountCreatedNotification({
+      env: c.env,
+      userId,
+      recipientEmail: body.email.toLowerCase(),
+      firstName: body.first_name ?? null,
+      lastName: body.last_name ?? null
+    })
     const session = await createSession(c.env.DB, userId, 'password')
 
     return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token)
@@ -173,6 +175,47 @@ authRoutes.get('/me', async (c) => {
     .first<UserRow>()
 
   return c.json({ user: session ? sanitizeUser(session) : null })
+})
+
+authRoutes.get('/verify-email', async (c) => {
+  const token = c.req.query('token')
+  if (!token) {
+    return c.json({ error: 'Verification token is required.' }, 400)
+  }
+
+  const now = new Date().toISOString()
+  const tokenHash = await hashEmailVerificationToken(token)
+  const tokenRow = await c.env.DB.prepare(
+    `SELECT id, user_id
+     FROM email_verification_tokens
+     WHERE token_hash = ?
+       AND used_at IS NULL
+       AND expires_at > ?
+     LIMIT 1`
+  )
+    .bind(tokenHash, now)
+    .first<{ id: string; user_id: string }>()
+
+  if (!tokenRow) {
+    return c.json({ error: 'Verification link is invalid or expired.' }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE email_verification_tokens
+     SET used_at = ?
+     WHERE user_id = ?
+       AND used_at IS NULL`
+  )
+    .bind(now, tokenRow.user_id)
+    .run()
+
+  await c.env.DB.prepare('UPDATE users SET is_email_verified = 1, updated_at = ? WHERE id = ?')
+    .bind(now, tokenRow.user_id)
+    .run()
+
+  const session = await createSession(c.env.DB, tokenRow.user_id, 'email-verification')
+  c.header('Set-Cookie', sessionCookie(session.token, isSecureOrigin(new URL(c.req.url).origin)))
+  return c.redirect('/admin')
 })
 
 authRoutes.get('/google/config', (c) => {
@@ -255,6 +298,15 @@ authRoutes.get('/google/callback', async (c) => {
   }
 
   const user = await upsertGoogleUser(c.env.DB, profile)
+  if (user.isNew) {
+    await enqueueAccountCreatedNotification({
+      env: c.env,
+      userId: user.id,
+      recipientEmail: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name
+    })
+  }
   const session = await createSession(c.env.DB, user.id, 'google')
 
   const isSecure = isSecureOrigin(origin)
@@ -292,7 +344,7 @@ async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {
       )
       .run()
 
-    return { ...existing, webrole: existing.webrole ?? 'Customers' }
+    return { ...existing, webrole: existing.webrole ?? 'Customers', isNew: false }
   }
 
   const userId = crypto.randomUUID()
@@ -331,7 +383,14 @@ async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {
     .run()
   await attachRole(db, userId, 'Customers')
 
-  return { id: userId, email: profile.email, webrole: 'Customers' }
+  return {
+    id: userId,
+    email: profile.email.toLowerCase(),
+    first_name: profile.given_name ?? null,
+    last_name: profile.family_name ?? null,
+    webrole: 'Customers',
+    isNew: true
+  }
 }
 
 async function attachRole(db: D1Database, userId: string, roleName: string) {
@@ -439,4 +498,14 @@ function normalizeOrigin(origin: string) {
   const trimmedOrigin = origin.trim().replace(/\/+$/, '')
   const parsed = new URL(trimmedOrigin)
   return parsed.origin
+}
+
+async function hashEmailVerificationToken(token: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  let binary = ''
+  for (const byte of new Uint8Array(digest)) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary)
 }

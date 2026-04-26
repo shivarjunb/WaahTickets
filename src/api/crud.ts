@@ -3,7 +3,11 @@ import type { Context } from 'hono'
 import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
-import { maybeEnqueueOrderNotification } from '../notifications/service.js'
+import {
+  enqueueAccountDeletedNotification,
+  maybeEnqueueAccountCreatedNotification,
+  maybeEnqueueOrderNotification
+} from '../notifications/service.js'
 import type { Bindings } from '../types/bindings.js'
 
 type AuthScope = {
@@ -220,6 +224,7 @@ crudRoutes.post('/:resource', async (c) => {
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
   await maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result })
+  await maybeEnqueueAccountCreatedNotification({ env: c.env, tableName: table.table, row: result })
 
   return c.json({ data: sanitizeRowForTable(table.table, result) }, 201)
 })
@@ -435,6 +440,16 @@ async function deleteUserRecord(c: AppContext, db: D1Database, userId: string, s
 
   if (!result) {
     return c.json({ error: 'Record not found.' }, 404)
+  }
+
+  if (typeof user.email === 'string' && user.email.trim()) {
+    await enqueueAccountDeletedNotification({
+      env: c.env,
+      userId,
+      recipientEmail: user.email,
+      firstName: typeof user.first_name === 'string' ? user.first_name : null,
+      lastName: typeof user.last_name === 'string' ? user.last_name : null
+    })
   }
 
   return c.json({ data: sanitizeRowForTable('users', result) })

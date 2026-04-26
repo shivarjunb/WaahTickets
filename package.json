@@ -16,7 +16,8 @@
     "db:migrate:local": "wrangler d1 migrations apply waahtickets-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply waahtickets-db --remote",
     "db:execute:local": "wrangler d1 execute waahtickets-db --local",
-    "db:execute:remote": "wrangler d1 execute waahtickets-db --remote"
+    "db:execute:remote": "wrangler d1 execute waahtickets-db --remote",
+    "test:account-email-queue:local": "./scripts/test-account-email-queue-local.sh"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",

@@ -35,6 +35,8 @@ export UPSTASH_REDIS_REST_TOKEN="YOUR-UPSTASH-TOKEN"
 ## Queue + Email Variables
 
 Order confirmations are queued through Cloudflare Queues and sent by the Worker queue consumer.
+Account created/deleted emails use the same queue + consumer path.
+Account-created emails include a one-click verify button (`/api/auth/verify-email`) to authenticate the email address.
 
 - `EMAIL_FROM` (plain env var)
 - `SENDGRID_API_KEY` (Wrangler secret)
@@ -49,4 +51,11 @@ Set secret:
 
 ```bash
 npx wrangler secret put SENDGRID_API_KEY
+```
+
+Run local queue integration tests:
+
+```bash
+./scripts/test-email-queue-local.sh
+./scripts/test-account-email-queue-local.sh
 ```

@@ -2,11 +2,25 @@ import type { Bindings } from '../types/bindings.js'
 
 type MutationRow = Record<string, unknown>
 
-type EmailQueueMessage = {
+type OrderEmailQueueMessage = {
+  notificationType?: 'order_confirmation'
   queueEntryId: string
   messageId: string
   orderId: string
   recipientEmail: string
+  queuedAt: string
+}
+
+type AccountNotificationType = 'account_created' | 'account_deleted'
+
+type AccountEmailQueueMessage = {
+  notificationType: AccountNotificationType
+  queueEntryId: string
+  messageId: string
+  userId: string
+  recipientEmail: string
+  recipientName: string
+  verifyUrl?: string
   queuedAt: string
 }
 
@@ -49,8 +63,11 @@ type OrderSnapshot = {
 
 const ORDER_SUCCESS_STATUSES = new Set(['paid', 'completed', 'confirmed'])
 const PAYMENT_SUCCESS_STATUSES = new Set(['paid', 'completed', 'verified', 'success', 'succeeded'])
-const MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf'
+const ORDER_MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf'
+const ACCOUNT_CREATED_MESSAGE_TYPE = 'account_created'
+const ACCOUNT_DELETED_MESSAGE_TYPE = 'account_deleted'
 const MAX_RETRY_ATTEMPTS = 5
+const EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 
 export async function maybeEnqueueOrderNotification(args: {
   env: Bindings
@@ -120,7 +137,7 @@ export async function maybeEnqueueOrderNotification(args: {
          AND notification_queue.status IN ('pending', 'processing', 'sent')
        LIMIT 1`
     )
-    .bind(orderId, MESSAGE_TYPE)
+    .bind(orderId, ORDER_MESSAGE_TYPE)
     .first<{ id: string }>()
 
   if (existing) {
@@ -142,7 +159,7 @@ export async function maybeEnqueueOrderNotification(args: {
     )
     .bind(
       messageId,
-      MESSAGE_TYPE,
+      ORDER_MESSAGE_TYPE,
       `Order confirmation queued - ${orderContext.order_number}`,
       'Order confirmation is queued for delivery.',
       orderContext.customer_email,
@@ -184,6 +201,177 @@ export async function maybeEnqueueOrderNotification(args: {
   }
 }
 
+export async function maybeEnqueueAccountCreatedNotification(args: {
+  env: Bindings
+  tableName: string
+  row: unknown
+}) {
+  const { tableName, row } = args
+  if (tableName !== 'users' || !row || typeof row !== 'object' || Array.isArray(row)) {
+    return
+  }
+
+  const mutation = row as MutationRow
+  const userId = asString(mutation.id)
+  const recipientEmail = asString(mutation.email)
+  if (!userId || !recipientEmail) {
+    return
+  }
+
+  await enqueueAccountCreatedNotification({
+    env: args.env,
+    userId,
+    recipientEmail,
+    firstName: asNullableString(mutation.first_name),
+    lastName: asNullableString(mutation.last_name)
+  })
+}
+
+export async function enqueueAccountCreatedNotification(args: {
+  env: Bindings
+  userId: string
+  recipientEmail: string
+  firstName?: string | null
+  lastName?: string | null
+}) {
+  const recipientName = deriveRecipientName(args.firstName, args.lastName, args.recipientEmail)
+  const verifyUrl = await createAccountEmailVerificationUrl(args.env, args.userId)
+  await enqueueAccountNotification({
+    env: args.env,
+    userId: args.userId,
+    recipientEmail: args.recipientEmail,
+    recipientName,
+    verifyUrl,
+    notificationType: 'account_created',
+    messageType: ACCOUNT_CREATED_MESSAGE_TYPE,
+    queuedSubject: `Account created - ${args.recipientEmail}`,
+    queuedContent: 'Account created email is queued for delivery.'
+  })
+}
+
+export async function enqueueAccountDeletedNotification(args: {
+  env: Bindings
+  userId: string
+  recipientEmail: string
+  firstName?: string | null
+  lastName?: string | null
+}) {
+  const recipientName = deriveRecipientName(args.firstName, args.lastName, args.recipientEmail)
+  await enqueueAccountNotification({
+    env: args.env,
+    userId: args.userId,
+    recipientEmail: args.recipientEmail,
+    recipientName,
+    notificationType: 'account_deleted',
+    messageType: ACCOUNT_DELETED_MESSAGE_TYPE,
+    queuedSubject: `Account deletion confirmation queued - ${args.recipientEmail}`,
+    queuedContent: 'Account deletion email is queued for delivery.'
+  })
+}
+
+async function enqueueAccountNotification(args: {
+  env: Bindings
+  userId: string
+  recipientEmail: string
+  recipientName: string
+  verifyUrl?: string
+  notificationType: AccountNotificationType
+  messageType: string
+  queuedSubject: string
+  queuedContent: string
+}) {
+  const { env } = args
+  if (!args.recipientEmail.trim()) {
+    console.warn('[notifications] account enqueue skipped: missing recipient email', { userId: args.userId })
+    return
+  }
+
+  if (!env.DB || !env.EMAIL_QUEUE) {
+    console.warn('[notifications] account enqueue skipped: missing DB or EMAIL_QUEUE binding')
+    return
+  }
+
+  const existing = await env.DB
+    .prepare(
+      `SELECT notification_queue.id
+       FROM notification_queue
+       JOIN messages ON messages.id = notification_queue.message_id
+       WHERE messages.regarding_entity_type = 'user'
+         AND messages.regarding_entity_id = ?
+         AND messages.message_type = ?
+         AND notification_queue.status IN ('pending', 'processing', 'sent')
+       LIMIT 1`
+    )
+    .bind(args.userId, args.messageType)
+    .first<{ id: string }>()
+
+  if (existing) {
+    console.log('[notifications] account enqueue skipped: active queue entry already exists', {
+      userId: args.userId,
+      messageType: args.messageType
+    })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const messageId = crypto.randomUUID()
+  const queueEntryId = crypto.randomUUID()
+
+  await env.DB
+    .prepare(
+      `INSERT INTO messages (
+        id, message_type, subject, content, recipient_email,
+        regarding_entity_type, regarding_entity_id, status,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'user', ?, 'queued', ?, ?)`
+    )
+    .bind(
+      messageId,
+      args.messageType,
+      args.queuedSubject,
+      args.queuedContent,
+      args.recipientEmail,
+      args.userId,
+      now,
+      now
+    )
+    .run()
+
+  await env.DB
+    .prepare(
+      `INSERT INTO notification_queue (
+        id, message_id, channel, status, queued_at,
+        retry_count, provider, created_at, updated_at
+      ) VALUES (?, ?, 'email', 'pending', ?, 0, 'cloudflare-queues', ?, ?)`
+    )
+    .bind(queueEntryId, messageId, now, now, now)
+    .run()
+
+  try {
+    const payload: AccountEmailQueueMessage = {
+      notificationType: args.notificationType,
+      queueEntryId,
+      messageId,
+      userId: args.userId,
+      recipientEmail: args.recipientEmail,
+      recipientName: args.recipientName,
+      verifyUrl: args.verifyUrl,
+      queuedAt: now
+    }
+    await env.EMAIL_QUEUE.send(payload)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('[notifications] account queue send failed', {
+      userId: args.userId,
+      queueEntryId,
+      messageId,
+      error: message
+    })
+    await markQueueEntryFailed(env.DB, queueEntryId, messageId, 0, message)
+    throw error
+  }
+}
+
 export async function consumeOrderNotifications(batch: MessageBatch<unknown>, env: Bindings) {
   if (!env.DB) {
     console.error('[notifications] consumer missing DB binding; retrying batch')
@@ -194,59 +382,140 @@ export async function consumeOrderNotifications(batch: MessageBatch<unknown>, en
   console.log('[notifications] consumer batch received', { size: batch.messages.length })
   for (const message of batch.messages) {
     const payload = message.body
-    if (!isEmailQueueMessage(payload)) {
-      console.warn('[notifications] dropping invalid queue payload')
-      message.ack()
+    if (isOrderEmailQueueMessage(payload)) {
+      await processOrderQueueMessage(message, payload, env)
       continue
     }
 
-    try {
-      await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts)
-      const snapshot = await loadOrderSnapshot(env.DB, payload.orderId)
-      const email = buildOrderEmail(snapshot)
-      const pdfBytes = buildTicketPdf(snapshot)
-      const providerResult = await sendOrderEmail({
-        env,
-        to: payload.recipientEmail,
-        subject: email.subject,
-        text: email.text,
-        html: email.html,
-        pdfBytes,
-        orderNumber: snapshot.order.orderNumber
-      })
+    if (isAccountEmailQueueMessage(payload)) {
+      await processAccountQueueMessage(message, payload, env)
+      continue
+    }
 
-      await markQueueEntrySent({
-        db: env.DB,
-        queueEntryId: payload.queueEntryId,
-        messageId: payload.messageId,
-        subject: email.subject,
-        content: email.text,
-        provider: providerResult.provider,
-        providerMessageId: providerResult.providerMessageId
-      })
+    console.warn('[notifications] dropping invalid queue payload')
+    message.ack()
+  }
+}
 
-      console.log('[notifications] email sent', {
-        orderId: payload.orderId,
-        queueEntryId: payload.queueEntryId,
-        providerMessageId: providerResult.providerMessageId
-      })
+async function processOrderQueueMessage(
+  message: Message<unknown>,
+  payload: OrderEmailQueueMessage,
+  env: Bindings
+) {
+  if (!env.DB) {
+    message.retry()
+    return
+  }
+
+  try {
+    await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts)
+    const snapshot = await loadOrderSnapshot(env.DB, payload.orderId)
+    const email = buildOrderEmail(snapshot)
+    const pdfBytes = buildTicketPdf(snapshot)
+    const providerResult = await sendOrderEmail({
+      env,
+      to: payload.recipientEmail,
+      subject: email.subject,
+      text: email.text,
+      html: email.html,
+      pdfBytes,
+      orderNumber: snapshot.order.orderNumber
+    })
+
+    await markQueueEntrySent({
+      db: env.DB,
+      queueEntryId: payload.queueEntryId,
+      messageId: payload.messageId,
+      subject: email.subject,
+      content: email.text,
+      provider: providerResult.provider,
+      providerMessageId: providerResult.providerMessageId
+    })
+
+    console.log('[notifications] email sent', {
+      orderId: payload.orderId,
+      queueEntryId: payload.queueEntryId,
+      providerMessageId: providerResult.providerMessageId
+    })
+    message.ack()
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[notifications] consumer error', {
+      orderId: payload.orderId,
+      queueEntryId: payload.queueEntryId,
+      attempts: message.attempts,
+      error: errorMessage
+    })
+
+    if (message.attempts >= MAX_RETRY_ATTEMPTS) {
+      await markQueueEntryFailed(env.DB, payload.queueEntryId, payload.messageId, message.attempts, errorMessage)
       message.ack()
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      console.error('[notifications] consumer error', {
-        orderId: payload.orderId,
-        queueEntryId: payload.queueEntryId,
-        attempts: message.attempts,
-        error: errorMessage
-      })
+    } else {
+      await markQueueEntryPending(env.DB, payload.queueEntryId, message.attempts, errorMessage)
+      message.retry()
+    }
+  }
+}
 
-      if (message.attempts >= MAX_RETRY_ATTEMPTS) {
-        await markQueueEntryFailed(env.DB, payload.queueEntryId, payload.messageId, message.attempts, errorMessage)
-        message.ack()
-      } else {
-        await markQueueEntryPending(env.DB, payload.queueEntryId, message.attempts, errorMessage)
-        message.retry()
-      }
+async function processAccountQueueMessage(
+  message: Message<unknown>,
+  payload: AccountEmailQueueMessage,
+  env: Bindings
+) {
+  if (!env.DB) {
+    message.retry()
+    return
+  }
+
+  try {
+    await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts)
+    const email = buildAccountEmail(
+      payload.notificationType,
+      payload.recipientName,
+      payload.recipientEmail,
+      payload.verifyUrl
+    )
+    const providerResult = await sendAccountEmail({
+      env,
+      to: payload.recipientEmail,
+      subject: email.subject,
+      text: email.text,
+      html: email.html
+    })
+
+    await markQueueEntrySent({
+      db: env.DB,
+      queueEntryId: payload.queueEntryId,
+      messageId: payload.messageId,
+      subject: email.subject,
+      content: email.text,
+      provider: providerResult.provider,
+      providerMessageId: providerResult.providerMessageId
+    })
+
+    console.log('[notifications] account email sent', {
+      notificationType: payload.notificationType,
+      userId: payload.userId,
+      queueEntryId: payload.queueEntryId,
+      providerMessageId: providerResult.providerMessageId
+    })
+    message.ack()
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[notifications] account consumer error', {
+      notificationType: payload.notificationType,
+      userId: payload.userId,
+      queueEntryId: payload.queueEntryId,
+      attempts: message.attempts,
+      error: errorMessage
+    })
+
+    if (message.attempts >= MAX_RETRY_ATTEMPTS) {
+      await markQueueEntryFailed(env.DB, payload.queueEntryId, payload.messageId, message.attempts, errorMessage)
+      message.ack()
+    } else {
+      await markQueueEntryPending(env.DB, payload.queueEntryId, message.attempts, errorMessage)
+      message.retry()
     }
   }
 }
@@ -431,6 +700,61 @@ function buildOrderEmail(snapshot: OrderSnapshot) {
   return { subject, text, html }
 }
 
+function buildAccountEmail(
+  notificationType: AccountNotificationType,
+  recipientName: string,
+  recipientEmail: string,
+  verifyUrl?: string
+) {
+  if (notificationType === 'account_deleted') {
+    const subject = 'Your WaahTickets account has been deleted'
+    const text = [
+      `Hi ${recipientName},`,
+      '',
+      'This is a confirmation that your WaahTickets account has been deleted.',
+      `Account email: ${recipientEmail}`,
+      '',
+      'If you did not request this action, contact support immediately.'
+    ].join('\n')
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111">`
+      + `<p>Hi ${escapeHtml(recipientName)},</p>`
+      + `<p>This is a confirmation that your WaahTickets account has been deleted.</p>`
+      + `<p><strong>Account email:</strong> ${escapeHtml(recipientEmail)}</p>`
+      + `<p>If you did not request this action, contact support immediately.</p>`
+      + `</div>`
+
+    return { subject, text, html }
+  }
+
+  const subject = 'Welcome to WaahTickets'
+  const verificationUrl = verifyUrl?.trim()
+  if (!verificationUrl) {
+    throw new Error('Account verification link is missing from queue payload.')
+  }
+
+  const text = [
+    `Hi ${recipientName},`,
+    '',
+    'Your WaahTickets account has been created successfully.',
+    `Account email: ${recipientEmail}`,
+    '',
+    `Verify your email address: ${verificationUrl}`,
+    '',
+    'You can now sign in and start managing your events and bookings.'
+  ].join('\n')
+  const html = `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111">`
+    + `<p>Hi ${escapeHtml(recipientName)},</p>`
+    + `<p>Your WaahTickets account has been created successfully.</p>`
+    + `<p><strong>Account email:</strong> ${escapeHtml(recipientEmail)}</p>`
+    + `<p>Please verify your email address to secure your account.</p>`
+    + `<p><a href="${escapeHtml(verificationUrl)}" style="display:inline-block;padding:12px 20px;background:#0f766e;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Verify Email</a></p>`
+    + `<p>If the button does not work, use this link:<br/><a href="${escapeHtml(verificationUrl)}">${escapeHtml(verificationUrl)}</a></p>`
+    + `<p>You can now sign in and start managing your events and bookings.</p>`
+    + `</div>`
+
+  return { subject, text, html }
+}
+
 function buildTicketPdf(snapshot: OrderSnapshot) {
   const lines: string[] = [
     'WaahTickets Ticket Pack',
@@ -589,6 +913,53 @@ async function sendOrderEmail(args: {
   }
 }
 
+async function sendAccountEmail(args: {
+  env: Bindings
+  to: string
+  subject: string
+  text: string
+  html: string
+}) {
+  const { env, to, subject, text, html } = args
+
+  if (!env.SENDGRID_API_KEY) {
+    throw new Error('Missing SENDGRID_API_KEY binding.')
+  }
+
+  if (!env.EMAIL_FROM) {
+    throw new Error('Missing EMAIL_FROM binding.')
+  }
+
+  const from = parseEmailFrom(env.EMAIL_FROM)
+  const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: to }] }],
+      from,
+      subject,
+      content: [
+        { type: 'text/plain', value: text },
+        { type: 'text/html', value: html }
+      ]
+    })
+  })
+
+  if (!response.ok) {
+    const details = await readTextSafe(response)
+    throw new Error(`Email provider call failed (${response.status}): ${details}`)
+  }
+
+  const messageId = response.headers.get('x-message-id')
+  return {
+    provider: 'sendgrid',
+    providerMessageId: messageId
+  }
+}
+
 async function markQueueEntryProcessing(db: D1Database, queueEntryId: string, attempts: number) {
   await db
     .prepare(
@@ -673,7 +1044,74 @@ function asString(value: unknown) {
   return typeof value === 'string' ? value : null
 }
 
-function isEmailQueueMessage(value: unknown): value is EmailQueueMessage {
+function asNullableString(value: unknown) {
+  return typeof value === 'string' ? value : null
+}
+
+function deriveRecipientName(firstName: string | null | undefined, lastName: string | null | undefined, email: string) {
+  const combined = [firstName, lastName].filter(Boolean).join(' ').trim()
+  if (combined) {
+    return combined
+  }
+
+  const emailName = email.split('@')[0]?.trim()
+  return emailName || 'Customer'
+}
+
+async function createAccountEmailVerificationUrl(env: Bindings, userId: string) {
+  if (!env.DB) {
+    throw new Error('Missing DB binding for account verification token creation.')
+  }
+
+  const token = generateVerificationToken()
+  const tokenHash = await hashEmailVerificationToken(token)
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + EMAIL_VERIFICATION_EXPIRY_HOURS * 60 * 60 * 1000).toISOString()
+
+  await env.DB
+    .prepare(
+      `INSERT INTO email_verification_tokens (
+        id, user_id, token_hash, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(crypto.randomUUID(), userId, tokenHash, expiresAt, now.toISOString())
+    .run()
+
+  const baseOrigin = buildPublicOrigin(env.AUTH_REDIRECT_ORIGIN)
+  const verifyUrl = new URL('/api/auth/verify-email', baseOrigin)
+  verifyUrl.searchParams.set('token', token)
+  return verifyUrl.toString()
+}
+
+function buildPublicOrigin(origin: string | undefined) {
+  const fallback = 'http://localhost:8787'
+  const base = (origin ?? fallback).trim()
+  const normalized = base.endsWith('/') ? base.slice(0, -1) : base
+  return new URL(normalized).origin
+}
+
+function generateVerificationToken() {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+}
+
+async function hashEmailVerificationToken(token: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  let binary = ''
+  for (const byte of new Uint8Array(digest)) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary)
+}
+
+function isOrderEmailQueueMessage(value: unknown): value is OrderEmailQueueMessage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
@@ -684,6 +1122,27 @@ function isEmailQueueMessage(value: unknown): value is EmailQueueMessage {
     typeof row.messageId === 'string' &&
     typeof row.orderId === 'string' &&
     typeof row.recipientEmail === 'string' &&
+    typeof row.queuedAt === 'string'
+  )
+}
+
+function isAccountEmailQueueMessage(value: unknown): value is AccountEmailQueueMessage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const row = value as Record<string, unknown>
+  const isCreated = row.notificationType === 'account_created'
+  const isDeleted = row.notificationType === 'account_deleted'
+  const verifyUrlValid = typeof row.verifyUrl === 'string' && row.verifyUrl.length > 0
+  return (
+    (isCreated || isDeleted) &&
+    typeof row.queueEntryId === 'string' &&
+    typeof row.messageId === 'string' &&
+    typeof row.userId === 'string' &&
+    typeof row.recipientEmail === 'string' &&
+    typeof row.recipientName === 'string' &&
+    (isDeleted || verifyUrlValid) &&
     typeof row.queuedAt === 'string'
   )
 }
