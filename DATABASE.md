@@ -18,6 +18,12 @@ Event featuring support (`events.is_featured`) is added in:
 migrations/0007_events_featured_flag.sql
 ```
 
+Ticket validator web role seed data is added in:
+
+```bash
+migrations/0008_ticket_validator_role.sql
+```
+
 ## Local D1
 
 Apply migrations to Wrangler's local D1 database:

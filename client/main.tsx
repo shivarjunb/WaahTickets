@@ -10,6 +10,8 @@ import {
   Bell,
   Building2,
   CalendarDays,
+  Camera,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +31,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  ScanLine,
   Settings2,
   ShieldCheck,
   ShoppingCart,
@@ -39,6 +42,7 @@ import {
   Ticket,
   Trash2,
   Upload,
+  AlertTriangle,
   UserCog,
   Users,
   X
@@ -328,7 +332,7 @@ type OrderCustomerOption = {
   label: string
 }
 
-type WebRoleName = 'Customers' | 'Organizations' | 'Admin'
+type WebRoleName = 'Customers' | 'Organizations' | 'Admin' | 'TicketValidator'
 type SortDirection = 'asc' | 'desc'
 type ResourceSort = {
   column: string
@@ -346,11 +350,18 @@ const roleAccess: Record<
   },
   Organizations: {
     organizations: { can_create: true, can_edit: true, can_delete: false },
+    organization_users: { can_create: true, can_edit: true, can_delete: false },
     events: { can_create: true, can_edit: true, can_delete: false },
     event_locations: { can_create: true, can_edit: true, can_delete: false },
     ticket_types: { can_create: true, can_edit: true, can_delete: false },
     orders: { can_create: false, can_edit: true, can_delete: false },
     tickets: { can_create: false, can_edit: true, can_delete: false },
+    ticket_scans: { can_create: true, can_edit: false, can_delete: false }
+  },
+  TicketValidator: {
+    events: { can_create: false, can_edit: false, can_delete: false },
+    event_locations: { can_create: false, can_edit: false, can_delete: false },
+    tickets: { can_create: false, can_edit: false, can_delete: false },
     ticket_scans: { can_create: true, can_edit: false, can_delete: false }
   },
   Admin: Object.fromEntries(
@@ -384,6 +395,9 @@ const lookupResourceByField: Record<string, string> = {
 }
 
 const fieldSelectOptions: Record<string, Record<string, string[]>> = {
+  organization_users: {
+    role: ['admin', 'ticket-validator']
+  },
   events: {
     status: ['draft', 'published', 'cancelled', 'archived']
   }
@@ -393,6 +407,7 @@ const requiredFieldsByResource: Record<string, string[]> = {
   users: ['first_name', 'last_name', 'email', 'webrole'],
   customers: ['display_name'],
   organizations: ['name'],
+  organization_users: ['organization_id', 'role'],
   events: ['organization_id', 'name', 'slug', 'start_datetime', 'end_datetime', 'status'],
   event_locations: ['event_id', 'name'],
   ticket_types: ['event_id', 'event_location_id', 'name', 'price_paisa'],
@@ -416,6 +431,16 @@ type ApiListResponse = {
 
 type ApiMutationResponse = {
   data?: ApiRecord
+  error?: string
+  message?: string
+}
+
+type TicketRedeemResponse = {
+  data?: {
+    status?: 'redeemed' | 'already_redeemed' | 'not_found'
+    message?: string
+    ticket?: ApiRecord
+  }
   error?: string
   message?: string
 }
@@ -444,6 +469,19 @@ type AuthUser = {
   is_email_verified?: boolean
   webrole?: WebRoleName
 } | null
+
+type DetectedBarcodeValue = {
+  rawValue?: string
+}
+
+type BarcodeDetectorInstance = {
+  detect: (source: ImageBitmapSource) => Promise<DetectedBarcodeValue[]>
+}
+
+type BarcodeDetectorConstructor = {
+  new (options?: { formats?: string[] }): BarcodeDetectorInstance
+  getSupportedFormats?: () => Promise<string[]>
+}
 
 type AdminDashboardMetrics = {
   eventsLoaded: number
@@ -604,6 +642,13 @@ function App() {
 
           user.is_active === false || !user.is_email_verified ? (
             <AccountAccessBlocked user={user} onLogout={logout} />
+          ) : user.webrole === 'TicketValidator' ? (
+            <TicketValidatorApp
+              user={user}
+              onLogout={logout}
+              theme={theme}
+              onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            />
           ) : (
             <AdminApp
             user={user}
@@ -1875,6 +1920,274 @@ function AccountAccessBlocked({ user, onLogout }: { user: AuthUser; onLogout: ()
   )
 }
 
+function TicketValidatorApp({
+  user,
+  onLogout,
+  theme,
+  onToggleTheme
+}: {
+  user: AuthUser
+  onLogout: () => void
+  theme: 'dark' | 'light'
+  onToggleTheme: () => void
+}) {
+  const [qrInput, setQrInput] = useState('')
+  const [statusMessage, setStatusMessage] = useState('Ready to scan tickets.')
+  const [statusTone, setStatusTone] = useState<'neutral' | 'success' | 'warning' | 'error'>('neutral')
+  const [isRedeeming, setIsRedeeming] = useState(false)
+  const [isCameraActive, setIsCameraActive] = useState(false)
+  const [cameraError, setCameraError] = useState('')
+  const [scanResult, setScanResult] = useState<ApiRecord | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const detectorRef = useRef<BarcodeDetectorInstance | null>(null)
+  const isRedeemingRef = useRef(false)
+  const lastDetectedRef = useRef<{ value: string; at: number }>({ value: '', at: 0 })
+
+  useEffect(() => {
+    isRedeemingRef.current = isRedeeming
+  }, [isRedeeming])
+
+  useEffect(() => {
+    return () => {
+      stopCamera()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isCameraActive) {
+      stopCamera()
+      return
+    }
+
+    let cancelled = false
+    let intervalId: number | null = null
+
+    async function startCamera() {
+      setCameraError('')
+      const detectorCtor = getBarcodeDetectorConstructor()
+      if (!detectorCtor) {
+        setCameraError('Camera QR scanning is not supported in this browser. Use manual scan input below.')
+        setIsCameraActive(false)
+        return
+      }
+
+      if (typeof detectorCtor.getSupportedFormats === 'function') {
+        try {
+          const supported = await detectorCtor.getSupportedFormats()
+          if (!supported.includes('qr_code')) {
+            setCameraError('QR code scanning is not available in this browser. Use manual scan input below.')
+            setIsCameraActive(false)
+            return
+          }
+        } catch {
+          // Continue with detector creation.
+        }
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        })
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+
+        streamRef.current = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
+        }
+      } catch {
+        setCameraError('Unable to access camera. Check permissions and try again.')
+        setIsCameraActive(false)
+        return
+      }
+
+      detectorRef.current = new detectorCtor({ formats: ['qr_code'] })
+      intervalId = window.setInterval(() => {
+        if (!isCameraActive || isRedeemingRef.current || !videoRef.current || !detectorRef.current) return
+        if (videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+
+        void detectorRef.current
+          .detect(videoRef.current)
+          .then((codes) => {
+            const nextValue = typeof codes[0]?.rawValue === 'string' ? codes[0].rawValue.trim() : ''
+            if (!nextValue) return
+            const now = Date.now()
+            if (lastDetectedRef.current.value === nextValue && now - lastDetectedRef.current.at < 4000) {
+              return
+            }
+            lastDetectedRef.current = { value: nextValue, at: now }
+            void redeemTicketByQr(nextValue, 'camera')
+          })
+          .catch(() => {
+            // Ignore detection errors and continue scanning.
+          })
+      }, 850)
+    }
+
+    void startCamera()
+
+    return () => {
+      cancelled = true
+      if (intervalId !== null) {
+        window.clearInterval(intervalId)
+      }
+      stopCamera()
+    }
+  }, [isCameraActive])
+
+  function stopCamera() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+  }
+
+  async function redeemTicketByQr(value: string, source: 'camera' | 'manual') {
+    const qrCodeValue = value.trim()
+    if (!qrCodeValue || isRedeemingRef.current) return
+
+    setQrInput(qrCodeValue)
+    setIsRedeeming(true)
+    setScanResult(null)
+    setStatusTone('neutral')
+    setStatusMessage(source === 'camera' ? 'Validating scanned QR code...' : 'Validating QR code...')
+
+    try {
+      const { data } = await fetchJson<TicketRedeemResponse>('/api/tickets/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qr_code_value: qrCodeValue })
+      })
+      const result = data.data
+      setScanResult((result?.ticket ?? null) as ApiRecord | null)
+
+      if (result?.status === 'redeemed') {
+        setStatusTone('success')
+        setStatusMessage(result.message ?? 'Ticket redeemed successfully.')
+      } else if (result?.status === 'already_redeemed') {
+        setStatusTone('warning')
+        setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
+      } else {
+        setStatusTone('error')
+        setStatusMessage(result?.message ?? 'No matching ticket was found for this QR code.')
+      }
+    } catch (error) {
+      setStatusTone('error')
+      setStatusMessage(getErrorMessage(error))
+      setScanResult(null)
+    } finally {
+      setIsRedeeming(false)
+    }
+  }
+
+  return (
+    <main className="validator-page">
+      <header className="validator-header">
+        <div>
+          <p className="admin-breadcrumb">Home / Ticket validation</p>
+          <h1>Ticket Validator</h1>
+          <p>{user?.email ?? 'Signed in validator'} · scan and redeem tickets at entry.</p>
+        </div>
+        <div className="admin-header-actions">
+          <button type="button" onClick={onToggleTheme}>
+            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+          <a className="admin-link-button" href="/">
+            <Home size={17} />
+            Public site
+          </a>
+          <button type="button" onClick={() => void onLogout()}>
+            <LogOut size={17} />
+            Logout
+          </button>
+        </div>
+      </header>
+
+      <section className="validator-grid">
+        <article className="validator-card">
+          <header>
+            <h2>
+              <Camera size={18} />
+              Camera scan
+            </h2>
+            <p>Use the device camera to scan ticket QR codes in real time.</p>
+          </header>
+          <div className="validator-camera-shell">
+            <video ref={videoRef} muted playsInline />
+          </div>
+          <div className="validator-actions">
+            <button className="primary-admin-button" type="button" onClick={() => setIsCameraActive((current) => !current)}>
+              <ScanLine size={17} />
+              {isCameraActive ? 'Stop camera' : 'Start camera'}
+            </button>
+            {cameraError ? <p className="validator-error">{cameraError}</p> : null}
+          </div>
+        </article>
+
+        <article className="validator-card">
+          <header>
+            <h2>
+              <Ticket size={18} />
+              Redeem by QR value
+            </h2>
+            <p>Use this for handheld scanners or manual fallback entry.</p>
+          </header>
+          <form
+            className="validator-manual-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void redeemTicketByQr(qrInput, 'manual')
+            }}
+          >
+            <label>
+              <span>QR code value</span>
+              <input
+                autoComplete="off"
+                disabled={isRedeeming}
+                placeholder="Scan or paste the QR payload"
+                type="text"
+                value={qrInput}
+                onChange={(event) => setQrInput(event.target.value)}
+              />
+            </label>
+            <button className="primary-admin-button" disabled={isRedeeming || !qrInput.trim()} type="submit">
+              {isRedeeming ? <span aria-hidden="true" className="button-spinner" /> : <ScanLine size={17} />}
+              {isRedeeming ? 'Validating...' : 'Redeem ticket'}
+            </button>
+          </form>
+
+          <div className={`validator-result validator-result-${statusTone}`}>
+            {statusTone === 'success' ? <CheckCircle2 size={17} /> : null}
+            {statusTone === 'warning' ? <AlertTriangle size={17} /> : null}
+            {statusTone === 'error' ? <AlertTriangle size={17} /> : null}
+            <span>{statusMessage}</span>
+          </div>
+
+          {scanResult ? (
+            <div className="validator-ticket-meta">
+              <p><strong>Ticket</strong> {String(scanResult.ticket_number ?? '-')}</p>
+              <p><strong>Event</strong> {String(scanResult.event_name ?? '-')}</p>
+              <p><strong>Location</strong> {String(scanResult.event_location_name ?? '-')}</p>
+              <p><strong>Type</strong> {String(scanResult.ticket_type_name ?? '-')}</p>
+              <p><strong>Customer</strong> {String(scanResult.customer_name ?? scanResult.customer_email ?? '-')}</p>
+              <p><strong>Redeemed at</strong> {String(scanResult.redeemed_at ?? '-')}</p>
+            </div>
+          ) : null}
+        </article>
+      </section>
+    </main>
+  )
+}
+
 function AdminApp({
   user,
   onLoginClick,
@@ -2461,6 +2774,10 @@ function AdminApp({
     setSelectedRecord(null)
     setRecordError('')
     const values = toFormValues(samplePayloads[selectedResource] ?? {})
+    if (selectedResource === 'organization_users' && selectedWebRole === 'Organizations') {
+      delete values.user_id
+      values.email = ''
+    }
     if (selectedResource === 'events') {
       values.location_template_id = ''
     }
@@ -2539,7 +2856,10 @@ function AdminApp({
       }
     }
 
-    const validationMessages = validateForm(formValues, selectedResource)
+    const validationMessages = validateForm(formValues, selectedResource, {
+      mode: modalMode,
+      webRole: selectedWebRole
+    })
     if (validationMessages.length > 0) {
       const message = validationMessages.join(' ')
       setStatus(message)
@@ -2835,6 +3155,7 @@ function AdminApp({
             >
               <option value="Customers">Customers</option>
               <option value="Organizations">Organizations</option>
+              <option value="TicketValidator">Ticket validator</option>
               <option value="Admin">Admin</option>
             </select>
           </label>
@@ -3775,7 +4096,7 @@ function RecordModal({
                         </option>
                       ))}
                     </select>
-                  ) : lookupOptions[field]?.length ? (
+                  ) : Object.prototype.hasOwnProperty.call(lookupOptions, field) ? (
                     <select
                       disabled={isSaving || !canEditField(field)}
                       value={formValues[field] ?? ''}
@@ -4117,7 +4438,11 @@ function isRequiredField(resource: string, field: string) {
   return requiredFieldsByResource[resource]?.includes(field) ?? false
 }
 
-function validateForm(values: Record<string, string>, resource: string) {
+function validateForm(
+  values: Record<string, string>,
+  resource: string,
+  options?: { mode: 'create' | 'edit'; webRole: WebRoleName }
+) {
   const messages: string[] = []
   const requiredFields = requiredFieldsByResource[resource] ?? []
 
@@ -4129,6 +4454,16 @@ function validateForm(values: Record<string, string>, resource: string) {
 
   if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) {
     messages.push('Email must be a valid email address.')
+  }
+
+  if (resource === 'organization_users' && options?.mode === 'create') {
+    if (options.webRole === 'Organizations') {
+      if (!String(values.email ?? '').trim()) {
+        messages.push('email is required.')
+      }
+    } else if (!String(values.user_id ?? '').trim() && !String(values.email ?? '').trim()) {
+      messages.push('user id or email is required.')
+    }
   }
 
   return messages
@@ -4181,7 +4516,7 @@ function formatEventRailLabel(value: Date) {
 
 function hasAdminConsoleAccess(user: AuthUser) {
   const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
-  return ['admin', 'organizations', 'organizer', 'organisation', 'organisations'].includes(role)
+  return ['admin', 'organizations', 'organizer', 'organisation', 'organisations', 'ticketvalidator', 'ticket_validator'].includes(role)
 }
 
 function hasCustomerTicketsAccess(user: AuthUser) {
@@ -4195,6 +4530,11 @@ function formatMoney(paisa: number) {
     currency: 'NPR',
     maximumFractionDigits: 0
   }).format(paisa / 100)
+}
+
+function getBarcodeDetectorConstructor() {
+  const candidate = (globalThis as typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
+  return typeof candidate === 'function' ? candidate : null
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit) {

@@ -13,8 +13,9 @@ import type { Bindings } from '../types/bindings.js'
 
 type AuthScope = {
   userId: string
-  webrole: 'Admin' | 'Organizations' | 'Customers'
+  webrole: 'Admin' | 'Organizations' | 'Customers' | 'TicketValidator'
   organizationIds: string[]
+  organizationAdminIds: string[]
 }
 
 type AppContext = Context<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>
@@ -68,25 +69,213 @@ crudRoutes.use('*', async (c, next) => {
   }
 
   const role = normalizeWebrole(session.webrole)
-  const organizationIds =
-    role === 'Organizations'
+  const organizationMemberships =
+    role === 'Organizations' || role === 'TicketValidator'
       ? (
           await c.env.DB
-            .prepare('SELECT organization_id FROM organization_users WHERE user_id = ?')
+            .prepare('SELECT organization_id, role FROM organization_users WHERE user_id = ?')
             .bind(session.id)
-            .all<{ organization_id: string }>()
+            .all<{ organization_id: string; role: string | null }>()
         ).results
-          .map((row) => row.organization_id)
-          .filter((organizationId) => Boolean(organizationId))
       : []
+  const organizationIds = Array.from(
+    new Set(
+      organizationMemberships
+        .map((row) => row.organization_id)
+        .filter((organizationId) => Boolean(organizationId))
+    )
+  )
+  const organizationAdminIds = Array.from(
+    new Set(
+      organizationMemberships
+        .filter((row) => normalizeOrganizationUserRole(row.role) === 'admin')
+        .map((row) => row.organization_id)
+        .filter((organizationId) => Boolean(organizationId))
+    )
+  )
 
   c.set('authScope', {
     userId: session.id,
     webrole: role,
-    organizationIds
+    organizationIds,
+    organizationAdminIds
   })
 
   await next()
+})
+
+crudRoutes.post('/tickets/redeem', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole === 'Customers') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const qrCodeValue = typeof payload.qr_code_value === 'string' ? payload.qr_code_value.trim() : ''
+  if (!qrCodeValue) {
+    return c.json({ error: 'qr_code_value is required.' }, 400)
+  }
+
+  const ticket = await db
+    .prepare(
+      `SELECT
+         tickets.id,
+         tickets.ticket_number,
+         tickets.qr_code_value,
+         tickets.status,
+         tickets.redeemed_at,
+         tickets.redeemed_by,
+         tickets.event_id,
+         tickets.event_location_id,
+         tickets.customer_id,
+         events.organization_id,
+         events.name AS event_name,
+         event_locations.name AS event_location_name,
+         ticket_types.name AS ticket_type_name,
+         users.first_name AS customer_first_name,
+         users.last_name AS customer_last_name,
+         users.email AS customer_email
+       FROM tickets
+       JOIN events ON events.id = tickets.event_id
+       LEFT JOIN event_locations ON event_locations.id = tickets.event_location_id
+       LEFT JOIN ticket_types ON ticket_types.id = tickets.ticket_type_id
+       LEFT JOIN users ON users.id = tickets.customer_id
+       WHERE tickets.qr_code_value = ?
+       LIMIT 1`
+    )
+    .bind(qrCodeValue)
+    .first<{
+      id: string
+      ticket_number: string
+      qr_code_value: string
+      status: string
+      redeemed_at: string | null
+      redeemed_by: string | null
+      event_id: string
+      event_location_id: string
+      customer_id: string
+      organization_id: string
+      event_name: string | null
+      event_location_name: string | null
+      ticket_type_name: string | null
+      customer_first_name: string | null
+      customer_last_name: string | null
+      customer_email: string | null
+    }>()
+
+  if (!ticket) {
+    return c.json({
+      data: {
+        status: 'not_found',
+        message: 'No ticket matched the scanned QR code.'
+      }
+    })
+  }
+
+  if (!canScopeAccessOrganization(scope, ticket.organization_id)) {
+    return c.json({ error: 'Forbidden for this event.' }, 403)
+  }
+
+  const now = new Date().toISOString()
+  const ticketSummary = {
+    id: ticket.id,
+    ticket_number: ticket.ticket_number,
+    qr_code_value: ticket.qr_code_value,
+    status: ticket.status,
+    redeemed_at: ticket.redeemed_at,
+    event_id: ticket.event_id,
+    event_location_id: ticket.event_location_id,
+    event_name: ticket.event_name,
+    event_location_name: ticket.event_location_name,
+    ticket_type_name: ticket.ticket_type_name,
+    customer_name: `${ticket.customer_first_name ?? ''} ${ticket.customer_last_name ?? ''}`.trim() || null,
+    customer_email: ticket.customer_email
+  }
+
+  if (ticket.redeemed_at) {
+    await createTicketScanRecord(db, {
+      ticket_id: ticket.id,
+      scanned_by: scope.userId,
+      event_id: ticket.event_id,
+      event_location_id: ticket.event_location_id,
+      scan_result: 'already_redeemed',
+      scan_message: 'Ticket has already been redeemed.',
+      scanned_at: now
+    })
+
+    return c.json({
+      data: {
+        status: 'already_redeemed',
+        message: 'Ticket has already been redeemed.',
+        ticket: ticketSummary
+      }
+    })
+  }
+
+  const updateResult = await executeMutation(c, () =>
+    db
+      .prepare(
+        `UPDATE tickets
+         SET redeemed_at = ?, redeemed_by = ?, updated_at = ?
+         WHERE id = ? AND redeemed_at IS NULL`
+      )
+      .bind(now, scope.userId, now, ticket.id)
+      .run()
+  )
+  if (updateResult instanceof Response) {
+    return updateResult
+  }
+
+  const wasUpdated = Number(updateResult.meta?.changes ?? 0) > 0
+  if (!wasUpdated) {
+    await createTicketScanRecord(db, {
+      ticket_id: ticket.id,
+      scanned_by: scope.userId,
+      event_id: ticket.event_id,
+      event_location_id: ticket.event_location_id,
+      scan_result: 'already_redeemed',
+      scan_message: 'Ticket was redeemed by another scan.',
+      scanned_at: now
+    })
+
+    return c.json({
+      data: {
+        status: 'already_redeemed',
+        message: 'Ticket was just redeemed by another scan.',
+        ticket: { ...ticketSummary, redeemed_at: now }
+      }
+    })
+  }
+
+  await createTicketScanRecord(db, {
+    ticket_id: ticket.id,
+    scanned_by: scope.userId,
+    event_id: ticket.event_id,
+    event_location_id: ticket.event_location_id,
+    scan_result: 'valid',
+    scan_message: 'Ticket redeemed successfully.',
+    scanned_at: now
+  })
+
+  const cache = createCache(c.env)
+  await Promise.all([cache.bumpResourceVersion('tickets'), cache.bumpResourceVersion('ticket_scans')])
+
+  return c.json({
+    data: {
+      status: 'redeemed',
+      message: 'Ticket redeemed successfully.',
+      ticket: { ...ticketSummary, redeemed_at: now }
+    }
+  })
 })
 
 crudRoutes.get('/resources', (c) => {
@@ -315,7 +504,7 @@ crudRoutes.post('/files/upload', async (c) => {
       )
     }
 
-    if (linkedEventId && !(await canOrganizationsScopeAccessEvent(db, scope, linkedEventId))) {
+    if (linkedEventId && !(await canScopedRoleAccessEvent(db, scope, linkedEventId))) {
       return c.json({ error: 'Forbidden for this event.' }, 403)
     }
   }
@@ -609,8 +798,30 @@ crudRoutes.post('/:resource', async (c) => {
     return c.json({ error: 'Expected a JSON object request body.' }, 400)
   }
 
+  const typedOrganizationUserEmail =
+    table.table === 'organization_users' && typeof payload.email === 'string' ? payload.email.trim() : ''
+
   const now = new Date().toISOString()
   const record = pickAllowedColumns(payload, table.columns)
+
+  if (table.table === 'organization_users') {
+    if (scope.webrole === 'Organizations' && !typedOrganizationUserEmail) {
+      return c.json({ error: 'email is required for organization admin user assignment.' }, 400)
+    }
+
+    if (typedOrganizationUserEmail) {
+      const existingUser = await db
+        .prepare('SELECT id FROM users WHERE lower(email) = lower(?) LIMIT 1')
+        .bind(typedOrganizationUserEmail)
+        .first<{ id: string }>()
+
+      if (!existingUser?.id) {
+        return c.json({ error: 'No user found with the provided email address.' }, 400)
+      }
+
+      record.user_id = existingUser.id
+    }
+  }
 
   if (table.columns.includes('id') && !record.id) {
     record.id = crypto.randomUUID()
@@ -622,6 +833,13 @@ crudRoutes.post('/:resource', async (c) => {
 
   if (table.columns.includes('updated_at') && !record.updated_at) {
     record.updated_at = now
+  }
+  if (table.table === 'organization_users' && Object.prototype.hasOwnProperty.call(record, 'role')) {
+    const normalizedRole = normalizeOrganizationUserRole(record.role)
+    if (!normalizedRole) {
+      return c.json({ error: 'organization_users.role must be "admin" or "ticket_validator".' }, 400)
+    }
+    record.role = normalizedRole
   }
 
   const columns = Object.keys(record)
@@ -650,6 +868,7 @@ crudRoutes.post('/:resource', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
+  await maybeSyncWebroleFromOrganizationUser(c, db, table.table, result)
   await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
   await safeMaybeEnqueue(c, () =>
     maybeEnqueueAccountCreatedNotification({ env: c.env, tableName: table.table, row: result })
@@ -725,6 +944,13 @@ crudRoutes.patch('/:resource/:id', async (c) => {
   }
 
   const record = pickAllowedColumns(payload, table.columns)
+  if (table.table === 'organization_users' && Object.prototype.hasOwnProperty.call(record, 'role')) {
+    const normalizedRole = normalizeOrganizationUserRole(record.role)
+    if (!normalizedRole) {
+      return c.json({ error: 'organization_users.role must be "admin" or "ticket_validator".' }, 400)
+    }
+    record.role = normalizedRole
+  }
   delete record.id
   delete record.created_at
 
@@ -755,6 +981,7 @@ crudRoutes.patch('/:resource/:id', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
+  await maybeSyncWebroleFromOrganizationUser(c, db, table.table, result)
   await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
 
   return c.json({ data: sanitizeRowForTable(table.table, result) })
@@ -1087,6 +1314,92 @@ async function safeMaybeEnqueue(c: AppContext, operation: () => Promise<void>) {
   }
 }
 
+function canScopeAccessOrganization(scope: AuthScope, organizationId: string) {
+  if (scope.webrole === 'Admin') return true
+  return scope.organizationIds.includes(organizationId)
+}
+
+async function createTicketScanRecord(
+  db: D1Database,
+  record: {
+    ticket_id: string
+    scanned_by: string
+    event_id: string
+    event_location_id: string
+    scan_result: string
+    scan_message: string
+    scanned_at: string
+  }
+) {
+  await db
+    .prepare(
+      `INSERT INTO ticket_scans (
+        id, ticket_id, scanned_by, event_id, event_location_id,
+        scan_result, scan_message, scanned_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      record.ticket_id,
+      record.scanned_by,
+      record.event_id,
+      record.event_location_id,
+      record.scan_result,
+      record.scan_message,
+      record.scanned_at
+    )
+    .run()
+}
+
+function normalizeOrganizationUserRole(value: unknown) {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase().replaceAll('-', '_')
+  return normalized === 'admin' || normalized === 'ticket_validator' ? normalized : null
+}
+
+async function maybeSyncWebroleFromOrganizationUser(
+  c: AppContext,
+  db: D1Database,
+  tableName: string,
+  row: unknown
+) {
+  if (tableName !== 'organization_users' || !row || typeof row !== 'object') {
+    return
+  }
+
+  const userId = typeof (row as { user_id?: unknown }).user_id === 'string' ? (row as { user_id: string }).user_id : ''
+  const role = normalizeOrganizationUserRole((row as { role?: unknown }).role)
+  if (!userId || !role) {
+    return
+  }
+
+  const nextWebrole = role === 'admin' ? 'Organizations' : 'TicketValidator'
+  const now = new Date().toISOString()
+  await executeMutation(c, () =>
+    db
+      .prepare('UPDATE users SET webrole = ?, updated_at = ? WHERE id = ?')
+      .bind(nextWebrole, now, userId)
+      .run()
+  )
+  await attachRoleByName(db, userId, nextWebrole)
+}
+
+async function attachRoleByName(db: D1Database, userId: string, roleName: string) {
+  const role = await db
+    .prepare('SELECT id FROM web_roles WHERE name = ? LIMIT 1')
+    .bind(roleName)
+    .first<{ id: string }>()
+  if (!role?.id) return
+
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO user_web_roles (id, user_id, web_role_id, created_at)
+       VALUES (?, ?, ?, ?)`
+    )
+    .bind(crypto.randomUUID(), userId, role.id, new Date().toISOString())
+    .run()
+}
+
 type AccessPolicy = {
   allowed: boolean
   clause: string
@@ -1094,7 +1407,7 @@ type AccessPolicy = {
 }
 
 function normalizeWebrole(value: string | null | undefined): AuthScope['webrole'] {
-  if (value === 'Admin' || value === 'Organizations') {
+  if (value === 'Admin' || value === 'Organizations' || value === 'TicketValidator') {
     return value
   }
 
@@ -1108,7 +1421,12 @@ function getScopeCacheKey(scope: AuthScope) {
 
   if (scope.webrole === 'Organizations') {
     const orgPart = scope.organizationIds.slice().sort().join(',')
-    return `org:${scope.userId}:${orgPart}`
+    const adminPart = scope.organizationAdminIds.slice().sort().join(',')
+    return `org:${scope.userId}:${orgPart}:admin:${adminPart}`
+  }
+  if (scope.webrole === 'TicketValidator') {
+    const orgPart = scope.organizationIds.slice().sort().join(',')
+    return `validator:${scope.userId}:${orgPart}`
   }
 
   return `customer:${scope.userId}`
@@ -1132,6 +1450,9 @@ function canMutateResource(scope: AuthScope, tableName: string, action: 'patch' 
   }
 
   if (scope.webrole === 'Organizations') {
+    if (tableName === 'organization_users') {
+      return scope.organizationAdminIds.length > 0
+    }
     const allowedOrganizationTables = new Set([
       'events',
       'event_locations',
@@ -1146,6 +1467,10 @@ function canMutateResource(scope: AuthScope, tableName: string, action: 'patch' 
       'organization_users'
     ])
     return allowedOrganizationTables.has(tableName)
+  }
+
+  if (scope.webrole === 'TicketValidator') {
+    return false
   }
 
   return false
@@ -1174,6 +1499,55 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
     }
   }
 
+  if (scope.webrole === 'TicketValidator') {
+    if (scope.organizationIds.length === 0) {
+      return { allowed: false, clause: '1 = 0', bindings: [] }
+    }
+
+    const placeholders = scope.organizationIds.map(() => '?').join(', ')
+    const orgBindings = [...scope.organizationIds]
+
+    switch (tableName) {
+      case 'tickets':
+        return {
+          allowed: true,
+          clause: `EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = tickets.event_id
+              AND events.organization_id IN (${placeholders})
+          )`,
+          bindings: orgBindings
+        }
+      case 'ticket_scans':
+        return {
+          allowed: true,
+          clause: `EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = ticket_scans.event_id
+              AND events.organization_id IN (${placeholders})
+          )`,
+          bindings: orgBindings
+        }
+      case 'events':
+        return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings }
+      case 'event_locations':
+        return {
+          allowed: true,
+          clause: `EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = event_locations.event_id
+              AND events.organization_id IN (${placeholders})
+          )`,
+          bindings: orgBindings
+        }
+      default:
+        return { allowed: false, clause: '1 = 0', bindings: [] }
+    }
+  }
+
   if (scope.organizationIds.length === 0) {
     return { allowed: false, clause: '1 = 0', bindings: [] }
   }
@@ -1195,8 +1569,18 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
       }
     case 'organizations':
       return { allowed: true, clause: `id IN (${placeholders})`, bindings: orgBindings }
-    case 'organization_users':
-      return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings }
+    case 'organization_users': {
+      if (scope.organizationAdminIds.length === 0) {
+        return { allowed: false, clause: '1 = 0', bindings: [] }
+      }
+
+      const adminPlaceholders = scope.organizationAdminIds.map(() => '?').join(', ')
+      return {
+        allowed: true,
+        clause: `organization_id IN (${adminPlaceholders})`,
+        bindings: [...scope.organizationAdminIds]
+      }
+    }
     case 'events':
       return { allowed: true, clause: `organization_id IN (${placeholders})`, bindings: orgBindings }
     case 'event_locations':
@@ -1320,6 +1704,9 @@ async function authorizeCreateRecord(
   if (scope.webrole === 'Customers') {
     return authorizeCustomerCreateRecord(c, db, scope, tableName, record)
   }
+  if (scope.webrole === 'TicketValidator') {
+    return authorizeTicketValidatorCreateRecord(c, db, scope, tableName, record)
+  }
 
   const inScope = async (query: string, value: unknown) => {
     if (typeof value !== 'string' || !value) {
@@ -1338,8 +1725,11 @@ async function authorizeCreateRecord(
   switch (tableName) {
     case 'organization_users': {
       const organizationId = record.organization_id
-      if (typeof organizationId !== 'string' || !scope.organizationIds.includes(organizationId)) {
+      if (typeof organizationId !== 'string' || !scope.organizationAdminIds.includes(organizationId)) {
         return c.json({ error: 'Forbidden for this organization.' }, 403)
+      }
+      if (!normalizeOrganizationUserRole(record.role)) {
+        return c.json({ error: 'organization_users.role must be "admin" or "ticket_validator".' }, 400)
       }
       return null
     }
@@ -1374,6 +1764,10 @@ async function authorizeCreateRecord(
       if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
         return c.json({ error: 'Forbidden for this event.' }, 403)
       }
+      if (typeof record.scanned_by === 'string' && record.scanned_by !== scope.userId) {
+        return c.json({ error: 'scanned_by must match the authenticated user.' }, 403)
+      }
+      record.scanned_by = scope.userId
       return null
     case 'coupons':
       if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
@@ -1383,6 +1777,35 @@ async function authorizeCreateRecord(
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)
   }
+}
+
+async function authorizeTicketValidatorCreateRecord(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  tableName: string,
+  record: JsonRecord
+) {
+  if (tableName !== 'ticket_scans') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const eventId = typeof record.event_id === 'string' ? record.event_id : ''
+  if (!eventId) {
+    return c.json({ error: 'event_id is required.' }, 400)
+  }
+
+  const allowed = await canScopedRoleAccessEvent(db, scope, eventId)
+  if (!allowed) {
+    return c.json({ error: 'Forbidden for this event.' }, 403)
+  }
+
+  if (typeof record.scanned_by === 'string' && record.scanned_by !== scope.userId) {
+    return c.json({ error: 'scanned_by must match the authenticated user.' }, 403)
+  }
+  record.scanned_by = scope.userId
+
+  return null
 }
 
 async function authorizeCustomerCreateRecord(
@@ -1463,12 +1886,12 @@ async function authorizeCustomerCreateRecord(
   }
 }
 
-async function canOrganizationsScopeAccessEvent(db: D1Database, scope: AuthScope, eventId: string) {
+async function canScopedRoleAccessEvent(db: D1Database, scope: AuthScope, eventId: string) {
   if (scope.webrole === 'Admin') {
     return true
   }
 
-  if (scope.webrole !== 'Organizations' || scope.organizationIds.length === 0) {
+  if ((scope.webrole !== 'Organizations' && scope.webrole !== 'TicketValidator') || scope.organizationIds.length === 0) {
     return false
   }
 

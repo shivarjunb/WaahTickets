@@ -3941,3 +3941,147 @@ body {
 .record-modal-actions .primary-admin-button {
   color: var(--waah-btn-text) !important;
 }
+
+.validator-page {
+  min-height: 100vh;
+  padding: 2rem;
+  background: var(--color-bg);
+}
+
+.validator-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.validator-header p {
+  margin: 0.35rem 0 0;
+}
+
+.validator-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.validator-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 1rem;
+  box-shadow: var(--shadow-soft);
+}
+
+.validator-card header h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.validator-card header p {
+  margin: 0.4rem 0 1rem;
+  color: var(--color-text-secondary);
+}
+
+.validator-camera-shell {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  min-height: 240px;
+  background: #0b1220;
+}
+
+.validator-camera-shell video {
+  width: 100%;
+  height: 260px;
+  object-fit: cover;
+  display: block;
+}
+
+.validator-actions {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.validator-manual-form {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.validator-manual-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.validator-manual-form input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-soft);
+  color: var(--color-text);
+  padding: 0.62rem 0.75rem;
+}
+
+.validator-result {
+  margin-top: 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-soft);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.validator-result-success {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.validator-result-warning {
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.validator-result-error {
+  border-color: rgba(239, 68, 68, 0.62);
+}
+
+.validator-ticket-meta {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.8rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.validator-ticket-meta p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.validator-ticket-meta strong {
+  color: var(--color-text);
+  margin-right: 0.35rem;
+}
+
+.validator-error {
+  margin: 0;
+  color: #f87171;
+}
+
+@media (max-width: 960px) {
+  .validator-page {
+    padding: 1rem;
+  }
+
+  .validator-header {
+    flex-direction: column;
+  }
+
+  .validator-grid {
+    grid-template-columns: 1fr;
+  }
+}
