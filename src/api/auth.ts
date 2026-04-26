@@ -11,6 +11,8 @@ type UserRow = {
   first_name: string | null
   last_name: string | null
   email: string
+  is_active?: number | null
+  is_email_verified?: number | null
   password_hash: string | null
   webrole: string
 }
@@ -98,7 +100,11 @@ authRoutes.post('/register', async (c) => {
     })
     const session = await createSession(c.env.DB, userId, 'password')
 
-    return withSessionCookie(c, { user: sanitizeUser({ ...body, id: userId, webrole }) }, session.token)
+    return withSessionCookie(
+      c,
+      { user: sanitizeUser({ ...body, id: userId, webrole, is_active: 1, is_email_verified: 0 }) },
+      session.token
+    )
   } catch (error) {
     console.error(error)
     return c.json(
@@ -429,6 +435,11 @@ function sanitizeUser(user: Partial<UserRow> & { id?: string; webrole?: string }
     first_name: user.first_name ?? null,
     last_name: user.last_name ?? null,
     email: user.email,
+    is_active: user.is_active === undefined || user.is_active === null ? true : Boolean(user.is_active),
+    is_email_verified:
+      user.is_email_verified === undefined || user.is_email_verified === null
+        ? false
+        : Boolean(user.is_email_verified),
     webrole: user.webrole ?? 'Customers'
   }
 }

@@ -323,6 +323,8 @@ type AuthUser = {
   first_name?: string | null
   last_name?: string | null
   email?: string
+  is_active?: boolean
+  is_email_verified?: boolean
   webrole?: WebRoleName
 } | null
 
@@ -413,13 +415,18 @@ function App() {
             </section>
           </main>
         ) : user ? (
-          <AdminApp
+
+          user.is_active === false || !user.is_email_verified ? (
+            <AccountAccessBlocked user={user} onLogout={logout} />
+          ) : (
+            <AdminApp
             user={user}
             onLoginClick={() => setIsAuthOpen(true)}
             onLogout={logout}
             theme={theme}
             onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
           />
+          )
         ) : (
           <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
         )
@@ -1086,6 +1093,46 @@ function LoginRequired({ onLoginClick }: { onLoginClick: () => void }) {
           <a className="secondary-button" href="/">
             Back to site
           </a>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function AccountAccessBlocked({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<void> }) {
+  const isInactive = user?.is_active === false
+  const heading = isInactive ? 'Account access is disabled' : 'Activate your account to continue'
+  const message = isInactive
+    ? 'This account is currently inactive. Please contact support or an administrator to restore access.'
+    : 'Your account is still unverified. Click the activation link sent to your email address to unlock the admin dashboard.'
+
+  return (
+    <main className="auth-gate">
+      <section className="auth-gate-panel">
+        <a className="brand" href="/">
+          <span className="brand-mark">W</span>
+          <span>Waahtickets</span>
+        </a>
+        <p className="eyebrow">{isInactive ? 'Account inactive' : 'Email verification required'}</p>
+        <h1>{heading}</h1>
+        <p>
+          {message}
+          {!isInactive && user?.email ? (
+            <>
+              {' '}Verification email target:
+              <strong> {user.email}</strong>.
+            </>
+          ) : null}
+        </p>
+        <div className="hero-actions">
+          {!isInactive ? (
+            <button className="primary-button" type="button" onClick={() => window.location.reload()}>
+              I have activated my account
+            </button>
+          ) : null}
+          <button className="secondary-button" type="button" onClick={() => void onLogout()}>
+            Logout
+          </button>
         </div>
       </section>
     </main>
