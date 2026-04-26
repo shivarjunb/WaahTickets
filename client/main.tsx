@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Activity,
+  Download,
   BarChart3,
   Bell,
   Building2,
@@ -21,6 +22,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Settings2,
   ShieldCheck,
   ShoppingCart,
   SquareMinus,
@@ -28,6 +30,7 @@ import {
   Sun,
   Ticket,
   Trash2,
+  Upload,
   UserCog,
   Users,
   X
@@ -81,6 +84,7 @@ const adminResourceGroups = [
 ]
 
 const groupedAdminResources = new Set(adminResourceGroups.flatMap((group) => group.resources))
+const SETTINGS_VIEW = '__settings__'
 
 const featuredSlideImages = [
   'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
@@ -233,6 +237,7 @@ type PublicEvent = ApiRecord & {
   organization_name?: string
   location_name?: string
   location_address?: string
+  banner_public_url?: string
   start_datetime?: string
   end_datetime?: string
   description?: string
@@ -332,6 +337,16 @@ type ApiMutationResponse = {
   data?: ApiRecord
   error?: string
   message?: string
+}
+
+type R2SettingsData = {
+  r2_binding_name: string
+  r2_binding_configured: boolean
+  r2_bucket_name: string
+  r2_public_base_url: string
+  ticket_qr_base_url: string
+  runtime_mode?: 'local' | 'remote'
+  runtime_note?: string
 }
 
 type GoogleAuthConfig = {
@@ -515,6 +530,13 @@ function PublicApp({
     () => ticketTypes.find((ticketType) => ticketType.id === selectedTicketTypeId) ?? ticketTypes[0],
     [ticketTypes, selectedTicketTypeId]
   )
+  const featuredImages = useMemo(() => {
+    const uploadedEventImages = events
+      .map((event) => (typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''))
+      .filter((value) => value.length > 0)
+
+    return uploadedEventImages.length > 0 ? uploadedEventImages : featuredSlideImages
+  }, [events])
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
   const remainingTickets =
     selectedTicketType?.quantity_available === undefined
@@ -583,12 +605,18 @@ function PublicApp({
   }, [selectedEvent?.id])
 
   useEffect(() => {
+    setFeaturedSlideIndex(0)
+  }, [featuredImages.length])
+
+  useEffect(() => {
+    if (featuredImages.length <= 1) return
+
     const timer = window.setInterval(() => {
-      setFeaturedSlideIndex((current) => (current + 1) % featuredSlideImages.length)
+      setFeaturedSlideIndex((current) => (current + 1) % featuredImages.length)
     }, 3800)
 
     return () => window.clearInterval(timer)
-  }, [])
+  }, [featuredImages.length])
 
   return (
     <main className="app-shell">
@@ -643,7 +671,7 @@ function PublicApp({
               </a>
             </div>
             <div className="featured-dots" aria-label="Featured image slides">
-              {featuredSlideImages.map((_, index) => (
+              {featuredImages.map((_, index) => (
                 <button
                   aria-label={`Slide ${index + 1}`}
                   className={index === featuredSlideIndex ? 'featured-dot active' : 'featured-dot'}
@@ -662,7 +690,7 @@ function PublicApp({
               className="featured-media-track"
               style={{ transform: `translateX(-${featuredSlideIndex * 100}%)` }}
             >
-              {featuredSlideImages.map((image, index) => (
+              {featuredImages.map((image, index) => (
                 <div className="featured-media-frame" key={`featured-slide-${index}`}>
                   <img alt="" src={image} />
                 </div>
@@ -1018,7 +1046,7 @@ function AuthModal({
             <p className="admin-breadcrumb">Account</p>
             <h2>{mode === 'login' ? 'Login' : 'Create account'}</h2>
           </div>
-          <button aria-label="Close modal" type="button" onClick={onClose}>
+          <button aria-label="Close modal" disabled={isUploading} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
@@ -1202,6 +1230,17 @@ function AdminApp({
     ticketTypes: 0,
     currentTotalPaisa: 0
   })
+  const [r2Settings, setR2Settings] = useState<R2SettingsData>({
+    r2_binding_name: 'FILES_BUCKET',
+    r2_binding_configured: false,
+    r2_bucket_name: 'waahtickets-files',
+    r2_public_base_url: '',
+    ticket_qr_base_url: ''
+  })
+  const [isSettingsLoading, setIsSettingsLoading] = useState(false)
+  const [isSettingsSaving, setIsSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const isSettingsView = selectedResource === SETTINGS_VIEW
 
   const filteredRecords = useMemo(() => {
     const query = filter.trim().toLowerCase()
@@ -1247,11 +1286,14 @@ function AdminApp({
       ? [...sections, { label: 'More', resources: ungroupedResources }]
       : sections
   }, [visibleResources])
-  const selectedPermissions = roleAccess[selectedWebRole][selectedResource] ?? {
-    can_create: false,
-    can_edit: false,
-    can_delete: false
-  }
+  const selectedPermissions =
+    isSettingsView && selectedWebRole === 'Admin'
+      ? { can_create: true, can_edit: true, can_delete: false }
+      : (roleAccess[selectedWebRole][selectedResource] ?? {
+          can_create: false,
+          can_edit: false,
+          can_delete: false
+        })
 
   useEffect(() => {
     async function loadResources() {
@@ -1280,8 +1322,13 @@ function AdminApp({
 
   useEffect(() => {
     setSelectedRecord(null)
+    if (isSettingsView) {
+      setRecords([])
+      setStatus('R2 settings')
+      return
+    }
     void loadRecords(selectedResource)
-  }, [selectedResource])
+  }, [isSettingsView, selectedResource])
 
   useEffect(() => {
     if (selectedResource !== 'orders') {
@@ -1294,16 +1341,25 @@ function AdminApp({
   }, [records, selectedResource])
 
   useEffect(() => {
+    if (selectedResource === SETTINGS_VIEW) {
+      if (isAdminUser && selectedWebRole === 'Admin') {
+        return
+      }
+      setSelectedResource(visibleResources[0] ?? 'events')
+      return
+    }
+
     if (!visibleResources.includes(selectedResource)) {
       setSelectedResource(visibleResources[0] ?? 'events')
     }
-  }, [selectedResource, visibleResources])
+  }, [isAdminUser, selectedResource, selectedWebRole, visibleResources])
 
   useEffect(() => {
     setIsColumnPickerOpen(false)
   }, [selectedResource])
 
   useEffect(() => {
+    if (isSettingsView) return
     if (!isAdminUser || selectedWebRole !== 'Admin') return
     if (availableColumns.length === 0) return
     if (selectedColumnsByResource[selectedResource]?.length) return
@@ -1316,6 +1372,7 @@ function AdminApp({
     availableColumns.length,
     availableColumns,
     isAdminUser,
+    isSettingsView,
     selectedColumnsByResource,
     selectedResource,
     selectedWebRole
@@ -1326,6 +1383,72 @@ function AdminApp({
       setSelectedWebRole(user.webrole)
     }
   }, [isAdminUser, user?.webrole])
+
+  useEffect(() => {
+    if (!(isSettingsView && isAdminUser && selectedWebRole === 'Admin')) return
+    void loadR2Settings()
+  }, [isAdminUser, isSettingsView, selectedWebRole])
+
+  async function loadR2Settings() {
+    setIsSettingsLoading(true)
+    setSettingsError('')
+
+    try {
+      const { data } = await fetchJson<{ data: R2SettingsData }>('/api/settings/r2')
+      setR2Settings(data.data)
+      setStatus('Loaded R2 settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsSettingsLoading(false)
+    }
+  }
+
+  async function saveR2Settings() {
+    const publicBaseUrl = r2Settings.r2_public_base_url.trim()
+    const qrBaseUrl = r2Settings.ticket_qr_base_url.trim()
+
+    if (publicBaseUrl && !isValidHttpUrl(publicBaseUrl)) {
+      const message = 'R2 public base URL must be a valid http or https URL.'
+      setSettingsError(message)
+      setStatus(message)
+      return
+    }
+
+    if (qrBaseUrl && !isValidHttpUrl(qrBaseUrl)) {
+      const message = 'Ticket QR base URL must be a valid http or https URL.'
+      setSettingsError(message)
+      setStatus(message)
+      return
+    }
+
+    setIsSettingsSaving(true)
+    setSettingsError('')
+
+    try {
+      const { data } = await fetchJson<{ data: R2SettingsData }>('/api/settings/r2', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          r2_public_base_url: publicBaseUrl,
+          ticket_qr_base_url: qrBaseUrl
+        })
+      })
+      setR2Settings((current) => ({
+        ...current,
+        ...data.data
+      }))
+      setStatus('R2 settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsSettingsSaving(false)
+    }
+  }
 
   async function loadRecords(resource = selectedResource, customerFilter = orderCustomerFilter) {
     setIsLoading(true)
@@ -1484,6 +1607,11 @@ function AdminApp({
   }
 
   function openEditModal(record: ApiRecord) {
+    if (selectedResource === 'files') {
+      setStatus('File records are created only through successful uploads.')
+      return
+    }
+
     if (!selectedPermissions.can_edit) {
       setStatus(`${selectedWebRole} cannot edit ${formatResourceName(selectedResource)}.`)
       return
@@ -1774,7 +1902,14 @@ function AdminApp({
     })
   }
 
+  async function handleFileUploadSuccess(uploadedFile: ApiRecord) {
+    const fileName = typeof uploadedFile.file_name === 'string' ? uploadedFile.file_name : 'file'
+    setStatus(`Uploaded ${fileName} to R2 storage.`)
+    await loadRecords()
+  }
+
   let adminMenuItemIndex = 0
+  const viewLabel = isSettingsView ? 'Settings' : formatResourceName(selectedResource)
 
   return (
     <div className="admin-app">
@@ -1843,14 +1978,28 @@ function AdminApp({
               </div>
             </section>
           ))}
+          {isAdminUser && selectedWebRole === 'Admin' ? (
+            <section className="admin-menu-section" aria-label="Settings">
+              <div className="admin-menu-items" style={{ maxHeight: '46px' }}>
+                <button
+                  className={isSettingsView ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSelectedResource(SETTINGS_VIEW)}
+                >
+                  <Settings2 size={17} />
+                  <span>Settings</span>
+                </button>
+              </div>
+            </section>
+          ) : null}
         </nav>
       </aside>
 
       <section className="admin-main">
         <header className="admin-header">
           <div>
-            <p className="admin-breadcrumb">Home / Admin / {formatResourceName(selectedResource)}</p>
-            <h1>{formatResourceName(selectedResource)}</h1>
+            <p className="admin-breadcrumb">Home / Admin / {viewLabel}</p>
+            <h1>{viewLabel}</h1>
           </div>
           <div className="admin-header-actions">
             {user ? null : (
@@ -1878,307 +2027,393 @@ function AdminApp({
           </div>
         </header>
 
-        <div className="admin-summary-grid">
-          <div className="info-box">
-            <LayoutDashboard size={24} />
-            <div>
-              <span>Events loaded</span>
-              <strong>{dashboardMetrics.eventsLoaded}</strong>
+        {isSettingsView ? (
+          <section className="admin-card settings-card">
+            <div className="admin-card-header">
+              <div>
+                <h2>R2 Storage Settings</h2>
+                <p>{isSettingsLoading ? 'Loading settings...' : status}</p>
+              </div>
             </div>
-          </div>
-          <div className="info-box">
-            <CalendarDays size={24} />
-            <div>
-              <span>Ticket types</span>
-              <strong>{dashboardMetrics.ticketTypes}</strong>
-            </div>
-          </div>
-          <div className="info-box">
-            <Database size={24} />
-            <div>
-              <span>Current total</span>
-              <strong>{formatMoney(dashboardMetrics.currentTotalPaisa)}</strong>
-            </div>
-          </div>
-          <div className="info-box">
-            <Activity size={24} />
-            <div>
-              <span>Total records</span>
-              <strong>{totalRecords}</strong>
-            </div>
-          </div>
-        </div>
-
-        <section className="admin-analytics-grid" aria-label="Admin charts">
-          <article className="admin-chart-card">
-            <header>
-              <h2>
-                <BarChart3 size={18} />
-                Record trend (7 days)
-              </h2>
-              <p>Daily record activity based on timestamps available in this resource.</p>
-            </header>
-            <div className="admin-bar-chart" role="img" aria-label="Seven-day record trend bar chart">
-              {recentTrend.map((point) => (
-                <div className="admin-bar-group" key={point.label}>
-                  <div
-                    className="admin-bar"
-                    style={{
-                      height: `${Math.max(8, Math.round((point.count / recentTrendMax) * 100))}%`
-                    }}
-                    title={`${point.label}: ${point.count}`}
-                  />
-                  <span>{point.label}</span>
-                </div>
-              ))}
-            </div>
-          </article>
-          <article className="admin-chart-card">
-            <header>
-              <h2>
-                <Activity size={18} />
-                Status breakdown
-              </h2>
-              <p>Current distribution for rows with a status-like field.</p>
-            </header>
-            <div className="admin-status-list">
-              {statusBreakdown.length === 0 ? (
-                <p className="admin-chart-empty">No status fields found in this dataset.</p>
-              ) : (
-                statusBreakdown.map((item) => (
-                  <div className="admin-status-row" key={item.label}>
-                    <div>
-                      <strong>{item.label}</strong>
-                      <span>{item.count} records</span>
-                    </div>
-                    <div className="admin-status-meter">
-                      <span style={{ width: `${item.percentage}%` }} />
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </article>
-        </section>
-
-        <section className="admin-card">
-          <div className="admin-card-header">
-            <div>
-              <h2>Records</h2>
-              <p>{isLoading ? 'Working...' : status}</p>
-            </div>
-            <div className="admin-table-actions">
-              <label className="admin-search">
-                <Search size={17} />
+            <div className="settings-grid">
+              <label>
+                <span>R2 binding name</span>
+                <input disabled type="text" value={r2Settings.r2_binding_name} />
+              </label>
+              <label>
+                <span>R2 binding status</span>
                 <input
-                  aria-label="Search records"
-                  placeholder="Search records"
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
+                  disabled
+                  type="text"
+                  value={r2Settings.r2_binding_configured ? 'Configured' : 'Not configured in Wrangler'}
                 />
               </label>
-              {selectedResource === 'orders' ? (
-                <label className="admin-search admin-filter">
-                  <Users size={17} />
-                  <select
-                    aria-label="Filter orders by customer"
-                    value={orderCustomerFilter}
-                    onChange={(event) => {
-                      const nextCustomerId = event.target.value
-                      setOrderCustomerFilter(nextCustomerId)
-                      void loadRecords('orders', nextCustomerId)
-                    }}
-                  >
-                    <option value="">All customers</option>
-                    {orderCustomerOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              <button type="button" onClick={() => void loadRecords()}>
-                <RefreshCw className={isLoading ? 'spinning-icon' : ''} size={17} />
-                Refresh
-              </button>
-              {isAdminUser && selectedWebRole === 'Admin' ? (
-                <div className="column-picker">
-                  <button type="button" onClick={() => setIsColumnPickerOpen((current) => !current)}>
-                    {isColumnPickerOpen ? <SquareMinus size={17} /> : <SquarePlus size={17} />}
-                    Columns
-                  </button>
-                  {isColumnPickerOpen ? (
-                    <div className="column-picker-panel">
-                      {availableColumns.length === 0 ? (
-                        <span className="column-picker-empty">No columns available</span>
-                      ) : (
-                        availableColumns.map((column) => (
-                          <label key={column}>
-                            <input
-                              checked={tableColumns.includes(column)}
-                              type="checkbox"
-                              onChange={() => toggleColumn(column)}
-                            />
-                            <span>{formatResourceName(column)}</span>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <button
-                className="primary-admin-button"
-                disabled={!selectedPermissions.can_create}
-                type="button"
-                onClick={openCreateModal}
-              >
-                <Plus size={17} />
-                Create
-              </button>
-            </div>
-          </div>
-
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  {tableColumns.map((column) => (
-                    <th key={column}>{formatResourceName(column)}</th>
-                  ))}
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRecords.length === 0 ? (
-                  <tr>
-                    <td colSpan={tableColumns.length + 1}>
-                      <div className="table-empty">No records found</div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRecords.map((record) => (
-                    <tr key={String(record.id ?? JSON.stringify(record))}>
-                      {tableColumns.map((column) => (
-                        <td key={column}>{formatCellValue(column, record[column])}</td>
-                      ))}
-                      <td>
-                        <div className="crud-icons">
-                          <button
-                            aria-label="Edit record"
-                            disabled={!selectedPermissions.can_edit}
-                            title="Edit"
-                            type="button"
-                            onClick={() => openEditModal(record)}
-                          >
-                            <Edit3 size={16} />
-                          </button>
-                          <button
-                            aria-label="Delete record"
-                            className="danger-icon"
-                            disabled={!selectedPermissions.can_delete || deletingRecordId === String(record.id)}
-                            title="Delete"
-                            type="button"
-                            onClick={() => void deleteRecord(record)}
-                          >
-                            {deletingRecordId === String(record.id) ? (
-                              <span aria-hidden="true" className="inline-spinner" />
-                            ) : (
-                              <Trash2 size={16} />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {selectedResource === 'web_roles' ? (
-          <section className="admin-subgrid-shell">
-            <div className="admin-subgrid-header">
-              <h3>Web role relationships</h3>
               <label>
-                <span>Role</span>
-                <select value={selectedWebRoleId} onChange={(event) => setSelectedWebRoleId(event.target.value)}>
-                  <option value="">Select role</option>
-                  {records.map((role) => (
-                    <option key={String(role.id)} value={String(role.id)}>
-                      {String(role.name ?? role.id ?? 'Role')}
-                    </option>
-                  ))}
-                </select>
+                <span>R2 bucket name</span>
+                <input
+                  disabled
+                  type="text"
+                  value={r2Settings.r2_bucket_name}
+                />
+              </label>
+              <label>
+                <span>R2 public base URL</span>
+                <input
+                  disabled={isSettingsLoading || isSettingsSaving}
+                  placeholder="https://cdn.example.com"
+                  type="text"
+                  value={r2Settings.r2_public_base_url}
+                  onChange={(event) =>
+                    setR2Settings((current) => ({ ...current, r2_public_base_url: event.target.value }))
+                  }
+                />
+              </label>
+              <label>
+                <span>Ticket QR base URL</span>
+                <input
+                  disabled={isSettingsLoading || isSettingsSaving}
+                  placeholder="https://tickets.example.com/checkin"
+                  type="text"
+                  value={r2Settings.ticket_qr_base_url}
+                  onChange={(event) =>
+                    setR2Settings((current) => ({ ...current, ticket_qr_base_url: event.target.value }))
+                  }
+                />
               </label>
             </div>
-            <div className="admin-subgrid">
-              <article className="admin-subgrid-card">
-                <h4>User Web Roles</h4>
-                <table className="admin-mini-table">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Web Role Id</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length === 0 ? (
-                      <tr>
-                        <td colSpan={2}>No user assignments for this role</td>
-                      </tr>
-                    ) : (
-                      webRoleUsers
-                        .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
-                        .map((item) => (
-                          <tr key={String(item.id ?? `${item.user_id}-${item.web_role_id}`)}>
-                            <td>{formatCellValue('user_id', item.user_id)}</td>
-                            <td>{formatCellValue('web_role_id', item.web_role_id)}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </article>
-              <article className="admin-subgrid-card">
-                <h4>Web Role Menu Items</h4>
-                <table className="admin-mini-table">
-                  <thead>
-                    <tr>
-                      <th>Resource</th>
-                      <th>View</th>
-                      <th>Create</th>
-                      <th>Edit</th>
-                      <th>Delete</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {webRoleMenuItems.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length ===
-                    0 ? (
-                      <tr>
-                        <td colSpan={5}>No menu permissions for this role</td>
-                      </tr>
-                    ) : (
-                      webRoleMenuItems
-                        .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
-                        .map((item) => (
-                          <tr key={String(item.id ?? `${item.web_role_id}-${item.resource_name}`)}>
-                            <td>{formatCellValue('resource_name', item.resource_name)}</td>
-                            <td>{formatCellValue('can_view', item.can_view)}</td>
-                            <td>{formatCellValue('can_create', item.can_create)}</td>
-                            <td>{formatCellValue('can_edit', item.can_edit)}</td>
-                            <td>{formatCellValue('can_delete', item.can_delete)}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </article>
-            </div>
+            {r2Settings.runtime_note ? <p className="upload-hint">{r2Settings.runtime_note}</p> : null}
+            {settingsError ? <p className="record-modal-error">{settingsError}</p> : null}
+            <footer className="record-modal-actions">
+              <button disabled={isSettingsLoading || isSettingsSaving} type="button" onClick={() => void loadR2Settings()}>
+                <RefreshCw className={isSettingsLoading ? 'spinning-icon' : ''} size={17} />
+                Reload
+              </button>
+              <button
+                className="primary-admin-button"
+                disabled={isSettingsLoading || isSettingsSaving}
+                type="button"
+                onClick={() => void saveR2Settings()}
+              >
+                {isSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                {isSettingsSaving ? 'Saving...' : 'Save settings'}
+              </button>
+            </footer>
           </section>
-        ) : null}
+        ) : (
+          <>
+            <div className="admin-summary-grid">
+              <div className="info-box">
+                <LayoutDashboard size={24} />
+                <div>
+                  <span>Events loaded</span>
+                  <strong>{dashboardMetrics.eventsLoaded}</strong>
+                </div>
+              </div>
+              <div className="info-box">
+                <CalendarDays size={24} />
+                <div>
+                  <span>Ticket types</span>
+                  <strong>{dashboardMetrics.ticketTypes}</strong>
+                </div>
+              </div>
+              <div className="info-box">
+                <Database size={24} />
+                <div>
+                  <span>Current total</span>
+                  <strong>{formatMoney(dashboardMetrics.currentTotalPaisa)}</strong>
+                </div>
+              </div>
+              <div className="info-box">
+                <Activity size={24} />
+                <div>
+                  <span>Total records</span>
+                  <strong>{totalRecords}</strong>
+                </div>
+              </div>
+            </div>
+
+            <section className="admin-analytics-grid" aria-label="Admin charts">
+              <article className="admin-chart-card">
+                <header>
+                  <h2>
+                    <BarChart3 size={18} />
+                    Record trend (7 days)
+                  </h2>
+                  <p>Daily record activity based on timestamps available in this resource.</p>
+                </header>
+                <div className="admin-bar-chart" role="img" aria-label="Seven-day record trend bar chart">
+                  {recentTrend.map((point) => (
+                    <div className="admin-bar-group" key={point.label}>
+                      <div
+                        className="admin-bar"
+                        style={{
+                          height: `${Math.max(8, Math.round((point.count / recentTrendMax) * 100))}%`
+                        }}
+                        title={`${point.label}: ${point.count}`}
+                      />
+                      <span>{point.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+              <article className="admin-chart-card">
+                <header>
+                  <h2>
+                    <Activity size={18} />
+                    Status breakdown
+                  </h2>
+                  <p>Current distribution for rows with a status-like field.</p>
+                </header>
+                <div className="admin-status-list">
+                  {statusBreakdown.length === 0 ? (
+                    <p className="admin-chart-empty">No status fields found in this dataset.</p>
+                  ) : (
+                    statusBreakdown.map((item) => (
+                      <div className="admin-status-row" key={item.label}>
+                        <div>
+                          <strong>{item.label}</strong>
+                          <span>{item.count} records</span>
+                        </div>
+                        <div className="admin-status-meter">
+                          <span style={{ width: `${item.percentage}%` }} />
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </article>
+            </section>
+
+            <section className="admin-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Records</h2>
+                  <p>{isLoading ? 'Working...' : status}</p>
+                </div>
+                <div className="admin-table-actions">
+                  <label className="admin-search">
+                    <Search size={17} />
+                    <input
+                      aria-label="Search records"
+                      placeholder="Search records"
+                      value={filter}
+                      onChange={(event) => setFilter(event.target.value)}
+                    />
+                  </label>
+                  {selectedResource === 'orders' ? (
+                    <label className="admin-search admin-filter">
+                      <Users size={17} />
+                      <select
+                        aria-label="Filter orders by customer"
+                        value={orderCustomerFilter}
+                        onChange={(event) => {
+                          const nextCustomerId = event.target.value
+                          setOrderCustomerFilter(nextCustomerId)
+                          void loadRecords('orders', nextCustomerId)
+                        }}
+                      >
+                        <option value="">All customers</option>
+                        {orderCustomerOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  <button type="button" onClick={() => void loadRecords()}>
+                    <RefreshCw className={isLoading ? 'spinning-icon' : ''} size={17} />
+                    Refresh
+                  </button>
+                  {isAdminUser && selectedWebRole === 'Admin' ? (
+                    <div className="column-picker">
+                      <button type="button" onClick={() => setIsColumnPickerOpen((current) => !current)}>
+                        {isColumnPickerOpen ? <SquareMinus size={17} /> : <SquarePlus size={17} />}
+                        Columns
+                      </button>
+                      {isColumnPickerOpen ? (
+                        <div className="column-picker-panel">
+                          {availableColumns.length === 0 ? (
+                            <span className="column-picker-empty">No columns available</span>
+                          ) : (
+                            availableColumns.map((column) => (
+                              <label key={column}>
+                                <input
+                                  checked={tableColumns.includes(column)}
+                                  type="checkbox"
+                                  onChange={() => toggleColumn(column)}
+                                />
+                                <span>{formatResourceName(column)}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <button
+                    className="primary-admin-button"
+                    disabled={!selectedPermissions.can_create}
+                    type="button"
+                    onClick={openCreateModal}
+                  >
+                    <Plus size={17} />
+                    Create
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      {tableColumns.map((column) => (
+                        <th key={column}>{formatResourceName(column)}</th>
+                      ))}
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={tableColumns.length + 1}>
+                          <div className="table-empty">No records found</div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredRecords.map((record) => (
+                        <tr key={String(record.id ?? JSON.stringify(record))}>
+                          {tableColumns.map((column) => (
+                            <td key={column}>{formatCellValue(column, record[column])}</td>
+                          ))}
+                          <td>
+                            <div className="crud-icons">
+                              <button
+                                aria-label="Edit record"
+                                disabled={!selectedPermissions.can_edit || selectedResource === 'files'}
+                                title="Edit"
+                                type="button"
+                                onClick={() => openEditModal(record)}
+                              >
+                                <Edit3 size={16} />
+                              </button>
+                              <button
+                                aria-label="Delete record"
+                                className="danger-icon"
+                                disabled={!selectedPermissions.can_delete || deletingRecordId === String(record.id)}
+                                title="Delete"
+                                type="button"
+                                onClick={() => void deleteRecord(record)}
+                              >
+                                {deletingRecordId === String(record.id) ? (
+                                  <span aria-hidden="true" className="inline-spinner" />
+                                ) : (
+                                  <Trash2 size={16} />
+                                )}
+                              </button>
+                              {selectedResource === 'files' && getFileDownloadUrl(record) ? (
+                                <button
+                                  aria-label="Download file"
+                                  title="Download"
+                                  type="button"
+                                  onClick={() => window.open(getFileDownloadUrl(record) ?? '', '_blank', 'noopener')}
+                                >
+                                  <Download size={16} />
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {selectedResource === 'web_roles' ? (
+              <section className="admin-subgrid-shell">
+                <div className="admin-subgrid-header">
+                  <h3>Web role relationships</h3>
+                  <label>
+                    <span>Role</span>
+                    <select value={selectedWebRoleId} onChange={(event) => setSelectedWebRoleId(event.target.value)}>
+                      <option value="">Select role</option>
+                      {records.map((role) => (
+                        <option key={String(role.id)} value={String(role.id)}>
+                          {String(role.name ?? role.id ?? 'Role')}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="admin-subgrid">
+                  <article className="admin-subgrid-card">
+                    <h4>User Web Roles</h4>
+                    <table className="admin-mini-table">
+                      <thead>
+                        <tr>
+                          <th>User</th>
+                          <th>Web Role Id</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length === 0 ? (
+                          <tr>
+                            <td colSpan={2}>No user assignments for this role</td>
+                          </tr>
+                        ) : (
+                          webRoleUsers
+                            .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
+                            .map((item) => (
+                              <tr key={String(item.id ?? `${item.user_id}-${item.web_role_id}`)}>
+                                <td>{formatCellValue('user_id', item.user_id)}</td>
+                                <td>{formatCellValue('web_role_id', item.web_role_id)}</td>
+                              </tr>
+                            ))
+                        )}
+                      </tbody>
+                    </table>
+                  </article>
+                  <article className="admin-subgrid-card">
+                    <h4>Web Role Menu Items</h4>
+                    <table className="admin-mini-table">
+                      <thead>
+                        <tr>
+                          <th>Resource</th>
+                          <th>View</th>
+                          <th>Create</th>
+                          <th>Edit</th>
+                          <th>Delete</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {webRoleMenuItems.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length ===
+                        0 ? (
+                          <tr>
+                            <td colSpan={5}>No menu permissions for this role</td>
+                          </tr>
+                        ) : (
+                          webRoleMenuItems
+                            .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
+                            .map((item) => (
+                              <tr key={String(item.id ?? `${item.web_role_id}-${item.resource_name}`)}>
+                                <td>{formatCellValue('resource_name', item.resource_name)}</td>
+                                <td>{formatCellValue('can_view', item.can_view)}</td>
+                                <td>{formatCellValue('can_create', item.can_create)}</td>
+                                <td>{formatCellValue('can_edit', item.can_edit)}</td>
+                                <td>{formatCellValue('can_delete', item.can_delete)}</td>
+                              </tr>
+                            ))
+                        )}
+                      </tbody>
+                    </table>
+                  </article>
+                </div>
+              </section>
+            ) : null}
+          </>
+        )}
       </section>
 
       {modalMode ? (
@@ -2189,6 +2424,7 @@ function AdminApp({
           isSaving={isSavingRecord}
           lookupOptions={lookupOptions}
           mode={modalMode}
+          onFileUploaded={handleFileUploadSuccess}
           record={selectedRecord}
           resource={selectedResource}
           setFormValues={setFormValues}
@@ -2208,6 +2444,7 @@ function RecordModal({
   isSaving,
   lookupOptions,
   mode,
+  onFileUploaded,
   record,
   resource,
   setFormValues,
@@ -2221,6 +2458,7 @@ function RecordModal({
   isSaving: boolean
   lookupOptions: Record<string, ApiRecord[]>
   mode: 'create' | 'edit'
+  onFileUploaded: (uploadedFile: ApiRecord) => Promise<void>
   record: ApiRecord | null
   resource: string
   setFormValues: (value: Record<string, string>) => void
@@ -2228,9 +2466,64 @@ function RecordModal({
   onClose: () => void
   onSave: () => void
 }) {
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState('')
+  const [uploadState, setUploadState] = useState<'idle' | 'success' | 'error'>('idle')
+  const [uploadType, setUploadType] = useState(
+    resource === 'events' ? 'event_banner' : String(formValues.file_type ?? 'attachment')
+  )
+
+  const supportsUpload = resource === 'files' || resource === 'events'
+  const isUploadOnlyModal = resource === 'files'
   const fields = Object.keys(formValues).filter((field) => !isAlwaysHiddenFormField(field))
   const canEditField = (field: string) =>
     !isFieldReadOnly(field, mode) && canEditFieldForRole(field, resource, webRole, currentUser, record, formValues)
+
+  async function uploadToR2() {
+    if (!supportsUpload || !uploadFile || isUploading || isSaving) return
+
+    setUploadStatus('')
+    setUploadState('idle')
+    setIsUploading(true)
+
+    const formData = new FormData()
+    formData.append('file', uploadFile)
+    formData.append('file_type', resource === 'events' ? 'event_banner' : (uploadType.trim() || 'attachment'))
+    if (resource === 'events' && record?.id) {
+      formData.append('event_id', String(record.id))
+    }
+
+    try {
+      const { data } = await fetchJson<ApiMutationResponse>('/api/files/upload', {
+        method: 'POST',
+        body: formData
+      })
+      const uploadedFile = data.data ?? {}
+      const uploadedFileId = String(uploadedFile.id ?? '')
+      setUploadState('success')
+      setUploadStatus(
+        uploadedFileId
+          ? `Upload successful: ${String(uploadedFile.file_name ?? uploadFile.name)}`
+          : 'File uploaded to storage.'
+      )
+      setUploadFile(null)
+      await onFileUploaded(uploadedFile)
+
+      if (resource === 'events' && uploadedFileId) {
+        setFormValues({
+          ...formValues,
+          banner_file_id: uploadedFileId
+        })
+      }
+
+    } catch (error) {
+      setUploadState('error')
+      setUploadStatus(getErrorMessage(error))
+    } finally {
+      setIsUploading(false)
+    }
+  }
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -2245,92 +2538,140 @@ function RecordModal({
           </button>
         </header>
 
-        <div className="modal-form-grid">
-          {fields.map((field) => (
-            <label key={field}>
-              <span>
-                {formatResourceName(field)}
-                {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
-              </span>
-              {getFieldSelectOptions(resource, field).length ? (
-                <select
-                  disabled={isSaving || !canEditField(field)}
-                  value={formValues[field] ?? ''}
-                  onChange={(event) =>
-                    setFormValues({
-                      ...formValues,
-                      [field]: event.target.value
-                    })
-                  }
-                >
-                  <option value="">Select {formatResourceName(field)}</option>
-                  {getFieldSelectOptions(resource, field).map((option) => (
-                    <option key={option} value={option}>
-                      {formatResourceName(option)}
-                    </option>
-                  ))}
-                </select>
-              ) : lookupOptions[field]?.length ? (
-                <select
-                  disabled={isSaving || !canEditField(field)}
-                  value={formValues[field] ?? ''}
-                  onChange={(event) => {
-                    const nextValue = event.target.value
-
-                    setFormValues({
-                      ...formValues,
-                      [field]: nextValue
-                    })
-                  }}
-                >
-                  <option value="">Select {formatResourceName(field)}</option>
-                  {lookupOptions[field].map((option) => (
-                    <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
-                      {getLookupLabel(option)}
-                    </option>
-                  ))}
-                </select>
-              ) : isBooleanField(field) ? (
-                <button
-                  className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
-                  disabled={isSaving || !canEditField(field)}
-                  type="button"
-                  onClick={() =>
-                    setFormValues({
-                      ...formValues,
-                      [field]: isTruthyValue(formValues[field]) ? '0' : '1'
-                    })
-                  }
-                >
-                  {isTruthyValue(formValues[field]) ? 'True' : 'False'}
-                </button>
-              ) : (
-                <input
-                  disabled={isSaving || !canEditField(field)}
-                  step={isDateTimeField(field) ? 60 : undefined}
-                  type={isDateTimeField(field) ? 'datetime-local' : 'text'}
-                  value={formValues[field] ?? ''}
-                  onChange={(event) =>
-                    setFormValues({
-                      ...formValues,
-                      [field]: event.target.value
-                    })
-                  }
-                />
-              )}
+        {supportsUpload ? (
+          <section className="file-upload-panel" aria-label="R2 file upload">
+            <label>
+              <span>{resource === 'events' ? 'Event image' : 'File'}</span>
+              <input
+                accept={resource === 'events' ? 'image/*' : undefined}
+                disabled={isSaving || isUploading}
+                type="file"
+                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+              />
             </label>
-          ))}
-        </div>
+            {resource === 'files' ? (
+              <label>
+                <span>File type</span>
+                <input
+                  disabled={isSaving || isUploading}
+                  type="text"
+                  value={uploadType}
+                  onChange={(event) => setUploadType(event.target.value)}
+                />
+              </label>
+            ) : (
+              <p className="upload-hint">Upload an image and it will be linked as this event banner.</p>
+            )}
+            <button
+              className="primary-admin-button"
+              disabled={!uploadFile || isSaving || isUploading}
+              type="button"
+              onClick={() => void uploadToR2()}
+            >
+              {isUploading ? <span aria-hidden="true" className="button-spinner" /> : <Upload size={17} />}
+              {isUploading ? 'Uploading...' : 'Upload to R2'}
+            </button>
+            {resource === 'events' && formValues.banner_file_id ? (
+              <p className="upload-hint">Current banner file id: {formValues.banner_file_id}</p>
+            ) : null}
+            {uploadStatus ? (
+              <p className={uploadState === 'error' ? 'upload-status upload-status-error' : 'upload-status'}>
+                {uploadStatus}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+
+        {!isUploadOnlyModal ? (
+          <div className="modal-form-grid">
+            {fields.map((field) => (
+              <label key={field}>
+                <span>
+                  {formatResourceName(field)}
+                  {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
+                </span>
+                {getFieldSelectOptions(resource, field).length ? (
+                  <select
+                    disabled={isSaving || !canEditField(field)}
+                    value={formValues[field] ?? ''}
+                    onChange={(event) =>
+                      setFormValues({
+                        ...formValues,
+                        [field]: event.target.value
+                      })
+                    }
+                  >
+                    <option value="">Select {formatResourceName(field)}</option>
+                    {getFieldSelectOptions(resource, field).map((option) => (
+                      <option key={option} value={option}>
+                        {formatResourceName(option)}
+                      </option>
+                    ))}
+                  </select>
+                ) : lookupOptions[field]?.length ? (
+                  <select
+                    disabled={isSaving || !canEditField(field)}
+                    value={formValues[field] ?? ''}
+                    onChange={(event) => {
+                      const nextValue = event.target.value
+
+                      setFormValues({
+                        ...formValues,
+                        [field]: nextValue
+                      })
+                    }}
+                  >
+                    <option value="">Select {formatResourceName(field)}</option>
+                    {lookupOptions[field].map((option) => (
+                      <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
+                        {getLookupLabel(option)}
+                      </option>
+                    ))}
+                  </select>
+                ) : isBooleanField(field) ? (
+                  <button
+                    className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
+                    disabled={isSaving || !canEditField(field)}
+                    type="button"
+                    onClick={() =>
+                      setFormValues({
+                        ...formValues,
+                        [field]: isTruthyValue(formValues[field]) ? '0' : '1'
+                      })
+                    }
+                  >
+                    {isTruthyValue(formValues[field]) ? 'True' : 'False'}
+                  </button>
+                ) : (
+                  <input
+                    disabled={isSaving || !canEditField(field)}
+                    step={isDateTimeField(field) ? 60 : undefined}
+                    type={isDateTimeField(field) ? 'datetime-local' : 'text'}
+                    value={formValues[field] ?? ''}
+                    onChange={(event) =>
+                      setFormValues({
+                        ...formValues,
+                        [field]: event.target.value
+                      })
+                    }
+                  />
+                )}
+              </label>
+            ))}
+          </div>
+        ) : null}
         {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
 
         <footer className="record-modal-actions">
-          <button disabled={isSaving} type="button" onClick={onClose}>
-            Cancel
+          <button disabled={isSaving || isUploading} type="button" onClick={onClose}>
+            {isUploadOnlyModal ? 'Close' : 'Cancel'}
           </button>
-          <button className="primary-admin-button" disabled={isSaving} type="button" onClick={onSave}>
-            {isSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
+          {!isUploadOnlyModal ? (
+            <button className="primary-admin-button" disabled={isSaving || isUploading} type="button" onClick={onSave}>
+              {isSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          ) : null}
         </footer>
       </section>
     </div>
@@ -2462,6 +2803,12 @@ function getRecentRecordTrend(records: ApiRecord[]) {
   }
 
   return dayBuckets
+}
+
+function getFileDownloadUrl(record: ApiRecord) {
+  const id = typeof record.id === 'string' ? record.id.trim() : String(record.id ?? '').trim()
+  if (!id) return null
+  return `/api/files/${encodeURIComponent(id)}/download`
 }
 
 function formatCellValue(column: string, value: unknown) {
@@ -2617,6 +2964,15 @@ function validateForm(values: Record<string, string>, resource: string) {
   }
 
   return messages
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.host)
+  } catch {
+    return false
+  }
 }
 
 function formatEventDate(value: unknown) {

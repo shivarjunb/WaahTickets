@@ -1,11 +1,15 @@
 export type Bindings = {
   DB: D1Database
+  FILES_BUCKET?: R2Bucket
   EMAIL_QUEUE?: Queue
   SENDGRID_API_KEY?: string
   EMAIL_FROM?: string
   GOOGLE_CLIENT_ID?: string
   GOOGLE_CLIENT_SECRET?: string
   AUTH_REDIRECT_ORIGIN?: string
+  TICKET_QR_BASE_URL?: string
+  R2_PUBLIC_BASE_URL?: string
+  R2_UPLOAD_BUCKET_NAME?: string
   UPSTASH_REDIS_REST_URL?: string
   UPSTASH_REDIS_REST_TOKEN?: string
 }

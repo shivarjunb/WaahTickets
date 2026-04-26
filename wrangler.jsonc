@@ -18,6 +18,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "FILES_BUCKET",
+      "bucket_name": "waah-tickets-sandbox",
+      "preview_bucket_name": "waah-tickets-sandbox"
+    }
+  ],
   "queues": {
     "producers": [
       {
@@ -36,7 +43,8 @@
   },
   "vars": {
     "UPSTASH_REDIS_REST_URL": "https://flying-pipefish-93304.upstash.io",
-  "AUTH_REDIRECT_ORIGIN":"https://waahtickets.bhattarai-shiva.workers.dev/",
-  "EMAIL_FROM":"sales@meghpal.com",
+    "AUTH_REDIRECT_ORIGIN": "https://waahtickets.bhattarai-shiva.workers.dev/",
+    "EMAIL_FROM": "sales@meghpal.com",
+    "R2_UPLOAD_BUCKET_NAME": "waah-tickets-sandbox"
   }
 }

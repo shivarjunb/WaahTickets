@@ -26,6 +26,22 @@ const hiddenColumnsByTable: Record<string, readonly string[]> = {
 }
 const LIST_CACHE_TTL_SECONDS = 60
 const DETAIL_CACHE_TTL_SECONDS = 120
+const MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024
+const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT
+)`
+const R2_SETTING_KEYS = ['r2_public_base_url', 'ticket_qr_base_url'] as const
+const ORGANIZER_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif'
+])
+
+type R2SettingKey = (typeof R2_SETTING_KEYS)[number]
 
 export const crudRoutes = new Hono<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>()
 
@@ -105,6 +121,321 @@ crudRoutes.get('/resources/columns', (c) => {
   return c.json({
     columns: columnsByResource
   })
+})
+
+crudRoutes.get('/settings/r2', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, R2_SETTING_KEYS)
+  const fallbackTicketQrBaseUrl = `${buildPublicOrigin(c.env.AUTH_REDIRECT_ORIGIN)}/ticket/verify`
+  const runtimeMode = getRequestRuntimeMode(c.req.url)
+  const configuredBucketName = normalizeConfiguredBucketName(c.env.R2_UPLOAD_BUCKET_NAME)
+
+  return c.json({
+    data: {
+      r2_binding_name: 'FILES_BUCKET',
+      r2_binding_configured: Boolean(c.env.FILES_BUCKET),
+      r2_bucket_name: configuredBucketName,
+      r2_public_base_url: stored.r2_public_base_url ?? c.env.R2_PUBLIC_BASE_URL ?? '',
+      ticket_qr_base_url: stored.ticket_qr_base_url ?? c.env.TICKET_QR_BASE_URL ?? fallbackTicketQrBaseUrl,
+      runtime_mode: runtimeMode,
+      runtime_note:
+        runtimeMode === 'local'
+          ? 'Local dev writes to preview/local R2 storage. Use `wrangler dev --remote` or deploy to write to Cloudflare R2.'
+          : 'Remote runtime writes directly to the configured Cloudflare R2 bucket.'
+    }
+  })
+})
+
+crudRoutes.put('/settings/r2', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const configuredBucketName = normalizeConfiguredBucketName(c.env.R2_UPLOAD_BUCKET_NAME)
+  const bucketName = String(payload.r2_bucket_name ?? configuredBucketName).trim()
+  const publicBaseUrl = String(payload.r2_public_base_url ?? '').trim()
+  const qrBaseUrl = String(payload.ticket_qr_base_url ?? '').trim()
+
+  if (bucketName && bucketName !== configuredBucketName) {
+    return c.json(
+      {
+        error: 'R2 bucket name is controlled by worker bindings.',
+        message: `Configured binding bucket is "${configuredBucketName}". Update wrangler.jsonc and deploy to change it.`
+      },
+      409
+    )
+  }
+
+  if (publicBaseUrl && !isValidUrl(publicBaseUrl)) {
+    return c.json({ error: 'R2 public base URL must be a valid URL.' }, 400)
+  }
+
+  if (qrBaseUrl && !isValidUrl(qrBaseUrl)) {
+    return c.json({ error: 'Ticket QR base URL must be a valid URL.' }, 400)
+  }
+
+  await ensureAppSettingsTable(db)
+  const now = new Date().toISOString()
+  const values: Record<R2SettingKey, string> = {
+    r2_public_base_url: normalizeUrlNoTrailingSlash(publicBaseUrl),
+    ticket_qr_base_url: qrBaseUrl
+  }
+
+  for (const key of R2_SETTING_KEYS) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(setting_key) DO UPDATE SET
+           setting_value = excluded.setting_value,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by`
+      )
+      .bind(key, values[key], now, scope.userId)
+      .run()
+  }
+
+  return c.json({
+    data: {
+      r2_bucket_name: configuredBucketName,
+      ...values,
+      r2_binding_name: 'FILES_BUCKET',
+      r2_binding_configured: Boolean(c.env.FILES_BUCKET),
+      updated_at: now
+    }
+  })
+})
+
+crudRoutes.post('/files/upload', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  if (!c.env.FILES_BUCKET) {
+    return c.json(
+      {
+        error: 'R2 bucket is not configured.',
+        message: 'Add FILES_BUCKET as an R2 binding in wrangler.jsonc.'
+      },
+      503
+    )
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole === 'Customers') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  let formData: FormData
+  try {
+    formData = await c.req.formData()
+  } catch {
+    return c.json({ error: 'Expected a multipart/form-data body.' }, 400)
+  }
+
+  const fileValue = formData.get('file')
+  if (!(fileValue instanceof File)) {
+    return c.json({ error: 'A file is required.' }, 400)
+  }
+
+  if (fileValue.size <= 0) {
+    return c.json({ error: 'The uploaded file is empty.' }, 400)
+  }
+
+  if (fileValue.size > MAX_UPLOAD_FILE_BYTES) {
+    return c.json(
+      {
+        error: 'Uploaded file is too large.',
+        message: `Max upload size is ${Math.floor(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))} MB.`
+      },
+      413
+    )
+  }
+
+  const fileType = normalizeUploadFieldValue(formData.get('file_type')) || 'attachment'
+  const linkedEventId = normalizeUploadFieldValue(formData.get('event_id'))
+  const mimeType = fileValue.type?.trim() || 'application/octet-stream'
+
+  if (scope.webrole === 'Organizations') {
+    if (!ORGANIZER_IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) {
+      return c.json(
+        {
+          error: 'Invalid file type.',
+          message: 'Organizers can upload image files only (JPG, PNG, WEBP, GIF).'
+        },
+        403
+      )
+    }
+
+    if (linkedEventId && !(await canOrganizationsScopeAccessEvent(db, scope, linkedEventId))) {
+      return c.json({ error: 'Forbidden for this event.' }, 403)
+    }
+  }
+
+  const now = new Date().toISOString()
+  const fileId = crypto.randomUUID()
+  const cleanFileName = sanitizeUploadFileName(fileValue.name || `${fileId}.bin`)
+  await ensureAppSettingsTable(db)
+  const storedSettings = await getAppSettings(db, ['r2_public_base_url'] as const)
+  const storageKey = buildStorageKey(fileType, fileId, cleanFileName, now)
+  const configuredPublicBaseUrl =
+    c.env.R2_PUBLIC_BASE_URL?.trim() || storedSettings.r2_public_base_url?.trim() || ''
+  if (configuredPublicBaseUrl && !isValidUrl(configuredPublicBaseUrl)) {
+    return c.json(
+      {
+        error: 'Invalid R2 public URL.',
+        message: 'R2 public base URL is invalid. Update it in Admin Settings before uploading files.'
+      },
+      409
+    )
+  }
+  const publicUrl = configuredPublicBaseUrl
+    ? buildPublicFileUrl(configuredPublicBaseUrl, storageKey)
+    : null
+  const bucketName = normalizeConfiguredBucketName(c.env.R2_UPLOAD_BUCKET_NAME)
+  const bytes = await fileValue.arrayBuffer()
+
+  try {
+    await c.env.FILES_BUCKET.put(storageKey, bytes, {
+      httpMetadata: {
+        contentType: mimeType
+      },
+      customMetadata: {
+        fileType,
+        uploadedBy: scope.userId,
+        eventId: linkedEventId ?? ''
+      }
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown R2 upload error.'
+    return c.json(
+      {
+        error: 'Upload to R2 failed.',
+        message
+      },
+      502
+    )
+  }
+
+  const uploadedObject = await c.env.FILES_BUCKET.head(storageKey)
+  if (!uploadedObject) {
+    return c.json(
+      {
+        error: 'R2 object was not found after upload.',
+        message: 'The file was not persisted. Please retry.'
+      },
+      502
+    )
+  }
+
+  const inserted = await executeMutation(c, () =>
+    db
+      .prepare(
+        `INSERT INTO files (
+          id, file_type, file_name, mime_type, storage_provider,
+          bucket_name, storage_key, public_url, size_bytes, created_by, created_at
+        ) VALUES (?, ?, ?, ?, 'r2', ?, ?, ?, ?, ?, ?)
+        RETURNING *`
+      )
+      .bind(
+        fileId,
+        fileType,
+        cleanFileName,
+        mimeType,
+        bucketName,
+        storageKey,
+        publicUrl,
+        fileValue.size,
+        scope.userId,
+        now
+      )
+      .first()
+  )
+
+  if (inserted instanceof Response) {
+    await c.env.FILES_BUCKET.delete(storageKey)
+    return inserted
+  }
+
+  const cache = createCache(c.env)
+  await cache.bumpResourceVersion('files')
+
+  return c.json({ data: sanitizeRowForTable('files', inserted) }, 201)
+})
+
+crudRoutes.get('/files/:id/download', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  const accessPolicy = buildAccessPolicy('files', scope)
+  if (!accessPolicy.allowed) {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const fileRecord = await db
+    .prepare(`SELECT file_name, mime_type, storage_key FROM files WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`)
+    .bind(c.req.param('id'), ...accessPolicy.bindings)
+    .first<{ file_name: string | null; mime_type: string | null; storage_key: string | null }>()
+
+  if (!fileRecord) {
+    return c.json({ error: 'Record not found.' }, 404)
+  }
+
+  if (!c.env.FILES_BUCKET) {
+    return c.json(
+      {
+        error: 'R2 bucket is not configured.',
+        message: 'Add FILES_BUCKET as an R2 binding in wrangler.jsonc.'
+      },
+      503
+    )
+  }
+
+  const storageKey = fileRecord.storage_key?.trim()
+  if (!storageKey) {
+    return c.json({ error: 'File storage key is missing.' }, 409)
+  }
+
+  const object = await c.env.FILES_BUCKET.get(storageKey)
+  if (!object) {
+    return c.json({ error: 'File object not found in storage.' }, 404)
+  }
+
+  const fileName = sanitizeUploadFileName(fileRecord.file_name ?? extractFileNameFromStorageKey(storageKey))
+  const headers = new Headers()
+  headers.set('Content-Type', fileRecord.mime_type?.trim() || object.httpMetadata?.contentType || 'application/octet-stream')
+  headers.set('Content-Disposition', `attachment; filename="${fileName}"`)
+
+  if (typeof object.size === 'number') {
+    headers.set('Content-Length', String(object.size))
+  }
+
+  return new Response(object.body, { status: 200, headers })
 })
 
 crudRoutes.get('/:resource', async (c) => {
@@ -577,6 +908,31 @@ async function readJsonBody(req: { json: () => Promise<unknown> }) {
   }
 }
 
+async function ensureAppSettingsTable(db: D1Database) {
+  await db.prepare(APP_SETTINGS_TABLE_SQL).run()
+}
+
+async function getAppSettings<TKey extends readonly R2SettingKey[]>(db: D1Database, keys: TKey) {
+  const placeholders = keys.map(() => '?').join(', ')
+  const rows = await db
+    .prepare(
+      `SELECT setting_key, setting_value
+       FROM app_settings
+       WHERE setting_key IN (${placeholders})`
+    )
+    .bind(...keys)
+    .all<{ setting_key: R2SettingKey; setting_value: string }>()
+
+  const values = Object.fromEntries(
+    keys.map((key) => {
+      const value = rows.results.find((row) => row.setting_key === key)?.setting_value ?? null
+      return [key, value]
+    })
+  ) as Record<TKey[number], string | null>
+
+  return values
+}
+
 function pickAllowedColumns(payload: JsonRecord, columns: readonly string[]) {
   const allowed = new Set(columns)
   const record: JsonRecord = {}
@@ -745,6 +1101,17 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
   const orgBindings = [...scope.organizationIds]
 
   switch (tableName) {
+    case 'files':
+      return {
+        allowed: true,
+        clause: `(created_by = ? OR EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.banner_file_id = files.id
+            AND events.organization_id IN (${placeholders})
+        ))`,
+        bindings: [scope.userId, ...orgBindings]
+      }
     case 'organizations':
       return { allowed: true, clause: `id IN (${placeholders})`, bindings: orgBindings }
     case 'organization_users':
@@ -935,6 +1302,119 @@ async function authorizeCreateRecord(
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)
   }
+}
+
+async function canOrganizationsScopeAccessEvent(db: D1Database, scope: AuthScope, eventId: string) {
+  if (scope.webrole === 'Admin') {
+    return true
+  }
+
+  if (scope.webrole !== 'Organizations' || scope.organizationIds.length === 0) {
+    return false
+  }
+
+  const placeholders = scope.organizationIds.map(() => '?').join(', ')
+  const result = await db
+    .prepare(
+      `SELECT 1 AS ok
+       FROM events
+       WHERE id = ?
+         AND organization_id IN (${placeholders})
+       LIMIT 1`
+    )
+    .bind(eventId, ...scope.organizationIds)
+    .first<{ ok: number }>()
+
+  return Boolean(result?.ok)
+}
+
+function normalizeUploadFieldValue(value: FormDataEntryValue | null) {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+function normalizeConfiguredBucketName(value: string | undefined) {
+  const normalized = value?.trim()
+  return normalized && normalized.length > 0 ? normalized : 'files'
+}
+
+function sanitizeUploadFileName(value: string) {
+  const cleaned = value
+    .trim()
+    .replaceAll(/[^a-zA-Z0-9._-]+/g, '-')
+    .replaceAll(/-+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/\.+$/, '')
+
+  if (!cleaned) {
+    return 'upload.bin'
+  }
+
+  return cleaned.slice(0, 120)
+}
+
+function buildStorageKey(fileType: string, fileId: string, fileName: string, isoDate: string) {
+  const datePath = isoDate.slice(0, 10).replaceAll('-', '/')
+  const group = fileType === 'event_banner' || fileType === 'event_image' ? 'events' : 'uploads'
+  return `${group}/${datePath}/${fileId}-${fileName}`
+}
+
+function extractFileNameFromStorageKey(storageKey: string) {
+  const parts = storageKey.split('/')
+  const candidate = parts[parts.length - 1]?.trim()
+  return candidate && candidate.length > 0 ? candidate : 'download.bin'
+}
+
+function buildPublicFileUrl(baseUrl: string | undefined, storageKey: string) {
+  const base = baseUrl?.trim()
+  if (!base) {
+    return null
+  }
+
+  try {
+    const normalized = base.endsWith('/') ? base : `${base}/`
+    return new URL(storageKey, normalized).toString()
+  } catch {
+    return null
+  }
+}
+
+function isValidUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.host)
+  } catch {
+    return false
+  }
+}
+
+function normalizeUrlNoTrailingSlash(value: string) {
+  if (!value) return value
+  return value.endsWith('/') ? value.slice(0, -1) : value
+}
+
+function getRequestRuntimeMode(requestUrl: string) {
+  try {
+    const host = new URL(requestUrl).hostname.toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+      return 'local'
+    }
+  } catch {
+    // Ignore malformed URL and use remote as default.
+  }
+
+  return 'remote'
+}
+
+function buildPublicOrigin(origin: string | undefined) {
+  const fallback = 'http://localhost:8787'
+  const base = (origin ?? fallback).trim()
+  const normalized = base.endsWith('/') ? base.slice(0, -1) : base
+  return new URL(normalized).origin
 }
 
 function sanitizeInteger(

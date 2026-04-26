@@ -1,3 +1,4 @@
+import * as QRCode from 'qrcode'
 import type { Bindings } from '../types/bindings.js'
 
 type MutationRow = Record<string, unknown>
@@ -68,6 +69,16 @@ const ACCOUNT_CREATED_MESSAGE_TYPE = 'account_created'
 const ACCOUNT_DELETED_MESSAGE_TYPE = 'account_deleted'
 const MAX_RETRY_ATTEMPTS = 5
 const EMAIL_VERIFICATION_EXPIRY_HOURS = 48
+const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT
+)`
+
+type NotificationRuntimeSettings = {
+  ticketQrBaseUrl: string | null
+}
 
 export async function maybeEnqueueOrderNotification(args: {
   env: Bindings
@@ -410,8 +421,9 @@ async function processOrderQueueMessage(
   try {
     await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts)
     const snapshot = await loadOrderSnapshot(env.DB, payload.orderId)
+    const runtimeSettings = await loadNotificationRuntimeSettings(env.DB)
     const email = buildOrderEmail(snapshot)
-    const pdfBytes = buildTicketPdf(snapshot)
+    const pdfBytes = buildTicketPdf(snapshot, env, runtimeSettings)
     const providerResult = await sendOrderEmail({
       env,
       to: payload.recipientEmail,
@@ -755,8 +767,18 @@ function buildAccountEmail(
   return { subject, text, html }
 }
 
-function buildTicketPdf(snapshot: OrderSnapshot) {
-  const lines: string[] = [
+type PdfQrGraphic = {
+  size: number
+  data: Uint8Array
+}
+
+type PdfPage = {
+  lines: string[]
+  qr?: PdfQrGraphic
+}
+
+function buildTicketPdf(snapshot: OrderSnapshot, env: Bindings, settings: NotificationRuntimeSettings) {
+  const summaryLines: string[] = [
     'WaahTickets Ticket Pack',
     '',
     `Order Number: ${snapshot.order.orderNumber}`,
@@ -773,23 +795,48 @@ function buildTicketPdf(snapshot: OrderSnapshot) {
     `Venue: ${snapshot.event.locationName}`,
     snapshot.event.locationAddress ? `Address: ${snapshot.event.locationAddress}` : '',
     '',
-    'Tickets:'
+    `Ticket count: ${snapshot.tickets.length}`,
+    'Each ticket page contains a QR code and a tokenized check-in URL.',
+    '',
+    'Bring a valid photo ID with this ticket at entry.'
   ]
 
+  const pages: PdfPage[] = chunkLines(summaryLines.filter(Boolean), 42).map((lines) => ({ lines }))
+
   if (snapshot.tickets.length === 0) {
-    lines.push('- No ticket rows found for this order.')
-  } else {
-    for (const ticket of snapshot.tickets) {
-      lines.push(`- ${ticket.ticketNumber} | status: ${ticket.status} | qr: ${ticket.qrCodeValue}`)
-    }
+    pages.push({
+      lines: ['Ticket Detail', '', 'No ticket rows found for this order.']
+    })
+    return buildSimplePdf(pages)
   }
 
-  lines.push('', 'Bring a valid photo ID with this ticket at entry.')
+  for (let index = 0; index < snapshot.tickets.length; index += 1) {
+    const ticket = snapshot.tickets[index]
+    const token = createTicketQrToken(snapshot, ticket, index)
+    const qrUrl = buildTicketQrUrl(env, token, settings)
+    const qrGraphic = createQrGraphic(qrUrl)
+    const ticketLines = [
+      `Ticket ${index + 1} of ${snapshot.tickets.length}`,
+      '',
+      `Ticket Number: ${ticket.ticketNumber}`,
+      `Status: ${ticket.status}`,
+      `Ticket QR Value: ${ticket.qrCodeValue}`,
+      '',
+      'Scan this QR code at entry.',
+      '',
+      ...wrapLine(`Check-in URL: ${qrUrl}`, 88)
+    ]
 
-  return buildSimplePdf(lines.filter(Boolean))
+    pages.push({
+      lines: ticketLines,
+      qr: qrGraphic
+    })
+  }
+
+  return buildSimplePdf(pages)
 }
 
-function buildSimplePdf(lines: string[]) {
+function buildSimplePdf(pageList: PdfPage[]) {
   const objects: string[] = []
 
   const pushObject = (value: string) => {
@@ -798,23 +845,22 @@ function buildSimplePdf(lines: string[]) {
   }
 
   const catalog = pushObject('')
-  const pages = pushObject('')
+  const pagesObject = pushObject('')
   const font = pushObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
 
   const pageIds: number[] = []
-  const pageChunks = chunkLines(lines, 42)
 
-  for (const chunk of pageChunks) {
-    const stream = renderPageContent(chunk)
+  for (const page of pageList) {
+    const stream = renderPageContent(page)
     const contentId = pushObject(`<< /Length ${byteLength(stream)} >>\nstream\n${stream}\nendstream`)
     const pageId = pushObject(
-      `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${contentId} 0 R >>`
+      `<< /Type /Page /Parent ${pagesObject} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${contentId} 0 R >>`
     )
     pageIds.push(pageId)
   }
 
-  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pages} 0 R >>`
-  objects[pages - 1] = `<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] >>`
+  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObject} 0 R >>`
+  objects[pagesObject - 1] = `<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] >>`
 
   let pdf = '%PDF-1.4\n'
   const offsets: number[] = [0]
@@ -837,18 +883,137 @@ function buildSimplePdf(lines: string[]) {
   return new TextEncoder().encode(pdf)
 }
 
-function renderPageContent(lines: string[]) {
+function renderPageContent(page: PdfPage) {
   const ops = ['BT', '/F1 12 Tf', '72 760 Td']
 
-  for (let index = 0; index < lines.length; index += 1) {
+  for (let index = 0; index < page.lines.length; index += 1) {
     if (index > 0) {
       ops.push('0 -16 Td')
     }
-    ops.push(`(${escapePdfText(lines[index])}) Tj`)
+    ops.push(`(${escapePdfText(page.lines[index])}) Tj`)
   }
 
   ops.push('ET')
+
+  if (page.qr) {
+    const moduleSize = 4
+    const qrPadding = 8
+    const qrSizePoints = page.qr.size * moduleSize
+    const qrLeft = 72
+    const qrBottom = 205
+
+    ops.push('q')
+    ops.push('1 1 1 rg')
+    ops.push(
+      `${formatPdfNumber(qrLeft - qrPadding)} ${formatPdfNumber(qrBottom - qrPadding)} ${formatPdfNumber(
+        qrSizePoints + qrPadding * 2
+      )} ${formatPdfNumber(qrSizePoints + qrPadding * 2)} re f`
+    )
+    ops.push('Q')
+
+    ops.push('q')
+    ops.push('0 0 0 rg')
+
+    for (let row = 0; row < page.qr.size; row += 1) {
+      for (let column = 0; column < page.qr.size; column += 1) {
+        const cell = page.qr.data[row * page.qr.size + column]
+        if (!cell) continue
+
+        const x = qrLeft + column * moduleSize
+        const y = qrBottom + (page.qr.size - row - 1) * moduleSize
+        ops.push(
+          `${formatPdfNumber(x)} ${formatPdfNumber(y)} ${formatPdfNumber(moduleSize)} ${formatPdfNumber(
+            moduleSize
+          )} re f`
+        )
+      }
+    }
+
+    ops.push('Q')
+  }
+
   return ops.join('\n')
+}
+
+function createTicketQrToken(
+  snapshot: OrderSnapshot,
+  ticket: OrderSnapshot['tickets'][number],
+  ticketIndex: number
+) {
+  const payload = {
+    order_id: snapshot.order.id,
+    order_number: snapshot.order.orderNumber,
+    ticket_number: ticket.ticketNumber,
+    qr_value: ticket.qrCodeValue,
+    issued_index: ticketIndex + 1,
+    issued_at: snapshot.order.orderDateTime
+  }
+
+  return toBase64Url(new TextEncoder().encode(JSON.stringify(payload)))
+}
+
+function buildTicketQrUrl(env: Bindings, token: string, settings: NotificationRuntimeSettings) {
+  const configured = settings.ticketQrBaseUrl?.trim() || env.TICKET_QR_BASE_URL?.trim()
+
+  if (configured) {
+    try {
+      const url = new URL(configured)
+      url.searchParams.set('token', token)
+      return url.toString()
+    } catch {
+      // Fall through to default URL.
+    }
+  }
+
+  const fallback = new URL('/ticket/verify', buildPublicOrigin(env.AUTH_REDIRECT_ORIGIN))
+  fallback.searchParams.set('token', token)
+  return fallback.toString()
+}
+
+function createQrGraphic(value: string): PdfQrGraphic {
+  const qr = QRCode.create(value, {
+    errorCorrectionLevel: 'M'
+  })
+
+  return {
+    size: qr.modules.size,
+    data: qr.modules.data
+  }
+}
+
+function wrapLine(value: string, maxLength: number) {
+  const chunks: string[] = []
+  for (let index = 0; index < value.length; index += maxLength) {
+    chunks.push(value.slice(index, index + maxLength))
+  }
+  return chunks.length > 0 ? chunks : ['']
+}
+
+function formatPdfNumber(value: number) {
+  return Number(value.toFixed(2)).toString()
+}
+
+async function loadNotificationRuntimeSettings(db: D1Database): Promise<NotificationRuntimeSettings> {
+  try {
+    await db.prepare(APP_SETTINGS_TABLE_SQL).run()
+    const row = await db
+      .prepare(
+        `SELECT setting_value
+         FROM app_settings
+         WHERE setting_key = 'ticket_qr_base_url'
+         LIMIT 1`
+      )
+      .first<{ setting_value: string }>()
+
+    return {
+      ticketQrBaseUrl: row?.setting_value?.trim() || null
+    }
+  } catch (error) {
+    console.warn('[notifications] runtime settings unavailable', error)
+    return {
+      ticketQrBaseUrl: null
+    }
+  }
 }
 
 async function sendOrderEmail(args: {
@@ -1209,6 +1374,10 @@ function toBase64(bytes: Uint8Array) {
   }
 
   return btoa(binary)
+}
+
+function toBase64Url(bytes: Uint8Array) {
+  return toBase64(bytes).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
 async function readTextSafe(response: Response) {

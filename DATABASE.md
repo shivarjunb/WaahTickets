@@ -6,6 +6,12 @@ The initial schema lives in:
 migrations/0001_initial_schema.sql
 ```
 
+Runtime settings (including R2 and ticket QR URL settings) are persisted in:
+
+```bash
+migrations/0006_app_settings.sql
+```
+
 ## Local D1
 
 Apply migrations to Wrangler's local D1 database:

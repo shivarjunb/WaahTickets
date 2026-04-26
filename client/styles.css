@@ -1394,9 +1394,86 @@ h1 {
   padding: 18px;
 }
 
+.file-upload-panel {
+  display: grid;
+  gap: 10px;
+  margin: 18px 18px 0;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.file-upload-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.file-upload-panel span {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.file-upload-panel input[type='text'],
+.file-upload-panel input[type='file'] {
+  min-height: 40px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.upload-hint,
+.upload-status {
+  margin: 0;
+  color: #93c5fd;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.upload-status-error {
+  color: #fca5a5;
+}
+
 .modal-form-grid label {
   display: grid;
   gap: 6px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px;
+}
+
+.settings-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-grid span {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.settings-grid input {
+  min-height: 40px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 10px;
+  padding: 0 10px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.settings-grid input:disabled {
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.52);
 }
 
 .modal-form-grid span {
@@ -2383,6 +2460,10 @@ h1 {
   .admin-analytics-grid {
     grid-template-columns: 1fr;
   }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Theme + modern modal polish */
@@ -2578,6 +2659,7 @@ body[data-theme='light'] .record-modal {
 
 body[data-theme='light'] .record-modal-header h2,
 body[data-theme='light'] .modal-form-grid span,
+body[data-theme='light'] .settings-grid span,
 body[data-theme='light'] .auth-body p,
 body[data-theme='light'] .reservation-summary {
   color: #334155;
@@ -2585,11 +2667,42 @@ body[data-theme='light'] .reservation-summary {
 
 body[data-theme='light'] .modal-form-grid input,
 body[data-theme='light'] .modal-form-grid select,
+body[data-theme='light'] .settings-grid input,
 body[data-theme='light'] .reservation-summary,
 body[data-theme='light'] .record-modal-header button {
   border-color: rgba(71, 85, 105, 0.18);
   color: #0f172a;
   background: #ffffff;
+}
+
+body[data-theme='light'] .settings-grid input:disabled {
+  color: #64748b;
+  background: #eef2ff;
+}
+
+body[data-theme='light'] .file-upload-panel {
+  border-color: rgba(71, 85, 105, 0.18);
+  background: rgba(248, 250, 252, 0.9);
+}
+
+body[data-theme='light'] .file-upload-panel span {
+  color: #475569;
+}
+
+body[data-theme='light'] .file-upload-panel input[type='text'],
+body[data-theme='light'] .file-upload-panel input[type='file'] {
+  border-color: rgba(71, 85, 105, 0.18);
+  color: #0f172a;
+  background: #ffffff;
+}
+
+body[data-theme='light'] .upload-hint,
+body[data-theme='light'] .upload-status {
+  color: #4338ca;
+}
+
+body[data-theme='light'] .upload-status-error {
+  color: #dc2626;
 }
 
 body[data-theme='light'] .record-modal-error {
