@@ -23,6 +23,8 @@ import {
   Search,
   ShieldCheck,
   ShoppingCart,
+  SquareMinus,
+  SquarePlus,
   Sun,
   Ticket,
   Trash2,
@@ -299,6 +301,20 @@ const fieldSelectOptions: Record<string, Record<string, string[]>> = {
   events: {
     status: ['draft', 'published', 'cancelled', 'archived']
   }
+}
+
+const requiredFieldsByResource: Record<string, string[]> = {
+  users: ['first_name', 'last_name', 'email', 'webrole'],
+  customers: ['display_name'],
+  organizations: ['name'],
+  events: ['organization_id', 'name', 'slug', 'start_datetime', 'end_datetime', 'status'],
+  event_locations: ['event_id', 'name'],
+  ticket_types: ['event_id', 'event_location_id', 'name', 'price_paisa'],
+  orders: ['customer_id', 'event_id', 'event_location_id'],
+  web_roles: ['name'],
+  user_web_roles: ['user_id', 'web_role_id'],
+  web_role_menu_items: ['web_role_id', 'resource_name'],
+  payments: ['order_id', 'customer_id', 'amount_paisa']
 }
 
 type ApiListResponse = {
@@ -1110,6 +1126,11 @@ function AdminApp({
   const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(user?.webrole ?? 'Customers')
   const [selectedResource, setSelectedResource] = useState('events')
   const [records, setRecords] = useState<ApiRecord[]>([])
+  const [webRoleUsers, setWebRoleUsers] = useState<ApiRecord[]>([])
+  const [webRoleMenuItems, setWebRoleMenuItems] = useState<ApiRecord[]>([])
+  const [selectedWebRoleId, setSelectedWebRoleId] = useState('')
+  const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false)
+  const [selectedColumnsByResource, setSelectedColumnsByResource] = useState<Record<string, string[]>>({})
   const [selectedRecord, setSelectedRecord] = useState<ApiRecord | null>(null)
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
@@ -1119,6 +1140,7 @@ function AdminApp({
   const [isLoading, setIsLoading] = useState(false)
   const [isSavingRecord, setIsSavingRecord] = useState(false)
   const [recordError, setRecordError] = useState('')
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null)
   const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
   const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>({
     eventsLoaded: 0,
@@ -1132,7 +1154,17 @@ function AdminApp({
     return records.filter((record) => JSON.stringify(record).toLowerCase().includes(query))
   }, [filter, records])
 
-  const tableColumns = useMemo(() => getTableColumns(filteredRecords), [filteredRecords])
+  const defaultTableColumns = useMemo(() => getTableColumns(filteredRecords), [filteredRecords])
+  const availableColumns = useMemo(() => getAvailableColumns(records), [records])
+  const selectedColumns = selectedColumnsByResource[selectedResource] ?? defaultTableColumns
+  const tableColumns = useMemo(
+    () => {
+      if (!(isAdminUser && selectedWebRole === 'Admin')) return defaultTableColumns
+      const adminColumns = selectedColumns.filter((column) => availableColumns.includes(column))
+      return adminColumns.length > 0 ? adminColumns : defaultTableColumns
+    },
+    [availableColumns, defaultTableColumns, isAdminUser, selectedColumns, selectedWebRole]
+  )
   const totalRecords = records.length
   const statusBreakdown = useMemo(() => getStatusBreakdown(records), [records])
   const recentTrend = useMemo(() => getRecentRecordTrend(records), [records])
@@ -1194,6 +1226,28 @@ function AdminApp({
   }, [selectedResource, visibleResources])
 
   useEffect(() => {
+    setIsColumnPickerOpen(false)
+  }, [selectedResource])
+
+  useEffect(() => {
+    if (!isAdminUser || selectedWebRole !== 'Admin') return
+    if (availableColumns.length === 0) return
+    if (selectedColumnsByResource[selectedResource]?.length) return
+
+    setSelectedColumnsByResource((current) => ({
+      ...current,
+      [selectedResource]: defaultTableColumns
+    }))
+  }, [
+    availableColumns.length,
+    defaultTableColumns,
+    isAdminUser,
+    selectedColumnsByResource,
+    selectedResource,
+    selectedWebRole
+  ])
+
+  useEffect(() => {
     if (user?.webrole && !isAdminUser) {
       setSelectedWebRole(user.webrole)
     }
@@ -1204,14 +1258,44 @@ function AdminApp({
     setStatus(`Loading ${formatResourceName(resource)}`)
 
     try {
-      const { data } = await fetchJson<ApiListResponse>(`/api/${resource}?limit=50`)
-      setRecords(data.data ?? [])
-      setStatus(`${data.data?.length ?? 0} ${formatResourceName(resource)} loaded`)
+      const endpoint =
+        selectedWebRole === 'Customers' && resource === 'customers' && user?.id
+          ? `/api/customers?user_id=${encodeURIComponent(user.id)}&limit=50`
+          : `/api/${resource}?limit=50`
+      const { data } = await fetchJson<ApiListResponse>(endpoint)
+      const loadedRecords = data.data ?? []
+
+      setRecords(loadedRecords)
+      if (resource === 'web_roles') {
+        const firstWebRoleId = String(loadedRecords[0]?.id ?? '')
+        setSelectedWebRoleId((current) => current || firstWebRoleId)
+      }
+
+      setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded`)
     } catch (error) {
       setRecords([])
       setStatus(getErrorMessage(error))
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (selectedResource !== 'web_roles') return
+    void loadWebRoleSubgrids()
+  }, [selectedResource])
+
+  async function loadWebRoleSubgrids() {
+    try {
+      const [usersResponse, menuItemsResponse] = await Promise.all([
+        fetchJson<ApiListResponse>('/api/user_web_roles?limit=200'),
+        fetchJson<ApiListResponse>('/api/web_role_menu_items?limit=200')
+      ])
+      setWebRoleUsers(usersResponse.data.data ?? [])
+      setWebRoleMenuItems(menuItemsResponse.data.data ?? [])
+    } catch {
+      setWebRoleUsers([])
+      setWebRoleMenuItems([])
     }
   }
 
@@ -1310,6 +1394,28 @@ function AdminApp({
       selectedResource,
       modalMode === 'edit' ? selectedRecord : undefined
     )
+    if (selectedWebRole === 'Customers' && selectedResource === 'customers' && modalMode === 'edit') {
+      const selectedUserId = String(selectedRecord?.user_id ?? formValues.user_id ?? '')
+      if (!user?.id || selectedUserId !== user.id) {
+        const message = 'Customers can edit only their own customer profile.'
+        setStatus(message)
+        setRecordError(message)
+        return
+      }
+
+      for (const key of Object.keys(body)) {
+        if (!canCustomerEditCustomerField(key)) delete body[key]
+      }
+    }
+
+    const validationMessages = validateForm(formValues, selectedResource)
+    if (validationMessages.length > 0) {
+      const message = validationMessages.join(' ')
+      setStatus(message)
+      setRecordError(message)
+      return
+    }
+
     const selectedLocationId = selectedResource === 'events' ? String(formValues.location_template_id ?? '') : ''
     if (selectedResource === 'events') {
       delete body.location_template_id
@@ -1369,6 +1475,7 @@ function AdminApp({
     }
 
     setIsLoading(true)
+    setDeletingRecordId(String(record.id))
     setStatus(`Deleting ${record.id}`)
 
     try {
@@ -1382,6 +1489,7 @@ function AdminApp({
       setStatus(getErrorMessage(error))
     } finally {
       setIsLoading(false)
+      setDeletingRecordId(null)
     }
   }
 
@@ -1503,6 +1611,21 @@ function AdminApp({
         next.add(groupLabel)
       }
       return next
+    })
+  }
+
+  function toggleColumn(column: string) {
+    setSelectedColumnsByResource((current) => {
+      const currentColumns = current[selectedResource] ?? defaultTableColumns
+      const hasColumn = currentColumns.includes(column)
+      const nextColumns = hasColumn
+        ? currentColumns.filter((item) => item !== column)
+        : [...currentColumns, column]
+
+      return {
+        ...current,
+        [selectedResource]: nextColumns.length > 0 ? nextColumns : currentColumns
+      }
     })
   }
 
@@ -1710,9 +1833,35 @@ function AdminApp({
                 />
               </label>
               <button type="button" onClick={() => void loadRecords()}>
-                <RefreshCw size={17} />
+                <RefreshCw className={isLoading ? 'spinning-icon' : ''} size={17} />
                 Refresh
               </button>
+              {isAdminUser && selectedWebRole === 'Admin' ? (
+                <div className="column-picker">
+                  <button type="button" onClick={() => setIsColumnPickerOpen((current) => !current)}>
+                    {isColumnPickerOpen ? <SquareMinus size={17} /> : <SquarePlus size={17} />}
+                    Columns
+                  </button>
+                  {isColumnPickerOpen ? (
+                    <div className="column-picker-panel">
+                      {availableColumns.length === 0 ? (
+                        <span className="column-picker-empty">No columns available</span>
+                      ) : (
+                        availableColumns.map((column) => (
+                          <label key={column}>
+                            <input
+                              checked={tableColumns.includes(column)}
+                              type="checkbox"
+                              onChange={() => toggleColumn(column)}
+                            />
+                            <span>{formatResourceName(column)}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 className="primary-admin-button"
                 disabled={!selectedPermissions.can_create}
@@ -1762,12 +1911,16 @@ function AdminApp({
                           <button
                             aria-label="Delete record"
                             className="danger-icon"
-                            disabled={!selectedPermissions.can_delete}
+                            disabled={!selectedPermissions.can_delete || deletingRecordId === String(record.id)}
                             title="Delete"
                             type="button"
                             onClick={() => void deleteRecord(record)}
                           >
-                            <Trash2 size={16} />
+                            {deletingRecordId === String(record.id) ? (
+                              <span aria-hidden="true" className="inline-spinner" />
+                            ) : (
+                              <Trash2 size={16} />
+                            )}
                           </button>
                         </div>
                       </td>
@@ -1778,17 +1931,102 @@ function AdminApp({
             </table>
           </div>
         </section>
+
+        {selectedResource === 'web_roles' ? (
+          <section className="admin-subgrid-shell">
+            <div className="admin-subgrid-header">
+              <h3>Web role relationships</h3>
+              <label>
+                <span>Role</span>
+                <select value={selectedWebRoleId} onChange={(event) => setSelectedWebRoleId(event.target.value)}>
+                  <option value="">Select role</option>
+                  {records.map((role) => (
+                    <option key={String(role.id)} value={String(role.id)}>
+                      {String(role.name ?? role.id ?? 'Role')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="admin-subgrid">
+              <article className="admin-subgrid-card">
+                <h4>User Web Roles</h4>
+                <table className="admin-mini-table">
+                  <thead>
+                    <tr>
+                      <th>User</th>
+                      <th>Web Role Id</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length === 0 ? (
+                      <tr>
+                        <td colSpan={2}>No user assignments for this role</td>
+                      </tr>
+                    ) : (
+                      webRoleUsers
+                        .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
+                        .map((item) => (
+                          <tr key={String(item.id ?? `${item.user_id}-${item.web_role_id}`)}>
+                            <td>{formatCellValue('user_id', item.user_id)}</td>
+                            <td>{formatCellValue('web_role_id', item.web_role_id)}</td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                </table>
+              </article>
+              <article className="admin-subgrid-card">
+                <h4>Web Role Menu Items</h4>
+                <table className="admin-mini-table">
+                  <thead>
+                    <tr>
+                      <th>Resource</th>
+                      <th>View</th>
+                      <th>Create</th>
+                      <th>Edit</th>
+                      <th>Delete</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webRoleMenuItems.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId).length ===
+                    0 ? (
+                      <tr>
+                        <td colSpan={5}>No menu permissions for this role</td>
+                      </tr>
+                    ) : (
+                      webRoleMenuItems
+                        .filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId)
+                        .map((item) => (
+                          <tr key={String(item.id ?? `${item.web_role_id}-${item.resource_name}`)}>
+                            <td>{formatCellValue('resource_name', item.resource_name)}</td>
+                            <td>{formatCellValue('can_view', item.can_view)}</td>
+                            <td>{formatCellValue('can_create', item.can_create)}</td>
+                            <td>{formatCellValue('can_edit', item.can_edit)}</td>
+                            <td>{formatCellValue('can_delete', item.can_delete)}</td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                </table>
+              </article>
+            </div>
+          </section>
+        ) : null}
       </section>
 
       {modalMode ? (
         <RecordModal
+          currentUser={user}
           errorMessage={recordError}
           formValues={formValues}
           isSaving={isSavingRecord}
           lookupOptions={lookupOptions}
           mode={modalMode}
+          record={selectedRecord}
           resource={selectedResource}
           setFormValues={setFormValues}
+          webRole={selectedWebRole}
           onClose={closeModal}
           onSave={() => void saveRecord()}
         />
@@ -1798,28 +2036,35 @@ function AdminApp({
 }
 
 function RecordModal({
+  currentUser,
   errorMessage,
   formValues,
   isSaving,
   lookupOptions,
   mode,
+  record,
   resource,
   setFormValues,
+  webRole,
   onClose,
   onSave
 }: {
+  currentUser: AuthUser
   errorMessage: string
   formValues: Record<string, string>
   isSaving: boolean
   lookupOptions: Record<string, ApiRecord[]>
   mode: 'create' | 'edit'
+  record: ApiRecord | null
   resource: string
   setFormValues: (value: Record<string, string>) => void
+  webRole: WebRoleName
   onClose: () => void
   onSave: () => void
 }) {
   const fields = Object.keys(formValues).filter((field) => !isAlwaysHiddenFormField(field))
-  const canEditField = (field: string) => !isFieldReadOnly(field, mode)
+  const canEditField = (field: string) =>
+    !isFieldReadOnly(field, mode) && canEditFieldForRole(field, resource, webRole, currentUser, record, formValues)
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -1837,7 +2082,10 @@ function RecordModal({
         <div className="modal-form-grid">
           {fields.map((field) => (
             <label key={field}>
-              <span>{formatResourceName(field)}</span>
+              <span>
+                {formatResourceName(field)}
+                {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
+              </span>
               {getFieldSelectOptions(resource, field).length ? (
                 <select
                   disabled={isSaving || !canEditField(field)}
@@ -1978,7 +2226,7 @@ function coerceFieldValue(field: string, value: string, originalValue: unknown) 
 }
 
 function getTableColumns(records: ApiRecord[]) {
-  const preferred = ['name', 'display_name', 'email', 'slug', 'status', 'webrole', 'created_at']
+  const preferred = ['name', 'display_name', 'email', 'slug', 'status', 'webrole']
   const available = new Set(records.flatMap((record) => Object.keys(record)))
   const preferredColumns = preferred.filter((column) => available.has(column))
   const remaining = [...available]
@@ -1987,6 +2235,11 @@ function getTableColumns(records: ApiRecord[]) {
   const columns = [...preferredColumns, ...remaining].slice(0, 6)
 
   return columns.length > 0 ? columns : ['name', 'status']
+}
+
+function getAvailableColumns(records: ApiRecord[]) {
+  const available = new Set(records.flatMap((record) => Object.keys(record)))
+  return [...available].filter((column) => !hiddenTableColumns.has(column))
 }
 
 function getStatusBreakdown(records: ApiRecord[]) {
@@ -2107,12 +2360,50 @@ function isTruthyValue(value: unknown) {
 }
 
 function isAlwaysHiddenFormField(field: string) {
-  return ['id', 'password_hash', 'google_sub', 'auth_provider', 'avatar_url', 'last_login_at'].includes(field)
+  return [
+    'id',
+    'password_hash',
+    'google_sub',
+    'auth_provider',
+    'avatar_url',
+    'last_login_at',
+    'created_at',
+    'updated_at'
+  ].includes(field)
 }
 
 function isFieldReadOnly(field: string, mode: 'create' | 'edit') {
   if (mode === 'edit' && field === 'id') return true
   return ['created_at', 'updated_at', 'last_login_at'].includes(field)
+}
+
+function canEditFieldForRole(
+  field: string,
+  resource: string,
+  webRole: WebRoleName,
+  currentUser: AuthUser,
+  record: ApiRecord | null,
+  formValues: Record<string, string>
+) {
+  if (!(webRole === 'Customers' && resource === 'customers')) return true
+
+  const ownerUserId = String(record?.user_id ?? formValues.user_id ?? '')
+  if (!currentUser?.id || ownerUserId !== currentUser.id) return false
+
+  return canCustomerEditCustomerField(field)
+}
+
+function canCustomerEditCustomerField(field: string) {
+  return ![
+    'id',
+    'user_id',
+    'email',
+    'is_active',
+    'status',
+    'created_at',
+    'updated_at',
+    'last_login_at'
+  ].includes(field)
 }
 
 function getInitials(user: AuthUser) {
@@ -2139,6 +2430,27 @@ function getAdminResourceIcon(resource: string) {
 function formatResourceName(resource: string) {
   if (resource === 'location_template_id') return 'location'
   return resource.replaceAll('_', ' ')
+}
+
+function isRequiredField(resource: string, field: string) {
+  return requiredFieldsByResource[resource]?.includes(field) ?? false
+}
+
+function validateForm(values: Record<string, string>, resource: string) {
+  const messages: string[] = []
+  const requiredFields = requiredFieldsByResource[resource] ?? []
+
+  for (const field of requiredFields) {
+    if (!String(values[field] ?? '').trim()) {
+      messages.push(`${formatResourceName(field)} is required.`)
+    }
+  }
+
+  if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) {
+    messages.push('Email must be a valid email address.')
+  }
+
+  return messages
 }
 
 function formatEventDate(value: unknown) {
