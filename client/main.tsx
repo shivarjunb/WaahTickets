@@ -3,15 +3,31 @@ import { createRoot } from 'react-dom/client'
 import {
   Activity,
   BarChart3,
+  Bell,
+  Building2,
   CalendarDays,
+  ChevronDown,
+  CreditCard,
   Database,
   Edit3,
+  FileText,
+  Home,
   LayoutDashboard,
+  LogIn,
+  LogOut,
+  Mail,
+  Moon,
   Plus,
   RefreshCw,
   Save,
   Search,
+  ShieldCheck,
+  ShoppingCart,
+  Sun,
+  Ticket,
   Trash2,
+  UserCog,
+  Users,
   X
 } from 'lucide-react'
 import './styles.css'
@@ -38,6 +54,31 @@ const fallbackResources = [
   'coupons',
   'coupon_redemptions'
 ]
+
+const adminResourceGroups = [
+  {
+    label: 'People & access',
+    resources: ['users', 'customers', 'web_roles', 'user_web_roles', 'web_role_menu_items']
+  },
+  {
+    label: 'Organizations',
+    resources: ['organizations', 'organization_users']
+  },
+  {
+    label: 'Event setup',
+    resources: ['events', 'event_locations', 'ticket_types', 'tickets', 'ticket_scans']
+  },
+  {
+    label: 'Sales',
+    resources: ['orders', 'order_items', 'payments', 'coupons', 'coupon_redemptions']
+  },
+  {
+    label: 'Content & messaging',
+    resources: ['files', 'messages', 'notification_queue']
+  }
+]
+
+const groupedAdminResources = new Set(adminResourceGroups.flatMap((group) => group.resources))
 
 const featuredSlideImages = [
   'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
@@ -285,6 +326,12 @@ type AuthUser = {
   webrole?: WebRoleName
 } | null
 
+type AdminDashboardMetrics = {
+  eventsLoaded: number
+  ticketTypes: number
+  currentTotalPaisa: number
+}
+
 const hiddenTableColumns = new Set([
   'id',
   'user_id',
@@ -311,12 +358,21 @@ function App() {
   const [user, setUser] = useState<AuthUser>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthOpen, setIsAuthOpen] = useState(false)
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window === 'undefined') return 'dark'
+    return window.localStorage.getItem('waah_theme') === 'light' ? 'light' : 'dark'
+  })
 
   useEffect(() => {
     const onPopState = () => setPath(window.location.pathname)
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
+
+  useEffect(() => {
+    document.body.dataset.theme = theme
+    window.localStorage.setItem('waah_theme', theme)
+  }, [theme])
 
   useEffect(() => {
     async function loadSession() {
@@ -357,7 +413,13 @@ function App() {
             </section>
           </main>
         ) : user ? (
-          <AdminApp user={user} onLoginClick={() => setIsAuthOpen(true)} onLogout={logout} />
+          <AdminApp
+            user={user}
+            onLoginClick={() => setIsAuthOpen(true)}
+            onLogout={logout}
+            theme={theme}
+            onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+          />
         ) : (
           <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
         )
@@ -365,8 +427,10 @@ function App() {
         <PublicApp
           user={user}
           isAuthLoading={isAuthLoading}
+          theme={theme}
           onLoginClick={() => setIsAuthOpen(true)}
           onLogout={logout}
+          onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
         />
       )}
       {isAuthOpen ? (
@@ -385,22 +449,28 @@ function App() {
 function PublicApp({
   user,
   isAuthLoading,
+  theme,
   onLoginClick,
-  onLogout
+  onLogout,
+  onToggleTheme
 }: {
   user: AuthUser
   isAuthLoading: boolean
+  theme: 'dark' | 'light'
   onLoginClick: () => void
   onLogout: () => void
+  onToggleTheme: () => void
 }) {
   const [events, setEvents] = useState<PublicEvent[]>([])
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
   const [isEventsLoading, setIsEventsLoading] = useState(true)
+  const [isTicketTypesLoading, setIsTicketTypesLoading] = useState(false)
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
   const [isReserveOpen, setIsReserveOpen] = useState(false)
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [reservationForm, setReservationForm] = useState({
     first_name: '',
     last_name: '',
@@ -426,6 +496,8 @@ function PublicApp({
             Number(selectedTicketType.quantity_sold ?? 0),
           0
         )
+  const reserveBlockedMessage = getReserveBlockedMessage()
+  const canReserve = !reserveBlockedMessage
 
   useEffect(() => {
     async function loadPublicEvents() {
@@ -457,9 +529,11 @@ function PublicApp({
     async function loadTicketTypes() {
       if (!selectedEvent?.id) {
         setTicketTypes([])
+        setIsTicketTypesLoading(false)
         return
       }
 
+      setIsTicketTypesLoading(true)
       try {
         const { data } = await fetchJson<ApiListResponse>(
           `/api/public/events/${selectedEvent.id}/ticket-types`
@@ -472,6 +546,8 @@ function PublicApp({
       } catch (error) {
         setTicketTypes([])
         setPublicStatus(getErrorMessage(error))
+      } finally {
+        setIsTicketTypesLoading(false)
       }
     }
 
@@ -496,13 +572,16 @@ function PublicApp({
         <div className="nav-links">
           <a href="#featured">Featured</a>
           <a href="#events">Events</a>
-          <a href="#insights">Insights</a>
           <a href="#checkout">Checkout</a>
         </div>
         {isAuthLoading ? (
           <div className="nav-session-placeholder" aria-hidden="true" />
         ) : user ? (
           <div className="nav-session-actions">
+            <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
             <a className="nav-action" href="/admin">
               Admin
             </a>
@@ -511,9 +590,15 @@ function PublicApp({
             </button>
           </div>
         ) : (
-          <button className="nav-action" type="button" onClick={onLoginClick}>
-            Login
-          </button>
+          <div className="nav-session-actions">
+            <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button className="nav-action" type="button" onClick={onLoginClick}>
+              Login
+            </button>
+          </div>
         )}
       </nav>
 
@@ -557,21 +642,6 @@ function PublicApp({
             </div>
           </div>
         </article>
-      </section>
-
-      <section className="stats-row" id="insights" aria-label="Waahtickets metrics">
-        <div className="stat">
-          <strong>{events.length}</strong>
-          <span>events loaded</span>
-        </div>
-        <div className="stat">
-          <strong>{ticketTypes.length}</strong>
-          <span>ticket types</span>
-        </div>
-        <div className="stat">
-          <strong>{formatMoney(totalPaisa)}</strong>
-          <span>current total</span>
-        </div>
       </section>
 
       <section className="content-grid">
@@ -653,9 +723,14 @@ function PublicApp({
               <strong>{formatMoney(totalPaisa)}</strong>
             </div>
           </div>
-          <button type="button" onClick={() => openReservation()}>
-            Reserve tickets
+          <button disabled={!canReserve} type="button" onClick={() => openReservation()}>
+            {isSubmittingOrder
+              ? 'Creating order...'
+              : isTicketTypesLoading
+                ? 'Loading ticket types...'
+                : 'Reserve tickets'}
           </button>
+          {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : null}
         </div>
       </section>
 
@@ -667,7 +742,11 @@ function PublicApp({
           ticketType={selectedTicketType}
           totalPaisa={totalPaisa}
           setForm={setReservationForm}
-          onClose={() => setIsReserveOpen(false)}
+          isSubmitting={isSubmittingOrder}
+          onClose={() => {
+            if (isSubmittingOrder) return
+            setIsReserveOpen(false)
+          }}
           onSubmit={() => void submitReservation()}
         />
       ) : null}
@@ -675,18 +754,8 @@ function PublicApp({
   )
 
   function openReservation() {
-    if (!selectedEvent?.id) {
-      setPublicStatus('Select an event first.')
-      return
-    }
-
-    if (!selectedEvent.location_id) {
-      setPublicStatus('Add a location for this event in admin before reservations.')
-      return
-    }
-
-    if (!selectedTicketType?.id) {
-      setPublicStatus('Add a ticket type for this event in admin before reservations.')
+    if (reserveBlockedMessage) {
+      setPublicStatus(reserveBlockedMessage)
       return
     }
 
@@ -694,13 +763,15 @@ function PublicApp({
   }
 
   async function submitReservation() {
-    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return
+    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id || isSubmittingOrder) return
 
     const suffix = Date.now().toString(36)
     let customerId = `customer-${suffix}`
     const orderId = `order-${suffix}`
     const unitPrice = selectedTicketType.price_paisa ?? 0
     const total = unitPrice * quantity
+
+    setIsSubmittingOrder(true)
 
     try {
       const existingUsers = await fetchJson<ApiListResponse>(
@@ -775,7 +846,18 @@ function PublicApp({
       setIsReserveOpen(false)
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
+    } finally {
+      setIsSubmittingOrder(false)
     }
+  }
+
+  function getReserveBlockedMessage() {
+    if (isSubmittingOrder) return 'Order is being created. Please wait.'
+    if (!selectedEvent?.id) return 'Select an event first.'
+    if (!selectedEvent.location_id) return 'Add a location for this event in admin before reservations.'
+    if (isTicketTypesLoading) return 'Loading ticket types...'
+    if (!selectedTicketType?.id) return 'Add a ticket type for this event in admin before reservations.'
+    return ''
   }
 }
 
@@ -785,6 +867,7 @@ function ReservationModal({
   quantity,
   ticketType,
   totalPaisa,
+  isSubmitting,
   setForm,
   onClose,
   onSubmit
@@ -794,6 +877,7 @@ function ReservationModal({
   quantity: number
   ticketType?: TicketType
   totalPaisa: number
+  isSubmitting: boolean
   setForm: (value: Record<'first_name' | 'last_name' | 'email' | 'phone_number', string>) => void
   onClose: () => void
   onSubmit: () => void
@@ -806,7 +890,7 @@ function ReservationModal({
             <p className="admin-breadcrumb">{event?.name ?? 'Reservation'}</p>
             <h2>Reserve tickets</h2>
           </div>
-          <button aria-label="Close modal" type="button" onClick={onClose}>
+          <button aria-label="Close modal" disabled={isSubmitting} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
@@ -815,6 +899,7 @@ function ReservationModal({
             <label key={field}>
               <span>{formatResourceName(field)}</span>
               <input
+                disabled={isSubmitting}
                 value={form[field]}
                 onChange={(event) => setForm({ ...form, [field]: event.target.value })}
               />
@@ -826,10 +911,10 @@ function ReservationModal({
           <strong>{formatMoney(totalPaisa)}</strong>
         </div>
         <footer className="record-modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary-admin-button" type="button" onClick={onSubmit}>
-            <Save size={17} />
-            Create order
+          <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
+          <button className="primary-admin-button" disabled={isSubmitting} type="button" onClick={onSubmit}>
+            {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+            {isSubmitting ? 'Creating order...' : 'Create order'}
           </button>
         </footer>
       </section>
@@ -1010,11 +1095,15 @@ function LoginRequired({ onLoginClick }: { onLoginClick: () => void }) {
 function AdminApp({
   user,
   onLoginClick,
-  onLogout
+  onLogout,
+  theme,
+  onToggleTheme
 }: {
   user: AuthUser
   onLoginClick: () => void
   onLogout: () => void
+  theme: 'dark' | 'light'
+  onToggleTheme: () => void
 }) {
   const [resources, setResources] = useState(fallbackResources)
   const isAdminUser = user?.webrole === 'Admin'
@@ -1028,6 +1117,14 @@ function AdminApp({
   const [filter, setFilter] = useState('')
   const [status, setStatus] = useState('Ready')
   const [isLoading, setIsLoading] = useState(false)
+  const [isSavingRecord, setIsSavingRecord] = useState(false)
+  const [recordError, setRecordError] = useState('')
+  const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
+  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>({
+    eventsLoaded: 0,
+    ticketTypes: 0,
+    currentTotalPaisa: 0
+  })
 
   const filteredRecords = useMemo(() => {
     const query = filter.trim().toLowerCase()
@@ -1043,11 +1140,23 @@ function AdminApp({
     () => Math.max(1, ...recentTrend.map((item) => item.count)),
     [recentTrend]
   )
-  const latestRecordActivity = useMemo(() => getLatestRecordActivity(records), [records])
   const visibleResources = useMemo(
     () => resources.filter((resource) => roleAccess[selectedWebRole][resource]),
     [resources, selectedWebRole]
   )
+  const visibleResourceGroups = useMemo(() => {
+    const sections = adminResourceGroups
+      .map((group) => ({
+        ...group,
+        resources: group.resources.filter((resource) => visibleResources.includes(resource))
+      }))
+      .filter((group) => group.resources.length > 0)
+    const ungroupedResources = visibleResources.filter((resource) => !groupedAdminResources.has(resource))
+
+    return ungroupedResources.length > 0
+      ? [...sections, { label: 'More', resources: ungroupedResources }]
+      : sections
+  }, [visibleResources])
   const selectedPermissions = roleAccess[selectedWebRole][selectedResource] ?? {
     can_create: false,
     can_edit: false,
@@ -1067,6 +1176,10 @@ function AdminApp({
     }
 
     void loadResources()
+  }, [])
+
+  useEffect(() => {
+    void loadDashboardMetrics()
   }, [])
 
   useEffect(() => {
@@ -1102,9 +1215,40 @@ function AdminApp({
     }
   }
 
+  async function loadDashboardMetrics() {
+    try {
+      const [eventsResponse, ticketTypesResponse, ordersResponse] = await Promise.all([
+        fetchJson<ApiListResponse>('/api/events?limit=1000'),
+        fetchJson<ApiListResponse>('/api/ticket_types?limit=1000'),
+        fetchJson<ApiListResponse>('/api/orders?limit=1000')
+      ])
+
+      const currentTotalPaisa = (ordersResponse.data.data ?? []).reduce(
+        (total, order) => total + Number(order.total_amount_paisa ?? 0),
+        0
+      )
+
+      setDashboardMetrics({
+        eventsLoaded: eventsResponse.data.data?.length ?? 0,
+        ticketTypes: ticketTypesResponse.data.data?.length ?? 0,
+        currentTotalPaisa
+      })
+    } catch {
+      setDashboardMetrics({
+        eventsLoaded: 0,
+        ticketTypes: 0,
+        currentTotalPaisa: 0
+      })
+    }
+  }
+
   function openCreateModal() {
     setSelectedRecord(null)
+    setRecordError('')
     const values = toFormValues(samplePayloads[selectedResource] ?? {})
+    if (selectedResource === 'events') {
+      values.location_template_id = ''
+    }
     setFormValues(values)
     setModalMode('create')
     void loadLookupOptions(values)
@@ -1117,15 +1261,37 @@ function AdminApp({
     }
 
     setSelectedRecord(record)
+    setRecordError('')
     const values = toFormValues(record)
-    setFormValues(values)
     setModalMode('edit')
     void loadLookupOptions(values)
+    if (selectedResource !== 'events') {
+      setFormValues(values)
+      return
+    }
+
+    void (async () => {
+      const enriched = { ...values }
+      const eventId = record.id ? String(record.id) : ''
+      if (eventId) {
+        try {
+          const locationResponse = await fetchJson<ApiListResponse>(
+            `/api/event_locations?event_id=${encodeURIComponent(eventId)}&limit=1`
+          )
+          const location = locationResponse.data.data?.[0]
+          enriched.location_template_id = String(location?.id ?? '')
+        } catch {
+          enriched.location_template_id = ''
+        }
+      }
+      setFormValues(enriched)
+    })()
   }
 
   function closeModal() {
     setModalMode(null)
     setFormValues({})
+    setRecordError('')
   }
 
   async function saveRecord() {
@@ -1144,13 +1310,19 @@ function AdminApp({
       selectedResource,
       modalMode === 'edit' ? selectedRecord : undefined
     )
+    const selectedLocationId = selectedResource === 'events' ? String(formValues.location_template_id ?? '') : ''
+    if (selectedResource === 'events') {
+      delete body.location_template_id
+    }
     const url =
       modalMode === 'edit' && selectedRecord?.id
         ? `/api/${selectedResource}/${selectedRecord.id}`
         : `/api/${selectedResource}`
     const method = modalMode === 'edit' ? 'PATCH' : 'POST'
 
+    setRecordError('')
     setIsLoading(true)
+    setIsSavingRecord(true)
     setStatus(`${method} ${formatResourceName(selectedResource)}`)
 
     try {
@@ -1159,15 +1331,29 @@ function AdminApp({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       })
+      if (selectedResource === 'events' && selectedLocationId) {
+        const eventId = String(data.data?.id ?? selectedRecord?.id ?? '')
+        if (eventId) {
+          await fetchJson<ApiMutationResponse>(`/api/event_locations/${selectedLocationId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_id: eventId })
+          })
+        }
+      }
 
       setSelectedRecord(data.data ?? null)
       setStatus(`${modalMode === 'edit' ? 'Updated' : 'Created'} ${formatResourceName(selectedResource)}`)
       closeModal()
       await loadRecords()
+      await loadDashboardMetrics()
     } catch (error) {
-      setStatus(getErrorMessage(error))
+      const message = getErrorMessage(error)
+      setStatus(message)
+      setRecordError(message)
     } finally {
       setIsLoading(false)
+      setIsSavingRecord(false)
     }
   }
 
@@ -1191,6 +1377,7 @@ function AdminApp({
       })
       setStatus(`Deleted ${record.id}`)
       await loadRecords()
+      await loadDashboardMetrics()
     } catch (error) {
       setStatus(getErrorMessage(error))
     } finally {
@@ -1259,6 +1446,7 @@ function AdminApp({
       setSelectedResource('events')
       setStatus('Starter data created')
       await loadRecords('events')
+      await loadDashboardMetrics()
     } catch (error) {
       setStatus(getErrorMessage(error))
     } finally {
@@ -1294,8 +1482,31 @@ function AdminApp({
       })
     )
 
+    if (selectedResource === 'events') {
+      try {
+        const { data } = await fetchJson<ApiListResponse>('/api/event_locations?limit=100')
+        nextOptions.location_template_id = data.data ?? []
+      } catch {
+        nextOptions.location_template_id = []
+      }
+    }
+
     setLookupOptions(nextOptions)
   }
+
+  function toggleMenuGroup(groupLabel: string) {
+    setCollapsedMenuGroups((current) => {
+      const next = new Set(current)
+      if (next.has(groupLabel)) {
+        next.delete(groupLabel)
+      } else {
+        next.add(groupLabel)
+      }
+      return next
+    })
+  }
+
+  let adminMenuItemIndex = 0
 
   return (
     <div className="admin-app">
@@ -1325,16 +1536,44 @@ function AdminApp({
           </label>
         ) : null}
         <nav className="admin-menu" aria-label="Admin resources">
-          {visibleResources.map((resource) => (
-            <button
-              className={resource === selectedResource ? 'active' : ''}
-              key={resource}
-              type="button"
-              onClick={() => setSelectedResource(resource)}
+          {visibleResourceGroups.map((group) => (
+            <section
+              className={collapsedMenuGroups.has(group.label) ? 'admin-menu-section collapsed' : 'admin-menu-section'}
+              key={group.label}
+              aria-label={group.label}
             >
-              <Database size={17} />
-              <span>{formatResourceName(resource)}</span>
-            </button>
+              <button
+                aria-expanded={!collapsedMenuGroups.has(group.label)}
+                className="admin-menu-heading"
+                type="button"
+                onClick={() => toggleMenuGroup(group.label)}
+              >
+                <span>{group.label}</span>
+                <ChevronDown size={15} />
+              </button>
+              <div
+                className="admin-menu-items"
+                style={{ maxHeight: collapsedMenuGroups.has(group.label) ? 0 : `${group.resources.length * 46}px` }}
+              >
+                {group.resources.map((resource) => {
+                  const itemIndex = adminMenuItemIndex++
+                  const MenuIcon = getAdminResourceIcon(resource)
+
+                  return (
+                    <button
+                      className={resource === selectedResource ? 'active' : ''}
+                      key={resource}
+                      style={{ animationDelay: `${itemIndex * 28}ms` }}
+                      type="button"
+                      onClick={() => setSelectedResource(resource)}
+                    >
+                      <MenuIcon size={17} />
+                      <span>{formatResourceName(resource)}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
           ))}
         </nav>
       </aside>
@@ -1348,13 +1587,20 @@ function AdminApp({
           <div className="admin-header-actions">
             {user ? null : (
               <button type="button" onClick={onLoginClick}>
+                <LogIn size={17} />
                 Login
               </button>
             )}
+            <button type="button" onClick={onToggleTheme}>
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
             <a className="admin-link-button" href="/">
+              <Home size={17} />
               Public site
             </a>
             <button type="button" onClick={() => void onLogout()}>
+              <LogOut size={17} />
               Logout
             </button>
             <button type="button" onClick={() => void seedStarterData()}>
@@ -1368,29 +1614,29 @@ function AdminApp({
           <div className="info-box">
             <LayoutDashboard size={24} />
             <div>
-              <span>Total records</span>
-              <strong>{totalRecords}</strong>
+              <span>Events loaded</span>
+              <strong>{dashboardMetrics.eventsLoaded}</strong>
             </div>
           </div>
           <div className="info-box">
             <CalendarDays size={24} />
             <div>
-              <span>Resource</span>
-              <strong>{formatResourceName(selectedResource)}</strong>
+              <span>Ticket types</span>
+              <strong>{dashboardMetrics.ticketTypes}</strong>
             </div>
           </div>
           <div className="info-box">
             <Database size={24} />
             <div>
-              <span>API endpoint</span>
-              <strong>/api/{selectedResource}</strong>
+              <span>Current total</span>
+              <strong>{formatMoney(dashboardMetrics.currentTotalPaisa)}</strong>
             </div>
           </div>
           <div className="info-box">
             <Activity size={24} />
             <div>
-              <span>Latest activity</span>
-              <strong>{latestRecordActivity}</strong>
+              <span>Total records</span>
+              <strong>{totalRecords}</strong>
             </div>
           </div>
         </div>
@@ -1536,7 +1782,9 @@ function AdminApp({
 
       {modalMode ? (
         <RecordModal
+          errorMessage={recordError}
           formValues={formValues}
+          isSaving={isSavingRecord}
           lookupOptions={lookupOptions}
           mode={modalMode}
           resource={selectedResource}
@@ -1550,7 +1798,9 @@ function AdminApp({
 }
 
 function RecordModal({
+  errorMessage,
   formValues,
+  isSaving,
   lookupOptions,
   mode,
   resource,
@@ -1558,7 +1808,9 @@ function RecordModal({
   onClose,
   onSave
 }: {
+  errorMessage: string
   formValues: Record<string, string>
+  isSaving: boolean
   lookupOptions: Record<string, ApiRecord[]>
   mode: 'create' | 'edit'
   resource: string
@@ -1567,6 +1819,7 @@ function RecordModal({
   onSave: () => void
 }) {
   const fields = Object.keys(formValues).filter((field) => !isAlwaysHiddenFormField(field))
+  const canEditField = (field: string) => !isFieldReadOnly(field, mode)
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -1587,7 +1840,7 @@ function RecordModal({
               <span>{formatResourceName(field)}</span>
               {getFieldSelectOptions(resource, field).length ? (
                 <select
-                  disabled={mode === 'edit' && field === 'id'}
+                  disabled={isSaving || !canEditField(field)}
                   value={formValues[field] ?? ''}
                   onChange={(event) =>
                     setFormValues({
@@ -1605,14 +1858,16 @@ function RecordModal({
                 </select>
               ) : lookupOptions[field]?.length ? (
                 <select
-                  disabled={mode === 'edit' && field === 'id'}
+                  disabled={isSaving || !canEditField(field)}
                   value={formValues[field] ?? ''}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextValue = event.target.value
+
                     setFormValues({
                       ...formValues,
-                      [field]: event.target.value
+                      [field]: nextValue
                     })
-                  }
+                  }}
                 >
                   <option value="">Select {formatResourceName(field)}</option>
                   {lookupOptions[field].map((option) => (
@@ -1624,6 +1879,7 @@ function RecordModal({
               ) : isBooleanField(field) ? (
                 <button
                   className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
+                  disabled={isSaving || !canEditField(field)}
                   type="button"
                   onClick={() =>
                     setFormValues({
@@ -1636,7 +1892,7 @@ function RecordModal({
                 </button>
               ) : (
                 <input
-                  disabled={mode === 'edit' && field === 'id'}
+                  disabled={isSaving || !canEditField(field)}
                   step={isDateTimeField(field) ? 60 : undefined}
                   type={isDateTimeField(field) ? 'datetime-local' : 'text'}
                   value={formValues[field] ?? ''}
@@ -1651,14 +1907,15 @@ function RecordModal({
             </label>
           ))}
         </div>
+        {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
 
         <footer className="record-modal-actions">
-          <button type="button" onClick={onClose}>
+          <button disabled={isSaving} type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="primary-admin-button" type="button" onClick={onSave}>
-            <Save size={17} />
-            Save
+          <button className="primary-admin-button" disabled={isSaving} type="button" onClick={onSave}>
+            {isSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+            {isSaving ? 'Saving...' : 'Save'}
           </button>
         </footer>
       </section>
@@ -1788,32 +2045,6 @@ function getRecentRecordTrend(records: ApiRecord[]) {
   return dayBuckets
 }
 
-function getLatestRecordActivity(records: ApiRecord[]) {
-  let latestTimestamp = 0
-
-  for (const record of records) {
-    const candidate =
-      record.updated_at ??
-      record.created_at ??
-      record.start_datetime ??
-      record.end_datetime ??
-      record.order_datetime
-    if (!candidate || typeof candidate !== 'string') continue
-    const parsed = new Date(candidate).getTime()
-    if (!Number.isNaN(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  if (!latestTimestamp) return 'No timestamp'
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(new Date(latestTimestamp))
-}
-
 function formatCellValue(column: string, value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
   if (isBooleanField(column)) {
@@ -1879,12 +2110,34 @@ function isAlwaysHiddenFormField(field: string) {
   return ['id', 'password_hash', 'google_sub', 'auth_provider', 'avatar_url', 'last_login_at'].includes(field)
 }
 
+function isFieldReadOnly(field: string, mode: 'create' | 'edit') {
+  if (mode === 'edit' && field === 'id') return true
+  return ['created_at', 'updated_at', 'last_login_at'].includes(field)
+}
+
 function getInitials(user: AuthUser) {
   const source = user?.email ?? user?.first_name ?? 'AD'
   return source.slice(0, 2).toUpperCase()
 }
 
+function getAdminResourceIcon(resource: string) {
+  if (['users', 'customers'].includes(resource)) return Users
+  if (['web_roles', 'user_web_roles', 'web_role_menu_items'].includes(resource)) return ShieldCheck
+  if (['organizations', 'organization_users'].includes(resource)) return Building2
+  if (['events', 'event_locations'].includes(resource)) return CalendarDays
+  if (['ticket_types', 'tickets'].includes(resource)) return Ticket
+  if (resource === 'ticket_scans') return UserCog
+  if (['orders', 'order_items'].includes(resource)) return ShoppingCart
+  if (resource === 'payments') return CreditCard
+  if (['coupons', 'coupon_redemptions'].includes(resource)) return Ticket
+  if (resource === 'files') return FileText
+  if (resource === 'messages') return Mail
+  if (resource === 'notification_queue') return Bell
+  return Database
+}
+
 function formatResourceName(resource: string) {
+  if (resource === 'location_template_id') return 'location'
   return resource.replaceAll('_', ' ')
 }
 
