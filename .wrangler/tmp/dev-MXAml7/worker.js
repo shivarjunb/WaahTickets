@@ -2958,6 +2958,536 @@ function listResources() {
 }
 __name(listResources, "listResources");
 
+// src/notifications/service.ts
+var ORDER_SUCCESS_STATUSES = /* @__PURE__ */ new Set(["paid", "completed", "confirmed"]);
+var PAYMENT_SUCCESS_STATUSES = /* @__PURE__ */ new Set(["paid", "completed", "verified", "success", "succeeded"]);
+var MESSAGE_TYPE = "order_confirmation_receipt_ticket_pdf";
+var MAX_RETRY_ATTEMPTS = 5;
+async function maybeEnqueueOrderNotification(args) {
+  const { env, tableName, row } = args;
+  if (!env.DB || !env.EMAIL_QUEUE) {
+    return;
+  }
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return;
+  }
+  const mutation = row;
+  let orderId = null;
+  if (tableName === "orders") {
+    const status = asString(mutation.status)?.toLowerCase();
+    const id = asString(mutation.id);
+    if (status && id && ORDER_SUCCESS_STATUSES.has(status)) {
+      orderId = id;
+    }
+  }
+  if (tableName === "payments") {
+    const status = asString(mutation.status)?.toLowerCase();
+    const linkedOrderId = asString(mutation.order_id);
+    if (status && linkedOrderId && PAYMENT_SUCCESS_STATUSES.has(status)) {
+      orderId = linkedOrderId;
+    }
+  }
+  if (!orderId) {
+    return;
+  }
+  const orderContext = await env.DB.prepare(
+    `SELECT orders.order_number, users.email AS customer_email
+       FROM orders
+       JOIN users ON users.id = orders.customer_id
+       WHERE orders.id = ?
+       LIMIT 1`
+  ).bind(orderId).first();
+  if (!orderContext?.customer_email) {
+    return;
+  }
+  const existing = await env.DB.prepare(
+    `SELECT notification_queue.id
+       FROM notification_queue
+       JOIN messages ON messages.id = notification_queue.message_id
+       WHERE messages.regarding_entity_type = 'order'
+         AND messages.regarding_entity_id = ?
+         AND messages.message_type = ?
+         AND notification_queue.status IN ('pending', 'processing', 'sent')
+       LIMIT 1`
+  ).bind(orderId, MESSAGE_TYPE).first();
+  if (existing) {
+    return;
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const messageId = crypto.randomUUID();
+  const queueEntryId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO messages (
+        id, message_type, subject, content, recipient_email,
+        regarding_entity_type, regarding_entity_id, status,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'order', ?, 'queued', ?, ?)`
+  ).bind(
+    messageId,
+    MESSAGE_TYPE,
+    `Order confirmation queued - ${orderContext.order_number}`,
+    "Order confirmation is queued for delivery.",
+    orderContext.customer_email,
+    orderId,
+    now,
+    now
+  ).run();
+  await env.DB.prepare(
+    `INSERT INTO notification_queue (
+        id, message_id, channel, status, queued_at,
+        retry_count, provider, created_at, updated_at
+      ) VALUES (?, ?, 'email', 'pending', ?, 0, 'cloudflare-queues', ?, ?)`
+  ).bind(queueEntryId, messageId, now, now, now).run();
+  try {
+    await env.EMAIL_QUEUE.send({
+      queueEntryId,
+      messageId,
+      orderId,
+      recipientEmail: orderContext.customer_email,
+      queuedAt: now
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await markQueueEntryFailed(env.DB, queueEntryId, messageId, 0, message);
+    throw error;
+  }
+}
+__name(maybeEnqueueOrderNotification, "maybeEnqueueOrderNotification");
+async function consumeOrderNotifications(batch, env) {
+  if (!env.DB) {
+    batch.retryAll();
+    return;
+  }
+  for (const message of batch.messages) {
+    const payload = message.body;
+    if (!isEmailQueueMessage(payload)) {
+      message.ack();
+      continue;
+    }
+    try {
+      await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts);
+      const snapshot = await loadOrderSnapshot(env.DB, payload.orderId);
+      const email = buildOrderEmail(snapshot);
+      const pdfBytes = buildTicketPdf(snapshot);
+      const providerResult = await sendOrderEmail({
+        env,
+        to: payload.recipientEmail,
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
+        pdfBytes,
+        orderNumber: snapshot.order.orderNumber
+      });
+      await markQueueEntrySent({
+        db: env.DB,
+        queueEntryId: payload.queueEntryId,
+        messageId: payload.messageId,
+        subject: email.subject,
+        content: email.text,
+        provider: providerResult.provider,
+        providerMessageId: providerResult.providerMessageId
+      });
+      message.ack();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (message.attempts >= MAX_RETRY_ATTEMPTS) {
+        await markQueueEntryFailed(env.DB, payload.queueEntryId, payload.messageId, message.attempts, errorMessage);
+        message.ack();
+      } else {
+        await markQueueEntryPending(env.DB, payload.queueEntryId, message.attempts, errorMessage);
+        message.retry();
+      }
+    }
+  }
+}
+__name(consumeOrderNotifications, "consumeOrderNotifications");
+async function loadOrderSnapshot(db, orderId) {
+  const orderRow = await db.prepare(
+    `SELECT
+        orders.id,
+        orders.order_number,
+        orders.status,
+        orders.total_amount_paisa,
+        orders.currency,
+        orders.order_datetime,
+        users.email AS customer_email,
+        users.first_name,
+        users.last_name,
+        events.name AS event_name,
+        events.start_datetime AS event_start_datetime,
+        event_locations.name AS location_name,
+        event_locations.address AS location_address
+      FROM orders
+      JOIN users ON users.id = orders.customer_id
+      JOIN events ON events.id = orders.event_id
+      JOIN event_locations ON event_locations.id = orders.event_location_id
+      WHERE orders.id = ?
+      LIMIT 1`
+  ).bind(orderId).first();
+  if (!orderRow || !orderRow.customer_email) {
+    throw new Error(`Order ${orderId} is missing data for email delivery.`);
+  }
+  const [itemsResult, ticketsResult, paymentRow] = await Promise.all([
+    db.prepare(
+      `SELECT
+          ticket_types.name AS ticket_type_name,
+          order_items.quantity,
+          order_items.unit_price_paisa,
+          order_items.total_amount_paisa
+        FROM order_items
+        JOIN ticket_types ON ticket_types.id = order_items.ticket_type_id
+        WHERE order_items.order_id = ?
+        ORDER BY order_items.created_at ASC`
+    ).bind(orderId).all(),
+    db.prepare(
+      `SELECT ticket_number, qr_code_value, status
+         FROM tickets
+         WHERE order_id = ?
+         ORDER BY created_at ASC`
+    ).bind(orderId).all(),
+    db.prepare(
+      `SELECT payment_provider, status, verified_datetime
+         FROM payments
+         WHERE order_id = ?
+         ORDER BY COALESCE(verified_datetime, payment_datetime, created_at) DESC
+         LIMIT 1`
+    ).bind(orderId).first()
+  ]);
+  return {
+    order: {
+      id: orderRow.id,
+      orderNumber: orderRow.order_number,
+      status: orderRow.status,
+      totalAmountPaisa: orderRow.total_amount_paisa,
+      currency: orderRow.currency,
+      orderDateTime: orderRow.order_datetime
+    },
+    customer: {
+      fullName: [orderRow.first_name, orderRow.last_name].filter(Boolean).join(" ").trim() || "Customer",
+      email: orderRow.customer_email
+    },
+    event: {
+      name: orderRow.event_name,
+      startsAt: orderRow.event_start_datetime,
+      locationName: orderRow.location_name,
+      locationAddress: orderRow.location_address
+    },
+    items: itemsResult.results.map((item) => ({
+      ticketTypeName: item.ticket_type_name,
+      quantity: item.quantity,
+      unitPricePaisa: item.unit_price_paisa,
+      totalAmountPaisa: item.total_amount_paisa
+    })),
+    tickets: ticketsResult.results.map((ticket) => ({
+      ticketNumber: ticket.ticket_number,
+      qrCodeValue: ticket.qr_code_value,
+      status: ticket.status
+    })),
+    payment: {
+      provider: paymentRow?.payment_provider ?? null,
+      status: paymentRow?.status ?? null,
+      verifiedAt: paymentRow?.verified_datetime ?? null
+    }
+  };
+}
+__name(loadOrderSnapshot, "loadOrderSnapshot");
+function buildOrderEmail(snapshot) {
+  const orderDate = formatIsoDate(snapshot.order.orderDateTime);
+  const eventDate = formatIsoDate(snapshot.event.startsAt);
+  const totalPaid = formatMoney(snapshot.order.totalAmountPaisa, snapshot.order.currency);
+  const ticketSummary = snapshot.tickets.length ? snapshot.tickets.map((ticket) => `${ticket.ticketNumber} (${ticket.status})`).join(", ") : "No ticket records were found for this order.";
+  const subject = `Your ticket confirmation and receipt (${snapshot.order.orderNumber})`;
+  const text = [
+    `Hi ${snapshot.customer.fullName},`,
+    "",
+    "Your ticket purchase is confirmed.",
+    `Order: ${snapshot.order.orderNumber}`,
+    `Order date: ${orderDate}`,
+    `Event: ${snapshot.event.name}`,
+    `Event date: ${eventDate}`,
+    `Venue: ${snapshot.event.locationName}`,
+    `Total paid: ${totalPaid}`,
+    `Tickets: ${ticketSummary}`,
+    "",
+    "A ticket PDF is attached to this email.",
+    "Thanks for booking with WaahTickets."
+  ].join("\n");
+  const linesHtml = snapshot.items.map(
+    (item) => `<tr><td>${escapeHtml(item.ticketTypeName)}</td><td>${item.quantity}</td><td>${escapeHtml(
+      formatMoney(item.unitPricePaisa, snapshot.order.currency)
+    )}</td><td>${escapeHtml(formatMoney(item.totalAmountPaisa, snapshot.order.currency))}</td></tr>`
+  ).join("");
+  const html = `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111"><p>Hi ${escapeHtml(snapshot.customer.fullName)},</p><p>Your ticket purchase is confirmed.</p><ul><li><strong>Order</strong>: ${escapeHtml(snapshot.order.orderNumber)}</li><li><strong>Order date</strong>: ${escapeHtml(orderDate)}</li><li><strong>Event</strong>: ${escapeHtml(snapshot.event.name)}</li><li><strong>Event date</strong>: ${escapeHtml(eventDate)}</li><li><strong>Venue</strong>: ${escapeHtml(snapshot.event.locationName)}</li><li><strong>Total paid</strong>: ${escapeHtml(totalPaid)}</li></ul><table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#ddd"><thead><tr><th align="left">Ticket Type</th><th align="left">Qty</th><th align="left">Unit Price</th><th align="left">Line Total</th></tr></thead><tbody>${linesHtml}</tbody></table><p>A ticket PDF is attached to this email.</p><p>Thanks for booking with WaahTickets.</p></div>`;
+  return { subject, text, html };
+}
+__name(buildOrderEmail, "buildOrderEmail");
+function buildTicketPdf(snapshot) {
+  const lines = [
+    "WaahTickets Ticket Pack",
+    "",
+    `Order Number: ${snapshot.order.orderNumber}`,
+    `Order Date: ${formatIsoDate(snapshot.order.orderDateTime)}`,
+    `Customer: ${snapshot.customer.fullName}`,
+    `Customer Email: ${snapshot.customer.email}`,
+    `Payment Status: ${snapshot.payment.status ?? "unknown"}`,
+    `Payment Provider: ${snapshot.payment.provider ?? "unknown"}`,
+    snapshot.payment.verifiedAt ? `Payment Verified At: ${formatIsoDate(snapshot.payment.verifiedAt)}` : "",
+    `Total Paid: ${formatMoney(snapshot.order.totalAmountPaisa, snapshot.order.currency)}`,
+    "",
+    `Event: ${snapshot.event.name}`,
+    `Event Date: ${formatIsoDate(snapshot.event.startsAt)}`,
+    `Venue: ${snapshot.event.locationName}`,
+    snapshot.event.locationAddress ? `Address: ${snapshot.event.locationAddress}` : "",
+    "",
+    "Tickets:"
+  ];
+  if (snapshot.tickets.length === 0) {
+    lines.push("- No ticket rows found for this order.");
+  } else {
+    for (const ticket of snapshot.tickets) {
+      lines.push(`- ${ticket.ticketNumber} | status: ${ticket.status} | qr: ${ticket.qrCodeValue}`);
+    }
+  }
+  lines.push("", "Bring a valid photo ID with this ticket at entry.");
+  return buildSimplePdf(lines.filter(Boolean));
+}
+__name(buildTicketPdf, "buildTicketPdf");
+function buildSimplePdf(lines) {
+  const objects = [];
+  const pushObject = /* @__PURE__ */ __name((value) => {
+    objects.push(value);
+    return objects.length;
+  }, "pushObject");
+  const catalog = pushObject("");
+  const pages = pushObject("");
+  const font = pushObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const pageIds = [];
+  const pageChunks = chunkLines(lines, 42);
+  for (const chunk of pageChunks) {
+    const stream = renderPageContent(chunk);
+    const contentId = pushObject(`<< /Length ${byteLength(stream)} >>
+stream
+${stream}
+endstream`);
+    const pageId = pushObject(
+      `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${contentId} 0 R >>`
+    );
+    pageIds.push(pageId);
+  }
+  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pages} 0 R >>`;
+  objects[pages - 1] = `<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] >>`;
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(byteLength(pdf));
+    pdf += `${index + 1} 0 obj
+${objects[index]}
+endobj
+`;
+  }
+  const xref = byteLength(pdf);
+  pdf += `xref
+0 ${objects.length + 1}
+`;
+  pdf += "0000000000 65535 f \n";
+  for (let index = 1; index < offsets.length; index += 1) {
+    pdf += `${offsets[index].toString().padStart(10, "0")} 00000 n 
+`;
+  }
+  pdf += `trailer
+<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>
+startxref
+${xref}
+%%EOF`;
+  return new TextEncoder().encode(pdf);
+}
+__name(buildSimplePdf, "buildSimplePdf");
+function renderPageContent(lines) {
+  const ops = ["BT", "/F1 12 Tf", "72 760 Td"];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (index > 0) {
+      ops.push("0 -16 Td");
+    }
+    ops.push(`(${escapePdfText(lines[index])}) Tj`);
+  }
+  ops.push("ET");
+  return ops.join("\n");
+}
+__name(renderPageContent, "renderPageContent");
+async function sendOrderEmail(args) {
+  const { env, to, subject, text, html, pdfBytes, orderNumber } = args;
+  if (!env.SENDGRID_API_KEY) {
+    throw new Error("Missing SENDGRID_API_KEY binding.");
+  }
+  if (!env.EMAIL_FROM) {
+    throw new Error("Missing EMAIL_FROM binding.");
+  }
+  const from = parseEmailFrom(env.EMAIL_FROM);
+  const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      personalizations: [
+        {
+          to: [{ email: to }]
+        }
+      ],
+      from,
+      subject,
+      content: [
+        { type: "text/plain", value: text },
+        { type: "text/html", value: html }
+      ],
+      attachments: [
+        {
+          content: toBase642(pdfBytes),
+          filename: `tickets-${orderNumber}.pdf`,
+          type: "application/pdf",
+          disposition: "attachment"
+        }
+      ]
+    })
+  });
+  if (!response.ok) {
+    const details = await readTextSafe(response);
+    throw new Error(`Email provider call failed (${response.status}): ${details}`);
+  }
+  const messageId = response.headers.get("x-message-id");
+  return {
+    provider: "sendgrid",
+    providerMessageId: messageId
+  };
+}
+__name(sendOrderEmail, "sendOrderEmail");
+async function markQueueEntryProcessing(db, queueEntryId, attempts) {
+  await db.prepare(
+    `UPDATE notification_queue
+       SET status = 'processing', retry_count = ?, updated_at = ?
+       WHERE id = ?`
+  ).bind(Math.max(0, attempts - 1), (/* @__PURE__ */ new Date()).toISOString(), queueEntryId).run();
+}
+__name(markQueueEntryProcessing, "markQueueEntryProcessing");
+async function markQueueEntryPending(db, queueEntryId, attempts, lastError) {
+  await db.prepare(
+    `UPDATE notification_queue
+       SET status = 'pending', retry_count = ?, last_error = ?, updated_at = ?
+       WHERE id = ?`
+  ).bind(attempts, lastError.slice(0, 1e3), (/* @__PURE__ */ new Date()).toISOString(), queueEntryId).run();
+}
+__name(markQueueEntryPending, "markQueueEntryPending");
+async function markQueueEntrySent(args) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  await args.db.prepare(
+    `UPDATE notification_queue
+       SET status = 'sent', sent_at = ?, provider = ?, provider_message_id = ?, last_error = NULL, updated_at = ?
+       WHERE id = ?`
+  ).bind(now, args.provider, args.providerMessageId, now, args.queueEntryId).run();
+  await args.db.prepare(
+    `UPDATE messages
+       SET status = 'sent', subject = ?, content = ?, updated_at = ?
+       WHERE id = ?`
+  ).bind(args.subject, args.content, now, args.messageId).run();
+}
+__name(markQueueEntrySent, "markQueueEntrySent");
+async function markQueueEntryFailed(db, queueEntryId, messageId, attempts, lastError) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  await db.prepare(
+    `UPDATE notification_queue
+       SET status = 'failed', retry_count = ?, last_error = ?, updated_at = ?
+       WHERE id = ?`
+  ).bind(attempts, lastError.slice(0, 1e3), now, queueEntryId).run();
+  await db.prepare(
+    `UPDATE messages
+       SET status = 'failed', updated_at = ?
+       WHERE id = ?`
+  ).bind(now, messageId).run();
+}
+__name(markQueueEntryFailed, "markQueueEntryFailed");
+function asString(value) {
+  return typeof value === "string" ? value : null;
+}
+__name(asString, "asString");
+function isEmailQueueMessage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const row = value;
+  return typeof row.queueEntryId === "string" && typeof row.messageId === "string" && typeof row.orderId === "string" && typeof row.recipientEmail === "string" && typeof row.queuedAt === "string";
+}
+__name(isEmailQueueMessage, "isEmailQueueMessage");
+function formatIsoDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC"
+  }).format(date);
+}
+__name(formatIsoDate, "formatIsoDate");
+function formatMoney(amountPaisa, currency) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amountPaisa / 100);
+}
+__name(formatMoney, "formatMoney");
+function escapeHtml(value) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+__name(escapeHtml, "escapeHtml");
+function escapePdfText(value) {
+  return value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+__name(escapePdfText, "escapePdfText");
+function chunkLines(lines, size) {
+  const chunks = [];
+  for (let index = 0; index < lines.length; index += size) {
+    chunks.push(lines.slice(index, index + size));
+  }
+  return chunks.length > 0 ? chunks : [[""]];
+}
+__name(chunkLines, "chunkLines");
+function byteLength(value) {
+  return new TextEncoder().encode(value).length;
+}
+__name(byteLength, "byteLength");
+function toBase642(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+__name(toBase642, "toBase64");
+async function readTextSafe(response) {
+  try {
+    return (await response.text()).slice(0, 2e3);
+  } catch {
+    return "Unable to read provider response body.";
+  }
+}
+__name(readTextSafe, "readTextSafe");
+function parseEmailFrom(value) {
+  const trimmed = value.trim();
+  const match2 = trimmed.match(/^([^<]+)<([^>]+)>$/);
+  if (!match2) {
+    return { email: trimmed };
+  }
+  return {
+    name: match2[1].trim().replace(/^"|"$/g, ""),
+    email: match2[2].trim()
+  };
+}
+__name(parseEmailFrom, "parseEmailFrom");
+
 // src/api/crud.ts
 var reservedQueryParams = /* @__PURE__ */ new Set(["limit", "offset", "order_by", "order_dir"]);
 var hiddenColumnsByTable = {
@@ -3110,6 +3640,7 @@ crudRoutes.post("/:resource", async (c) => {
   }
   const cache = createCache(c.env);
   await cache.bumpResourceVersion(table.table);
+  await maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result });
   return c.json({ data: sanitizeRowForTable(table.table, result) }, 201);
 });
 crudRoutes.get("/:resource/:id", async (c) => {
@@ -3187,6 +3718,7 @@ crudRoutes.patch("/:resource/:id", async (c) => {
   }
   const cache = createCache(c.env);
   await cache.bumpResourceVersion(table.table);
+  await maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result });
   return c.json({ data: sanitizeRowForTable(table.table, result) });
 });
 crudRoutes.delete("/:resource/:id", async (c) => {
@@ -3786,7 +4318,13 @@ app.notFound((c) => {
 });
 
 // src/worker.ts
-var worker_default = app;
+var worker = {
+  fetch: app.fetch,
+  async queue(batch, env, _ctx) {
+    await consumeOrderNotifications(batch, env);
+  }
+};
+var worker_default = worker;
 
 // node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
 var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
@@ -3879,31 +4417,31 @@ var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
     this.#noRetry();
   }
 };
-function wrapExportedHandler(worker) {
+function wrapExportedHandler(worker2) {
   if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
-    return worker;
+    return worker2;
   }
   for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
     __facade_register__(middleware);
   }
   const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
-    if (worker.fetch === void 0) {
+    if (worker2.fetch === void 0) {
       throw new Error("Handler does not export a fetch() function.");
     }
-    return worker.fetch(request, env, ctx);
+    return worker2.fetch(request, env, ctx);
   }, "fetchDispatcher");
   return {
-    ...worker,
+    ...worker2,
     fetch(request, env, ctx) {
       const dispatcher = /* @__PURE__ */ __name(function(type, init) {
-        if (type === "scheduled" && worker.scheduled !== void 0) {
+        if (type === "scheduled" && worker2.scheduled !== void 0) {
           const controller = new __Facade_ScheduledController__(
             Date.now(),
             init.cron ?? "",
             () => {
             }
           );
-          return worker.scheduled(controller, env, ctx);
+          return worker2.scheduled(controller, env, ctx);
         }
       }, "dispatcher");
       return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
