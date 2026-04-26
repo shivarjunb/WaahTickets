@@ -2,4 +2,5 @@ node_modules
 dist
 .env
 .dev.vars
+secrets.toml
 .DS_Store
