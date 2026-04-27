@@ -254,6 +254,7 @@ const samplePayloads: Record<string, Record<string, unknown>> = {
   },
   ticket_types: {
     event_id: 'replace-with-existing-event-id',
+    event_location_id: 'replace-with-existing-location-id',
     name: 'General Admission',
     price_paisa: 250000,
     quantity_available: 100,
@@ -613,6 +614,14 @@ type AdminDashboardMetrics = {
   eventsLoaded: number
   ticketTypes: number
   currentTotalPaisa: number
+  ticketsSoldLast30Days: number
+  activeUsersLast30Days: number
+  paymentSuccessRate: number
+  queueFailureCountLast30Days: number
+  monthlyTicketSales: Array<{ label: string; count: number }>
+  activityMix: Array<{ label: string; count: number }>
+  paymentStatusMix: Array<{ label: string; count: number }>
+  queueJobsProcessedLast30Days: number
 }
 
 const hiddenTableColumns = new Set([
@@ -644,6 +653,25 @@ const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
 const adminSidebarCollapsedStorageKey = 'waah_admin_sidebar_collapsed'
 const khaltiCheckoutDraftStorageKey = 'waah_khalti_checkout_draft'
 const emptyColumnFilterState: Record<string, string> = {}
+const defaultMonthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
+const defaultAdminDashboardMetrics: AdminDashboardMetrics = {
+  eventsLoaded: 0,
+  ticketTypes: 0,
+  currentTotalPaisa: 0,
+  ticketsSoldLast30Days: 0,
+  activeUsersLast30Days: 0,
+  paymentSuccessRate: 0,
+  queueFailureCountLast30Days: 0,
+  monthlyTicketSales: defaultMonthlyTicketSales,
+  activityMix: [
+    { label: 'Orders', count: 0 },
+    { label: 'Ticket scans', count: 0 },
+    { label: 'Queue jobs', count: 0 },
+    { label: 'Payments', count: 0 }
+  ],
+  paymentStatusMix: [],
+  queueJobsProcessedLast30Days: 0
+}
 
 function loadAdminSubgridRowsPerPage() {
   if (typeof window === 'undefined') return defaultSubgridRowsPerPage
@@ -1474,34 +1502,59 @@ function PublicApp({
             <div className="nav-session-placeholder" aria-hidden="true" />
           ) : user ? (
             <div className="nav-session-actions">
-              <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+              <button
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="secondary-button compact-button mobile-icon-action"
+                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                type="button"
+                onClick={onToggleTheme}
+              >
                 {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
               </button>
               {canAccessTickets ? (
-                <a className="nav-action tickets-nav-action" href="/admin">
+                <a
+                  aria-label="Open tickets dashboard"
+                  className="nav-action tickets-nav-action mobile-icon-action"
+                  href="/admin"
+                  title="Tickets"
+                >
                   <Ticket size={16} />
                   <span>Tickets</span>
                 </a>
               ) : canAccessAdmin ? (
-                <a className="nav-action admin-nav-action" href="/admin">
+                <a
+                  aria-label="Open admin dashboard"
+                  className="nav-action admin-nav-action mobile-icon-action"
+                  href="/admin"
+                  title="Admin dashboard"
+                >
                   <LayoutDashboard size={16} />
                   <span>Admin</span>
                 </a>
               ) : null}
               <button
-                className="secondary-button compact-button logout-nav-button"
+                aria-label="Logout"
+                className="secondary-button compact-button logout-nav-button mobile-icon-action"
+                title="Logout"
                 type="button"
                 onClick={() => void onLogout()}
               >
-                Logout
+                <LogOut size={16} />
+                <span>Logout</span>
               </button>
             </div>
           ) : (
             <div className="nav-session-actions">
-              <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+              <button
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="secondary-button compact-button mobile-icon-action"
+                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                type="button"
+                onClick={onToggleTheme}
+              >
                 {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
               </button>
               <button className="nav-action" type="button" onClick={onLoginClick}>
                 Login
@@ -1576,6 +1629,17 @@ function PublicApp({
           </div>
         </article>
       </section>
+
+      <label className="topbar-search mobile-inline-search">
+        <Search size={15} />
+        <input
+          aria-label="Search events"
+          placeholder="Search events, venues, organizers..."
+          type="search"
+          value={eventSearchQuery}
+          onChange={(event) => setEventSearchQuery(event.target.value)}
+        />
+      </label>
 
       <section className="content-grid events-only-grid">
         {isEventsLoading ? (
@@ -1853,18 +1917,6 @@ function PublicApp({
           khaltiMode={publicPaymentSettings.khalti_mode}
           khaltiNote={publicPaymentSettings.khalti_runtime_note}
         />
-      ) : null}
-
-      {!isCheckoutOpen ? (
-        <button
-          aria-label="Open cart"
-          className="checkout-pill-launcher"
-          type="button"
-          onClick={() => setIsCartOpen(true)}
-        >
-          <ShoppingCart size={16} />
-          <span>Cart ({cartItemCount})</span>
-        </button>
       ) : null}
 
       {selectedEventDetails ? (
@@ -2387,7 +2439,7 @@ function CheckoutModal({
 
   return (
     <div className="modal-backdrop checkout-backdrop" role="presentation">
-      <section className="record-modal checkout-modal checkout-side-modal" role="dialog" aria-modal="true">
+      <section className="record-modal checkout-modal checkout-centered-modal" role="dialog" aria-modal="true">
         <header className="record-modal-header">
           <div>
             <p className="admin-breadcrumb">Ticket checkout</p>
@@ -2442,7 +2494,6 @@ function CheckoutModal({
           </div>
         </div>
         <footer className="record-modal-actions checkout-modal-actions">
-          <button type="button" onClick={onClose}>Close</button>
           <button className="primary-admin-button" disabled={!canReserve} type="button" onClick={onReserve}>
             {isSubmittingOrder
               ? 'Adding...'
@@ -2662,42 +2713,43 @@ function CartCheckoutModal({
               ) : null}
             </fieldset>
           </div>
-
-          <aside className="cart-checkout-summary">
-            <div className="cart-summary-card">
-              <div className="checkout-total">
-                <span>Subtotal</span>
-                <strong>{formatMoney(subtotalPaisa)}</strong>
-              </div>
-              <div className="checkout-line">
-                <span>Event discounts</span>
-                <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
-              </div>
-              <div className="checkout-line">
-                <span>Order discount</span>
-                <strong>-{formatMoney(orderDiscountPaisa)}</strong>
-              </div>
-              <div className="checkout-total grand">
-                <span>Total</span>
-                <strong>{formatMoney(totalPaisa)}</strong>
-              </div>
+        </div>
+        <aside className="cart-checkout-summary">
+          <div className="cart-summary-card">
+            <div className="checkout-total">
+              <span>Subtotal</span>
+              <strong>{formatMoney(subtotalPaisa)}</strong>
             </div>
-            <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
-            <button
-              className="khalti-pay-button"
-              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
-              type="button"
-              onClick={onPayWithKhalti}
-            >
-              <CreditCard size={17} />
-              {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
-            </button>
-            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
-              {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-              {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
-            </button>
-            <p className="checkout-hint">{khaltiNote}</p>
-          </aside>
+            <div className="checkout-line">
+              <span>Event discounts</span>
+              <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
+            </div>
+            <div className="checkout-line">
+              <span>Order discount</span>
+              <strong>-{formatMoney(orderDiscountPaisa)}</strong>
+            </div>
+            <div className="checkout-total grand">
+              <span>Total</span>
+              <strong>{formatMoney(totalPaisa)}</strong>
+            </div>
+          </div>
+          <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
+          <button
+            className="khalti-pay-button"
+            disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+            type="button"
+            onClick={onPayWithKhalti}
+          >
+            <CreditCard size={17} />
+            {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
+          </button>
+          <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
+            {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+            {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
+          </button>
+        </aside>
+        <div className="cart-checkout-note">
+          <p className="checkout-hint">{khaltiNote}</p>
         </div>
       </section>
     </div>
@@ -3277,13 +3329,34 @@ function TicketValidatorApp({
     }
   }
 
+  const scanStateLabel = isCameraActive ? 'Camera live' : 'Camera idle'
+  const lastCheckLabel =
+    statusTone === 'success'
+      ? 'Redeemed'
+      : statusTone === 'warning'
+        ? 'Already redeemed'
+        : statusTone === 'error'
+          ? 'Check failed'
+          : 'Awaiting scan'
+  const queueStateLabel =
+    pendingStatus === 'unredeemed'
+      ? 'Needs confirmation'
+      : pendingStatus === 'already_redeemed'
+        ? 'Already redeemed'
+        : 'No pending ticket'
+
   return (
     <main className="validator-page">
       <header className="validator-header">
         <div>
           <p className="admin-breadcrumb">Home / Ticket validation</p>
           <h1>Ticket Validator</h1>
-          <p>{user?.email ?? 'Signed in validator'} · scan and redeem tickets at entry.</p>
+          <p className="validator-subtitle">{user?.email ?? 'Signed in validator'} · scan and redeem tickets at entry.</p>
+          <div className="validator-status-strip">
+            <span>{scanStateLabel}</span>
+            <span>{lastCheckLabel}</span>
+            <span>{queueStateLabel}</span>
+          </div>
         </div>
         <div className="admin-header-actions">
           <button type="button" onClick={onToggleTheme}>
@@ -3539,11 +3612,7 @@ function AdminApp({
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null)
   const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => loadAdminSidebarCollapsed())
-  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>({
-    eventsLoaded: 0,
-    ticketTypes: 0,
-    currentTotalPaisa: 0
-  })
+  const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(defaultAdminDashboardMetrics)
   const [r2Settings, setR2Settings] = useState<R2SettingsData>({
     r2_binding_name: 'FILES_BUCKET',
     r2_binding_configured: false,
@@ -3597,7 +3666,7 @@ function AdminApp({
     [activeColumnFilterEntries]
   )
   const activeSort = tableSortByResource[selectedResource] ?? null
-  const tableRowsPerPage = 12
+  const tableRowsPerPage = subgridRowsPerPage
   const currentTablePage = Math.max(1, tablePageByResource[selectedResource] ?? 1)
   const currentTableHasMore = tableHasMoreByResource[selectedResource] ?? false
   const webRoleUsersForSelectedRole = useMemo(
@@ -3621,11 +3690,18 @@ function AdminApp({
     return webRoleMenuItemsForSelectedRole.slice(startIndex, startIndex + subgridRowsPerPage)
   }, [subgridPage.menuItems, subgridRowsPerPage, totalMenuSubgridPages, webRoleMenuItemsForSelectedRole])
   const totalRecords = records.length
-  const statusBreakdown = useMemo(() => getStatusBreakdown(records), [records])
-  const recentTrend = useMemo(() => getRecentRecordTrend(records), [records])
-  const recentTrendMax = useMemo(
-    () => Math.max(1, ...recentTrend.map((item) => item.count)),
-    [recentTrend]
+  const isCustomerRoleView = selectedWebRole === 'Customers'
+  const monthlyTicketSalesMax = useMemo(
+    () => Math.max(1, ...dashboardMetrics.monthlyTicketSales.map((item) => item.count)),
+    [dashboardMetrics.monthlyTicketSales]
+  )
+  const activityMixMax = useMemo(
+    () => Math.max(1, ...dashboardMetrics.activityMix.map((item) => item.count)),
+    [dashboardMetrics.activityMix]
+  )
+  const paymentStatusTotal = useMemo(
+    () => dashboardMetrics.paymentStatusMix.reduce((sum, item) => sum + item.count, 0),
+    [dashboardMetrics.paymentStatusMix]
   )
   const visibleResources = useMemo(
     () => resources.filter((resource) => roleAccess[selectedWebRole][resource]),
@@ -3676,7 +3752,7 @@ function AdminApp({
 
   useEffect(() => {
     void loadDashboardMetrics()
-  }, [])
+  }, [selectedWebRole])
 
   useEffect(() => {
     setSelectedRecord(null)
@@ -3690,12 +3766,17 @@ function AdminApp({
     isSettingsView,
     selectedResource,
     currentTablePage,
+    tableRowsPerPage,
     orderCustomerFilter,
     filter,
     activeSort?.column,
     activeSort?.direction,
     activeColumnFilterQueryKey
   ])
+
+  useEffect(() => {
+    setTablePageByResource({})
+  }, [tableRowsPerPage])
 
   useEffect(() => {
     if (selectedResource !== 'orders') {
@@ -4154,8 +4235,8 @@ function AdminApp({
   function saveSubgridRowsPerPage() {
     const parsed = Number.parseInt(subgridRowsInput, 10)
     if (Number.isNaN(parsed)) {
-      setSettingsError('Rows per subgrid page must be a number.')
-      setStatus('Rows per subgrid page must be a number.')
+      setSettingsError('Rows per admin grid page must be a number.')
+      setStatus('Rows per admin grid page must be a number.')
       return
     }
 
@@ -4163,7 +4244,7 @@ function AdminApp({
     setSubgridRowsPerPage(nextValue)
     setSubgridRowsInput(String(nextValue))
     setSettingsError('')
-    setStatus(`Subgrid page size set to ${nextValue} rows`)
+    setStatus(`Admin grid page size set to ${nextValue} rows`)
   }
 
   async function loadRecords(resource = selectedResource, page = currentTablePage) {
@@ -4252,29 +4333,156 @@ function AdminApp({
   }
 
   async function loadDashboardMetrics() {
+    if (selectedWebRole === 'Customers') {
+      setDashboardMetrics(defaultAdminDashboardMetrics)
+      return
+    }
+
     try {
-      const [eventsResponse, ticketTypesResponse, ordersResponse] = await Promise.all([
+      const [
+        eventsResponse,
+        ticketTypesResponse,
+        ordersResponse,
+        ticketsResponse,
+        usersResponse,
+        paymentsResponse,
+        queueResponse,
+        scansResponse
+      ] = await Promise.all([
         fetchJson<ApiListResponse>('/api/events?limit=1000'),
         fetchJson<ApiListResponse>('/api/ticket_types?limit=1000'),
-        fetchJson<ApiListResponse>('/api/orders?limit=1000')
+        fetchJson<ApiListResponse>('/api/orders?limit=1000'),
+        fetchJson<ApiListResponse>('/api/tickets?limit=1000'),
+        fetchJson<ApiListResponse>('/api/users?limit=1000'),
+        fetchJson<ApiListResponse>('/api/payments?limit=1000'),
+        fetchJson<ApiListResponse>('/api/notification_queue?limit=1000'),
+        fetchJson<ApiListResponse>('/api/ticket_scans?limit=1000')
       ])
+
+      const orders = ordersResponse.data.data ?? []
+      const tickets = ticketsResponse.data.data ?? []
+      const users = usersResponse.data.data ?? []
+      const payments = paymentsResponse.data.data ?? []
+      const queueJobs = queueResponse.data.data ?? []
+      const scans = scansResponse.data.data ?? []
 
       const currentTotalPaisa = (ordersResponse.data.data ?? []).reduce(
         (total, order) => total + Number(order.total_amount_paisa ?? 0),
         0
       )
 
+      const nowMs = Date.now()
+      const windowStart = nowMs - 30 * 24 * 60 * 60 * 1000
+      const monthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
+      const monthlyTicketSalesIndex = new Map(monthlyTicketSales.map((item) => [item.label, item]))
+      const activeUsersById = new Set<string>()
+      let ticketsSoldLast30Days = 0
+      let ordersLast30Days = 0
+      let scansLast30Days = 0
+      let paymentsLast30Days = 0
+      let queueJobsProcessedLast30Days = 0
+      let queueFailureCountLast30Days = 0
+      let paymentSuccessCountLast30Days = 0
+      const paymentStatusCount = new Map<string, number>()
+
+      for (const ticket of tickets) {
+        const timestamp = getRecordTimestamp(ticket, ['issued_at', 'created_at', 'updated_at'])
+        if (!timestamp) continue
+        const label = formatMonthLabel(timestamp)
+        const monthlyBucket = monthlyTicketSalesIndex.get(label)
+        if (monthlyBucket) {
+          monthlyBucket.count += 1
+        }
+        if (timestamp >= windowStart) {
+          ticketsSoldLast30Days += 1
+        }
+      }
+
+      for (const userRow of users) {
+        const userId = typeof userRow.id === 'string' ? userRow.id : ''
+        if (!userId) continue
+        const lastLoginTimestamp = parseTimeValue(userRow.last_login_at)
+        if (lastLoginTimestamp && lastLoginTimestamp >= windowStart) {
+          activeUsersById.add(userId)
+        }
+      }
+
+      for (const order of orders) {
+        const timestamp = getRecordTimestamp(order, ['order_datetime', 'created_at', 'updated_at'])
+        if (!timestamp || timestamp < windowStart) continue
+        ordersLast30Days += 1
+        const customerId = typeof order.customer_id === 'string' ? order.customer_id : ''
+        if (customerId) activeUsersById.add(customerId)
+      }
+
+      for (const scan of scans) {
+        const timestamp = getRecordTimestamp(scan, ['scanned_at', 'redeemed_at', 'created_at', 'updated_at'])
+        if (!timestamp || timestamp < windowStart) continue
+        scansLast30Days += 1
+        const scannerId =
+          (typeof scan.redeemed_by === 'string' && scan.redeemed_by) ||
+          (typeof scan.scanned_by === 'string' && scan.scanned_by) ||
+          ''
+        if (scannerId) activeUsersById.add(scannerId)
+      }
+
+      for (const payment of payments) {
+        const timestamp = getRecordTimestamp(payment, ['payment_datetime', 'created_at', 'updated_at'])
+        if (!timestamp || timestamp < windowStart) continue
+        paymentsLast30Days += 1
+
+        const statusLabel = normalizeStatusLabel(payment.status ?? payment.payment_status ?? payment.state)
+        if (statusLabel) {
+          paymentStatusCount.set(statusLabel, (paymentStatusCount.get(statusLabel) ?? 0) + 1)
+        }
+        if (isSuccessfulPaymentStatus(statusLabel)) {
+          paymentSuccessCountLast30Days += 1
+        }
+        const customerId = typeof payment.customer_id === 'string' ? payment.customer_id : ''
+        if (customerId) activeUsersById.add(customerId)
+      }
+
+      for (const queueJob of queueJobs) {
+        const timestamp = getRecordTimestamp(queueJob, ['scheduled_for', 'processed_at', 'created_at', 'updated_at'])
+        if (!timestamp || timestamp < windowStart) continue
+        queueJobsProcessedLast30Days += 1
+        const statusLabel = normalizeStatusLabel(queueJob.status ?? queueJob.delivery_status ?? queueJob.state)
+        const hasErrorMessage = Boolean(
+          String(queueJob.error_message ?? queueJob.last_error ?? queueJob.provider_error ?? '').trim()
+        )
+        if (hasErrorMessage || isFailureQueueStatus(statusLabel)) {
+          queueFailureCountLast30Days += 1
+        }
+      }
+
+      const activityMix = [
+        { label: 'Orders', count: ordersLast30Days },
+        { label: 'Ticket scans', count: scansLast30Days },
+        { label: 'Queue jobs', count: queueJobsProcessedLast30Days },
+        { label: 'Payments', count: paymentsLast30Days }
+      ]
+      const paymentStatusMix = [...paymentStatusCount.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((left, right) => right.count - left.count)
+        .slice(0, 4)
+      const paymentSuccessRate =
+        paymentsLast30Days > 0 ? Math.round((paymentSuccessCountLast30Days / paymentsLast30Days) * 100) : 0
+
       setDashboardMetrics({
         eventsLoaded: eventsResponse.data.data?.length ?? 0,
         ticketTypes: ticketTypesResponse.data.data?.length ?? 0,
-        currentTotalPaisa
+        currentTotalPaisa,
+        ticketsSoldLast30Days,
+        activeUsersLast30Days: activeUsersById.size,
+        paymentSuccessRate,
+        queueFailureCountLast30Days,
+        monthlyTicketSales,
+        activityMix,
+        paymentStatusMix,
+        queueJobsProcessedLast30Days
       })
     } catch {
-      setDashboardMetrics({
-        eventsLoaded: 0,
-        ticketTypes: 0,
-        currentTotalPaisa: 0
-      })
+      setDashboardMetrics(defaultAdminDashboardMetrics)
     }
   }
 
@@ -4352,7 +4560,10 @@ function AdminApp({
   function openCreateModal() {
     setSelectedRecord(null)
     setRecordError('')
-    const values = toFormValues(samplePayloads[selectedResource] ?? {})
+    const values = ensureFormHasRequiredFields(
+      selectedResource,
+      toFormValues(samplePayloads[selectedResource] ?? {})
+    )
     if (selectedResource === 'organization_users' && selectedWebRole === 'Organizations') {
       delete values.user_id
       values.email = ''
@@ -4362,7 +4573,7 @@ function AdminApp({
     }
     setFormValues(values)
     setModalMode('create')
-    void loadLookupOptions(values)
+    void loadLookupOptions(selectedResource, values)
   }
 
   function openEditModal(record: ApiRecord) {
@@ -4373,9 +4584,9 @@ function AdminApp({
 
     setSelectedRecord(record)
     setRecordError('')
-    const values = toFormValues(record)
+    const values = ensureFormHasRequiredFields(selectedResource, toFormValues(record))
     setModalMode('edit')
-    void loadLookupOptions(values)
+    void loadLookupOptions(selectedResource, values)
     if (selectedResource !== 'events') {
       setFormValues(values)
       return
@@ -4600,8 +4811,13 @@ function AdminApp({
     })
   }
 
-  async function loadLookupOptions(values: Record<string, string>) {
-    const fields = Object.keys(values).filter((field) => lookupResourceByField[field])
+  async function loadLookupOptions(resource: string, values: Record<string, string>) {
+    const fields = [
+      ...new Set([
+        ...Object.keys(values),
+        ...(requiredFieldsByResource[resource] ?? [])
+      ])
+    ].filter((field) => lookupResourceByField[field])
     const uniqueResources = [...new Set(fields.map((field) => lookupResourceByField[field]))]
     const nextOptions: Record<string, ApiRecord[]> = {}
 
@@ -4620,7 +4836,7 @@ function AdminApp({
       })
     )
 
-    if (selectedResource === 'events') {
+    if (resource === 'events') {
       try {
         const { data } = await fetchJson<ApiListResponse>('/api/event_locations?limit=100')
         nextOptions.location_template_id = data.data ?? []
@@ -5458,12 +5674,12 @@ function AdminApp({
               <div className="admin-card-header">
                 <div>
                   <h2>Grid Preferences</h2>
-                  <p>Global admin preference for subgrid pagination.</p>
+                  <p>Global admin preference for main grids and subgrid pagination.</p>
                 </div>
               </div>
               <div className="settings-grid">
                 <label>
-                  <span>Rows per subgrid page</span>
+                  <span>Rows per admin grid page</span>
                   <input
                     min={String(minSubgridRowsPerPage)}
                     max={String(maxSubgridRowsPerPage)}
@@ -5488,88 +5704,144 @@ function AdminApp({
           </>
         ) : (
           <>
-            <div className="admin-summary-grid">
-              <div className="info-box">
-                <LayoutDashboard size={24} />
-                <div>
-                  <span>Events loaded</span>
-                  <strong>{dashboardMetrics.eventsLoaded}</strong>
-                </div>
-              </div>
-              <div className="info-box">
-                <CalendarDays size={24} />
-                <div>
-                  <span>Ticket types</span>
-                  <strong>{dashboardMetrics.ticketTypes}</strong>
-                </div>
-              </div>
-              <div className="info-box">
-                <Database size={24} />
-                <div>
-                  <span>Current total</span>
-                  <strong>{formatMoney(dashboardMetrics.currentTotalPaisa)}</strong>
-                </div>
-              </div>
-              <div className="info-box">
-                <Activity size={24} />
-                <div>
-                  <span>Total records</span>
-                  <strong>{totalRecords}</strong>
-                </div>
-              </div>
-            </div>
-
-            <section className="admin-analytics-grid" aria-label="Admin charts">
-              <article className="admin-chart-card">
-                <header>
-                  <h2>
-                    <BarChart3 size={18} />
-                    Record trend (7 days)
-                  </h2>
-                  <p>Daily record activity based on timestamps available in this resource.</p>
-                </header>
-                <div className="admin-bar-chart" role="img" aria-label="Seven-day record trend bar chart">
-                  {recentTrend.map((point) => (
-                    <div className="admin-bar-group" key={point.label}>
-                      <div
-                        className="admin-bar"
-                        style={{
-                          height: `${Math.max(8, Math.round((point.count / recentTrendMax) * 100))}%`
-                        }}
-                        title={`${point.label}: ${point.count}`}
-                      />
-                      <span>{point.label}</span>
+            {!isCustomerRoleView ? (
+              <>
+                <div className="admin-summary-grid">
+                  <div className="info-box">
+                    <Ticket size={24} />
+                    <div>
+                      <span>Tickets sold (30d)</span>
+                      <strong>{dashboardMetrics.ticketsSoldLast30Days}</strong>
                     </div>
-                  ))}
+                  </div>
+                  <div className="info-box">
+                    <Users size={24} />
+                    <div>
+                      <span>Active users (30d)</span>
+                      <strong>{dashboardMetrics.activeUsersLast30Days}</strong>
+                    </div>
+                  </div>
+                  <div className="info-box">
+                    <CreditCard size={24} />
+                    <div>
+                      <span>Payment success (30d)</span>
+                      <strong>{dashboardMetrics.paymentSuccessRate}%</strong>
+                    </div>
+                  </div>
+                  <div className="info-box">
+                    <AlertTriangle size={24} />
+                    <div>
+                      <span>Queue failures (30d)</span>
+                      <strong>{dashboardMetrics.queueFailureCountLast30Days}</strong>
+                    </div>
+                  </div>
                 </div>
-              </article>
-              <article className="admin-chart-card">
-                <header>
-                  <h2>
-                    <Activity size={18} />
-                    Status breakdown
-                  </h2>
-                  <p>Current distribution for rows with a status-like field.</p>
-                </header>
-                <div className="admin-status-list">
-                  {statusBreakdown.length === 0 ? (
-                    <p className="admin-chart-empty">No status fields found in this dataset.</p>
-                  ) : (
-                    statusBreakdown.map((item) => (
-                      <div className="admin-status-row" key={item.label}>
-                        <div>
-                          <strong>{item.label}</strong>
-                          <span>{item.count} records</span>
+
+                <section className="admin-analytics-grid" aria-label="Admin insights charts">
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <BarChart3 size={18} />
+                        Ticket Sales (Last 6 Months)
+                      </h2>
+                      <p>Month-on-month sold ticket volume.</p>
+                    </header>
+                    <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
+                      {dashboardMetrics.monthlyTicketSales.map((point) => (
+                        <div className="admin-insight-bar-group" key={point.label}>
+                          <div
+                            className="admin-insight-bar"
+                            style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
+                            title={`${point.label}: ${point.count} tickets`}
+                          />
+                          <span>{point.label}</span>
                         </div>
-                        <div className="admin-status-meter">
-                          <span style={{ width: `${item.percentage}%` }} />
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <Activity size={18} />
+                        Activity Mix (30d)
+                      </h2>
+                      <p>Orders, scans, queue processing, and payments.</p>
+                    </header>
+                    <div className="admin-activity-list">
+                      {dashboardMetrics.activityMix.map((item) => (
+                        <div className="admin-activity-row" key={item.label}>
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span>{item.count} actions</span>
+                          </div>
+                          <div className="admin-status-meter">
+                            <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
+                          </div>
                         </div>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <Bell size={18} />
+                        Delivery Reliability
+                      </h2>
+                      <p>Queue health and payment status distribution for the last 30 days.</p>
+                    </header>
+                    <div className="admin-reliability-grid">
+                      <div className="admin-reliability-stat">
+                        <span>Queue success rate</span>
+                        <strong>
+                          {dashboardMetrics.queueJobsProcessedLast30Days > 0
+                            ? `${Math.max(
+                                0,
+                                Math.round(
+                                  ((dashboardMetrics.queueJobsProcessedLast30Days -
+                                    dashboardMetrics.queueFailureCountLast30Days) /
+                                    dashboardMetrics.queueJobsProcessedLast30Days) *
+                                    100
+                                )
+                              )}%`
+                            : '0%'}
+                        </strong>
+                        <p>
+                          {dashboardMetrics.queueJobsProcessedLast30Days -
+                            dashboardMetrics.queueFailureCountLast30Days}{' '}
+                          successful out of {dashboardMetrics.queueJobsProcessedLast30Days} queue jobs
+                        </p>
                       </div>
-                    ))
-                  )}
-                </div>
-              </article>
-            </section>
+                      <div className="admin-payment-status-list">
+                        {dashboardMetrics.paymentStatusMix.length === 0 ? (
+                          <p className="admin-chart-empty">No payment status data found yet.</p>
+                        ) : (
+                          dashboardMetrics.paymentStatusMix.map((item) => (
+                            <div className="admin-status-row" key={item.label}>
+                              <div>
+                                <strong>{item.label}</strong>
+                                <span>{item.count} payments</span>
+                              </div>
+                              <div className="admin-status-meter">
+                                <span
+                                  style={{
+                                    width: `${Math.max(
+                                      6,
+                                      Math.round((item.count / Math.max(1, paymentStatusTotal)) * 100)
+                                    )}%`
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                </section>
+              </>
+            ) : null}
 
             <section className="admin-card">
               <div className="admin-card-header">
@@ -6017,7 +6289,7 @@ function RecordModal({
 
   const supportsUpload = resource === 'files' || resource === 'events'
   const isUploadOnlyModal = resource === 'files'
-  const fields = Object.keys(formValues).filter((field) => !isAlwaysHiddenFormField(field))
+  const fields = getOrderedFormFields(resource, formValues)
   const canEditField = (field: string) =>
     !isFieldReadOnly(field, mode) && canEditFieldForRole(field, resource, webRole, currentUser, record, formValues)
 
@@ -6303,6 +6575,52 @@ function getAvailableColumns(schemaColumns: string[], records: ApiRecord[]) {
   return [...available].filter(
     (column) => column !== 'password_hash' && column !== 'google_sub' && column !== 'organization_role'
   )
+}
+
+function buildLastMonthLabels(monthCount: number) {
+  const labels: string[] = []
+  const now = new Date()
+  for (let index = monthCount - 1; index >= 0; index -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth() - index, 1)
+    labels.push(
+      date.toLocaleDateString('en-US', {
+        month: 'short'
+      })
+    )
+  }
+  return labels
+}
+
+function formatMonthLabel(timestamp: number) {
+  return new Date(timestamp).toLocaleDateString('en-US', { month: 'short' })
+}
+
+function parseTimeValue(value: unknown) {
+  if (!value) return null
+  const parsed = new Date(String(value))
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.getTime()
+}
+
+function getRecordTimestamp(record: ApiRecord, fields: string[]) {
+  for (const field of fields) {
+    const parsed = parseTimeValue(record[field])
+    if (parsed) return parsed
+  }
+  return null
+}
+
+function normalizeStatusLabel(value: unknown) {
+  if (typeof value !== 'string') return ''
+  return value.trim().toLowerCase()
+}
+
+function isSuccessfulPaymentStatus(statusLabel: string) {
+  return ['completed', 'paid', 'success', 'succeeded', 'captured'].includes(statusLabel)
+}
+
+function isFailureQueueStatus(statusLabel: string) {
+  return ['failed', 'error', 'undelivered', 'dead_letter', 'bounced'].includes(statusLabel)
 }
 
 function getStatusBreakdown(records: ApiRecord[]) {
@@ -6784,18 +7102,26 @@ function getInitials(user: AuthUser) {
 }
 
 function getAdminResourceIcon(resource: string) {
-  if (['users', 'customers'].includes(resource)) return Users
-  if (['web_roles', 'user_web_roles', 'web_role_menu_items'].includes(resource)) return ShieldCheck
-  if (['organizations', 'organization_users'].includes(resource)) return Building2
-  if (['events', 'event_locations'].includes(resource)) return CalendarDays
-  if (['ticket_types', 'tickets'].includes(resource)) return Ticket
-  if (resource === 'ticket_scans') return UserCog
-  if (['orders', 'order_items'].includes(resource)) return ShoppingCart
-  if (resource === 'payments') return CreditCard
-  if (['coupons', 'coupon_redemptions'].includes(resource)) return Ticket
+  if (resource === 'users') return Users
+  if (resource === 'customers') return UserCog
+  if (resource === 'web_roles') return ShieldCheck
+  if (resource === 'user_web_roles') return SquarePlus
+  if (resource === 'web_role_menu_items') return SquareMinus
+  if (resource === 'organizations') return Building2
+  if (resource === 'organization_users') return LayoutDashboard
   if (resource === 'files') return FileText
+  if (resource === 'events') return CalendarDays
+  if (resource === 'event_locations') return Home
+  if (resource === 'ticket_types') return Ticket
+  if (resource === 'orders') return ShoppingCart
+  if (resource === 'order_items') return BarChart3
+  if (resource === 'payments') return CreditCard
+  if (resource === 'tickets') return Eye
   if (resource === 'messages') return Mail
   if (resource === 'notification_queue') return Bell
+  if (resource === 'ticket_scans') return ScanLine
+  if (resource === 'coupons') return Star
+  if (resource === 'coupon_redemptions') return Activity
   return Database
 }
 
@@ -6806,6 +7132,33 @@ function formatResourceName(resource: string) {
 
 function isRequiredField(resource: string, field: string) {
   return requiredFieldsByResource[resource]?.includes(field) ?? false
+}
+
+function ensureFormHasRequiredFields(resource: string, values: Record<string, string>) {
+  const nextValues = { ...values }
+  for (const field of requiredFieldsByResource[resource] ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(nextValues, field)) {
+      nextValues[field] = ''
+    }
+  }
+  return nextValues
+}
+
+function getOrderedFormFields(resource: string, values: Record<string, string>) {
+  const visibleFields = Object.keys(values).filter((field) => !isAlwaysHiddenFormField(field))
+  const requiredFields = (requiredFieldsByResource[resource] ?? []).filter((field) => visibleFields.includes(field))
+  const requiredSet = new Set(requiredFields)
+  const optionalFields = visibleFields.filter((field) => !requiredSet.has(field))
+
+  if (resource === 'ticket_types') {
+    const preferredOptionalOrder = ['quantity_available', 'max_per_order']
+    const preferred = preferredOptionalOrder.filter((field) => optionalFields.includes(field))
+    const preferredSet = new Set(preferred)
+    const remaining = optionalFields.filter((field) => !preferredSet.has(field))
+    return [...requiredFields, ...preferred, ...remaining]
+  }
+
+  return [...requiredFields, ...optionalFields]
 }
 
 function validateForm(
