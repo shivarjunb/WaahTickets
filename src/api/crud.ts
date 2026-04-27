@@ -93,6 +93,29 @@ type PaymentSettingsData = {
   khalti_can_initiate: boolean
   khalti_runtime_note: string
 }
+type KhaltiOrderItemDraft = {
+  ticket_type_id: string
+  quantity: number
+  unit_price_paisa: number
+  subtotal_amount_paisa: number
+  total_amount_paisa: number
+}
+type KhaltiOrderGroupDraft = {
+  order_id: string
+  order_number: string
+  event_id: string
+  event_location_id: string
+  subtotal_amount_paisa: number
+  discount_amount_paisa: number
+  total_amount_paisa: number
+  currency: string
+  items: KhaltiOrderItemDraft[]
+  event_coupon_id?: string
+  event_coupon_discount_paisa?: number
+  order_coupon_id?: string
+  order_coupon_discount_paisa?: number
+  extra_email?: string
+}
 
 export const crudRoutes = new Hono<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>()
 
@@ -577,6 +600,17 @@ crudRoutes.post('/payments/khalti/initiate', async (c) => {
     return c.json({ error: 'purchase_order_id is required.' }, 400)
   }
   const purchaseOrderName = String(payload.purchase_order_name ?? '').trim() || 'Ticket order'
+  const orderGroups = parseKhaltiOrderGroupsPayload(payload.order_groups)
+  if (!orderGroups.ok) {
+    return c.json({ error: orderGroups.error }, 400)
+  }
+  if (orderGroups.value.length === 0) {
+    return c.json({ error: 'order_groups is required.' }, 400)
+  }
+  const computedAmount = orderGroups.value.reduce((sum, group) => sum + group.total_amount_paisa, 0)
+  if (computedAmount !== Math.floor(amountPaisa)) {
+    return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
+  }
 
   await ensureAppSettingsTable(db)
   const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
@@ -607,26 +641,142 @@ crudRoutes.post('/payments/khalti/initiate', async (c) => {
     }
   }
 
-  const response = await fetch(`${khaltiBaseUrl}/epayment/initiate/`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${secretKey ?? ''}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(requestBody)
-  })
-  const rawText = await response.text()
-  let parsed: Record<string, unknown> = {}
-  try {
-    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {}
-  } catch {
-    parsed = {}
+  const now = new Date().toISOString()
+  for (const group of orderGroups.value) {
+    const existingOrder = await db
+      .prepare('SELECT id, customer_id FROM orders WHERE id = ? LIMIT 1')
+      .bind(group.order_id)
+      .first<{ id: string; customer_id: string }>()
+    if (!existingOrder) {
+      await db
+        .prepare(
+          `INSERT INTO orders (
+             id, order_number, customer_id, event_id, event_location_id, status,
+             subtotal_amount_paisa, discount_amount_paisa, tax_amount_paisa, total_amount_paisa,
+             currency, order_datetime, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          group.order_id,
+          group.order_number,
+          scope.userId,
+          group.event_id,
+          group.event_location_id,
+          group.subtotal_amount_paisa,
+          group.discount_amount_paisa,
+          group.total_amount_paisa,
+          group.currency,
+          now,
+          now,
+          now
+        )
+        .run()
+    } else if (existingOrder.customer_id !== scope.userId) {
+      return c.json({ error: `Order ${group.order_id} belongs to another user.` }, 403)
+    }
+
+    const existingPayment = await db
+      .prepare(
+        `SELECT id
+         FROM payments
+         WHERE order_id = ?
+           AND customer_id = ?
+           AND payment_provider = 'khalti'
+           AND status IN ('initiated', 'pending', 'paid')
+         LIMIT 1`
+      )
+      .bind(group.order_id, scope.userId)
+      .first<{ id: string }>()
+    if (!existingPayment) {
+      await db
+        .prepare(
+          `INSERT INTO payments (
+             id, order_id, customer_id, payment_provider, khalti_pidx, khalti_transaction_id,
+             khalti_purchase_order_id, amount_paisa, currency, status, payment_datetime, verified_datetime,
+             raw_request, raw_response, created_at, updated_at
+           ) VALUES (?, ?, ?, 'khalti', NULL, NULL, ?, ?, ?, 'initiated', NULL, NULL, ?, NULL, ?, ?)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          group.order_id,
+          scope.userId,
+          purchaseOrderId,
+          group.total_amount_paisa,
+          group.currency,
+          JSON.stringify({ purchase_order_name: purchaseOrderName }),
+          now,
+          now
+        )
+        .run()
+    }
   }
 
-  if (!response.ok) {
-    const message = String(parsed.detail ?? parsed.message ?? parsed.error_key ?? 'Unable to initiate Khalti payment.')
+  let response: Response | null = null
+  let rawText = ''
+  let parsed: Record<string, unknown> = {}
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    response = await fetch(`${khaltiBaseUrl}/epayment/initiate/`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Key ${secretKey ?? ''}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    })
+    rawText = await response.text()
+    try {
+      parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {}
+    } catch {
+      parsed = {}
+    }
+    if (response.ok) break
+    // Khalti occasionally returns transient upstream 5xx pages in sandbox.
+    if (response.status >= 500 && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      continue
+    }
+    break
+  }
+
+  if (!response || !response.ok) {
+    const statusCode = typeof response?.status === 'number' ? response.status : null
+    const upstreamMessage =
+      parsed.detail ?? parsed.message ?? parsed.error_key ?? (statusCode !== null && statusCode >= 500 ? 'Khalti server error.' : null)
+    const message = String(
+      upstreamMessage ?? `Unable to initiate Khalti payment${statusCode !== null ? ` (HTTP ${statusCode})` : ''}.`
+    )
+    await db
+      .prepare(
+        `UPDATE payments
+         SET status = 'failed', raw_response = ?, updated_at = ?
+         WHERE customer_id = ?
+           AND khalti_purchase_order_id = ?
+           AND status = 'initiated'`
+      )
+      .bind(rawText || message, new Date().toISOString(), scope.userId, purchaseOrderId)
+      .run()
     return c.json({ error: message }, 502)
   }
+
+  const pidx = String(parsed.pidx ?? '')
+  const updatedAt = new Date().toISOString()
+  await db
+    .prepare(
+      `UPDATE payments
+       SET khalti_pidx = ?, status = 'pending', raw_request = ?, raw_response = ?, updated_at = ?
+       WHERE customer_id = ?
+         AND khalti_purchase_order_id = ?
+         AND status IN ('initiated', 'pending')`
+    )
+    .bind(
+      pidx,
+      JSON.stringify(requestBody),
+      rawText || null,
+      updatedAt,
+      scope.userId,
+      purchaseOrderId
+    )
+    .run()
 
   return c.json({
     data: {
@@ -682,19 +832,257 @@ crudRoutes.post('/payments/khalti/lookup', async (c) => {
   } catch {
     parsed = {}
   }
-  if (!response.ok) {
+
+  const khaltiStatus = String(parsed.status ?? '').trim()
+  if (!response.ok && !khaltiStatus) {
     const message = String(parsed.detail ?? parsed.message ?? parsed.error_key ?? 'Unable to lookup Khalti payment.')
     return c.json({ error: message }, 502)
+  }
+
+  const now = new Date().toISOString()
+  const transactionId = String(parsed.transaction_id ?? '').trim()
+  const mappedStatus = mapKhaltiLookupStatusToPaymentStatus(khaltiStatus)
+  if (mappedStatus) {
+    await db
+      .prepare(
+        `UPDATE payments
+         SET status = ?,
+             khalti_transaction_id = COALESCE(?, khalti_transaction_id),
+             verified_datetime = ?,
+             raw_response = ?,
+             updated_at = ?
+         WHERE customer_id = ?
+           AND payment_provider = 'khalti'
+           AND khalti_pidx = ?`
+      )
+      .bind(
+        mappedStatus,
+        transactionId || null,
+        now,
+        rawText || JSON.stringify(parsed),
+        now,
+        scope.userId,
+        pidx
+      )
+      .run()
   }
 
   return c.json({
     data: {
       pidx: String(parsed.pidx ?? pidx),
-      status: String(parsed.status ?? ''),
+      status: khaltiStatus,
       total_amount: Number(parsed.total_amount ?? 0),
-      transaction_id: String(parsed.transaction_id ?? ''),
+      transaction_id: transactionId,
       fee: Number(parsed.fee ?? 0),
       refunded: Boolean(parsed.refunded)
+    }
+  })
+})
+
+crudRoutes.post('/payments/khalti/complete', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+  const pidx = String(payload.pidx ?? '').trim()
+  if (!pidx) {
+    return c.json({ error: 'pidx is required.' }, 400)
+  }
+  const transactionId = String(payload.transaction_id ?? '').trim()
+  const orderGroups = parseKhaltiOrderGroupsPayload(payload.order_groups)
+  if (!orderGroups.ok) {
+    return c.json({ error: orderGroups.error }, 400)
+  }
+
+  const linkedPayments = await db
+    .prepare(
+      `SELECT id, order_id, status
+       FROM payments
+       WHERE customer_id = ?
+         AND payment_provider = 'khalti'
+         AND khalti_pidx = ?`
+    )
+    .bind(scope.userId, pidx)
+    .all<{ id: string; order_id: string; status: string | null }>()
+  if (linkedPayments.results.length === 0) {
+    return c.json({ error: 'No Khalti payment records found for this session.' }, 404)
+  }
+
+  const groupsByOrderId = new Map(orderGroups.value.map((group) => [group.order_id, group]))
+  const paymentOrderIds = new Set(linkedPayments.results.map((payment) => payment.order_id))
+  const missingOrderIds = [...paymentOrderIds].filter((orderId) => !groupsByOrderId.has(orderId))
+  if (missingOrderIds.length > 0) {
+    return c.json({ error: 'Khalti completion payload is missing order details.' }, 409)
+  }
+
+  const now = new Date().toISOString()
+  let completedOrders = 0
+
+  for (const payment of linkedPayments.results) {
+    const group = groupsByOrderId.get(payment.order_id)
+    if (!group) continue
+
+    const order = await db
+      .prepare('SELECT id, status FROM orders WHERE id = ? AND customer_id = ? LIMIT 1')
+      .bind(payment.order_id, scope.userId)
+      .first<{ id: string; status: string | null }>()
+    if (!order?.id) continue
+
+    const existingItemCountResult = await db
+      .prepare('SELECT COUNT(*) AS count FROM order_items WHERE order_id = ?')
+      .bind(order.id)
+      .first<{ count: number }>()
+    const existingItemCount = Number(existingItemCountResult?.count ?? 0)
+    if (existingItemCount === 0) {
+      for (const item of group.items) {
+        await db
+          .prepare(
+            `INSERT INTO order_items (
+               id, order_id, ticket_type_id, quantity, unit_price_paisa,
+               subtotal_amount_paisa, discount_amount_paisa, total_amount_paisa, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            order.id,
+            item.ticket_type_id,
+            item.quantity,
+            item.unit_price_paisa,
+            item.subtotal_amount_paisa,
+            item.total_amount_paisa,
+            now
+          )
+          .run()
+      }
+    }
+
+    if (group.event_coupon_id && (group.event_coupon_discount_paisa ?? 0) > 0) {
+      const existingEventCoupon = await db
+        .prepare(
+          `SELECT id
+           FROM coupon_redemptions
+           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
+           LIMIT 1`
+        )
+        .bind(group.event_coupon_id, order.id, scope.userId)
+        .first<{ id: string }>()
+      if (!existingEventCoupon?.id) {
+        await db
+          .prepare(
+            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            group.event_coupon_id,
+            order.id,
+            scope.userId,
+            group.event_coupon_discount_paisa ?? 0,
+            now
+          )
+          .run()
+      }
+    }
+
+    if (group.order_coupon_id && (group.order_coupon_discount_paisa ?? 0) > 0) {
+      const existingOrderCoupon = await db
+        .prepare(
+          `SELECT id
+           FROM coupon_redemptions
+           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
+           LIMIT 1`
+        )
+        .bind(group.order_coupon_id, order.id, scope.userId)
+        .first<{ id: string }>()
+      if (!existingOrderCoupon?.id) {
+        await db
+          .prepare(
+            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            group.order_coupon_id,
+            order.id,
+            scope.userId,
+            group.order_coupon_discount_paisa ?? 0,
+            now
+          )
+          .run()
+      }
+    }
+
+    await db
+      .prepare(
+        `UPDATE payments
+         SET status = 'paid',
+             khalti_transaction_id = ?,
+             payment_datetime = COALESCE(payment_datetime, ?),
+             verified_datetime = ?,
+             raw_response = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(transactionId || null, now, now, JSON.stringify(payload), now, payment.id)
+      .run()
+
+    const previousStatus = String(order.status ?? '').toLowerCase()
+    await db
+      .prepare(
+        `UPDATE orders
+         SET status = 'paid',
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(now, order.id)
+      .run()
+
+    if (previousStatus !== 'paid') {
+      await safeMaybeEnqueue(c, () =>
+        maybeEnqueueOrderNotification({
+          env: c.env,
+          tableName: 'orders',
+          row: { id: order.id, status: 'paid' }
+        })
+      )
+    }
+
+    const extraEmail = (group.extra_email ?? '').trim()
+    if (extraEmail) {
+      await safeMaybeEnqueue(c, () =>
+        enqueueOrderCopyNotification({
+          env: c.env,
+          orderId: order.id,
+          recipientEmail: extraEmail
+        })
+      )
+    }
+
+    completedOrders += 1
+  }
+
+  const cache = createCache(c.env)
+  await Promise.all([
+    cache.bumpResourceVersion('orders'),
+    cache.bumpResourceVersion('order_items'),
+    cache.bumpResourceVersion('payments'),
+    cache.bumpResourceVersion('coupon_redemptions')
+  ])
+
+  return c.json({
+    data: {
+      pidx,
+      completed_orders: completedOrders
     }
   })
 })
@@ -1698,11 +2086,111 @@ function parseKhaltiMode(value: unknown): KhaltiMode | null {
   return null
 }
 
+function mapKhaltiLookupStatusToPaymentStatus(status: string) {
+  const normalized = status.trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'completed') return 'paid'
+  if (normalized === 'initiated' || normalized === 'pending') return 'pending'
+  if (
+    normalized === 'user canceled' ||
+    normalized === 'cancelled' ||
+    normalized === 'failed' ||
+    normalized === 'expired' ||
+    normalized === 'refunded' ||
+    normalized === 'partially refunded'
+  ) {
+    return 'failed'
+  }
+  return null
+}
+
 function normalizeBoolean(value: unknown, fallback = false) {
   if (typeof value === 'boolean') return value
   if (value === 1 || value === '1') return true
   if (value === 0 || value === '0') return false
   return fallback
+}
+
+function parseKhaltiOrderGroupsPayload(
+  value: unknown
+): { ok: true; value: KhaltiOrderGroupDraft[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) {
+    return { ok: false, error: 'order_groups must be an array.' }
+  }
+
+  const groups: KhaltiOrderGroupDraft[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const raw = value[index]
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, error: `order_groups[${index}] is invalid.` }
+    }
+    const item = raw as JsonRecord
+    const orderId = String(item.order_id ?? '').trim()
+    const orderNumber = String(item.order_number ?? '').trim()
+    const eventId = String(item.event_id ?? '').trim()
+    const eventLocationId = String(item.event_location_id ?? '').trim()
+    const currency = String(item.currency ?? 'NPR').trim() || 'NPR'
+    if (!orderId || !orderNumber || !eventId || !eventLocationId) {
+      return { ok: false, error: `order_groups[${index}] is missing required order fields.` }
+    }
+
+    const subtotal = Number(item.subtotal_amount_paisa ?? 0)
+    const discount = Number(item.discount_amount_paisa ?? 0)
+    const total = Number(item.total_amount_paisa ?? 0)
+    if (!Number.isFinite(subtotal) || !Number.isFinite(discount) || !Number.isFinite(total)) {
+      return { ok: false, error: `order_groups[${index}] has invalid amount values.` }
+    }
+
+    const rawItems = Array.isArray(item.items) ? item.items : []
+    if (rawItems.length === 0) {
+      return { ok: false, error: `order_groups[${index}] must include at least one item.` }
+    }
+    const items: KhaltiOrderItemDraft[] = []
+    for (let itemIndex = 0; itemIndex < rawItems.length; itemIndex += 1) {
+      const rawItem = rawItems[itemIndex]
+      if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
+        return { ok: false, error: `order_groups[${index}].items[${itemIndex}] is invalid.` }
+      }
+      const candidate = rawItem as JsonRecord
+      const ticketTypeId = String(candidate.ticket_type_id ?? '').trim()
+      const quantity = Number(candidate.quantity ?? 0)
+      const unitPrice = Number(candidate.unit_price_paisa ?? 0)
+      const itemSubtotal = Number(candidate.subtotal_amount_paisa ?? 0)
+      const itemTotal = Number(candidate.total_amount_paisa ?? 0)
+      if (!ticketTypeId || !Number.isFinite(quantity) || quantity <= 0) {
+        return { ok: false, error: `order_groups[${index}].items[${itemIndex}] has invalid ticket or quantity.` }
+      }
+      if (!Number.isFinite(unitPrice) || !Number.isFinite(itemSubtotal) || !Number.isFinite(itemTotal)) {
+        return { ok: false, error: `order_groups[${index}].items[${itemIndex}] has invalid price values.` }
+      }
+      items.push({
+        ticket_type_id: ticketTypeId,
+        quantity: Math.floor(quantity),
+        unit_price_paisa: Math.floor(unitPrice),
+        subtotal_amount_paisa: Math.floor(itemSubtotal),
+        total_amount_paisa: Math.floor(itemTotal)
+      })
+    }
+
+    groups.push({
+      order_id: orderId,
+      order_number: orderNumber,
+      event_id: eventId,
+      event_location_id: eventLocationId,
+      subtotal_amount_paisa: Math.floor(subtotal),
+      discount_amount_paisa: Math.floor(discount),
+      total_amount_paisa: Math.floor(total),
+      currency,
+      items,
+      event_coupon_id: String(item.event_coupon_id ?? '').trim() || undefined,
+      event_coupon_discount_paisa: Number(item.event_coupon_discount_paisa ?? 0),
+      order_coupon_id: String(item.order_coupon_id ?? '').trim() || undefined,
+      order_coupon_discount_paisa: Number(item.order_coupon_discount_paisa ?? 0),
+      extra_email: String(item.extra_email ?? '').trim() || undefined
+    })
+  }
+
+  return { ok: true, value: groups }
 }
 
 function buildPaymentSettingsFromStored(
@@ -1718,7 +2206,9 @@ function buildPaymentSettingsFromStored(
   const khaltiTestPublicKey = String(stored.payments_khalti_test_public_key ?? '').trim().slice(0, 200)
   const khaltiLivePublicKey = String(stored.payments_khalti_live_public_key ?? '').trim().slice(0, 200)
   const khaltiPublicKey = mode === 'live' ? khaltiLivePublicKey : khaltiTestPublicKey
-  const khaltiReturnUrl = khaltiReturnUrlRaw && isValidUrl(khaltiReturnUrlRaw) ? khaltiReturnUrlRaw : fallbackOrigin
+  const defaultKhaltiReturnUrl = `${fallbackOrigin}/processpayment`
+  const khaltiReturnUrl =
+    khaltiReturnUrlRaw && isValidUrl(khaltiReturnUrlRaw) ? khaltiReturnUrlRaw : defaultKhaltiReturnUrl
   const khaltiWebsiteUrl = khaltiWebsiteUrlRaw && isValidUrl(khaltiWebsiteUrlRaw) ? khaltiWebsiteUrlRaw : fallbackOrigin
   const khaltiEnabled = normalizeBoolean(stored.payments_khalti_enabled, false)
   const khaltiTestKeyConfigured = Boolean(env?.KHALTI_TEST_SECRET_KEY && env.KHALTI_TEST_SECRET_KEY.trim())

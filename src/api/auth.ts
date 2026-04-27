@@ -142,6 +142,28 @@ authRoutes.post('/login', async (c) => {
   }
 })
 
+authRoutes.post('/forgot-password', async (c) => {
+  try {
+    const body = await c.req.json<{ email?: string }>()
+    const email = String(body.email ?? '').trim().toLowerCase()
+    if (!email) {
+      return c.json({ error: 'Email is required.' }, 400)
+    }
+
+    // Intentionally return a generic response regardless of account existence.
+    // This avoids leaking which emails are registered.
+    return c.json({
+      ok: true,
+      message:
+        'If an account exists for this email, reset instructions will be provided. If needed, contact support for manual password reset.'
+    })
+  } catch (error) {
+    console.error(error)
+    const sanitized = sanitizeServerError(error, 'Forgot password request failed.')
+    return c.json({ error: sanitized.error, message: sanitized.message }, sanitized.status)
+  }
+})
+
 authRoutes.post('/logout', async (c) => {
   const token = getCookie(c.req.header('Cookie'), 'waah_session')
   if (token) {

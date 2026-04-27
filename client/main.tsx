@@ -368,6 +368,29 @@ type CartItem = {
   currency: string
 }
 
+type KhaltiCheckoutOrderGroup = {
+  order_id: string
+  order_number: string
+  event_id: string
+  event_location_id: string
+  subtotal_amount_paisa: number
+  discount_amount_paisa: number
+  total_amount_paisa: number
+  currency: string
+  items: Array<{
+    ticket_type_id: string
+    quantity: number
+    unit_price_paisa: number
+    subtotal_amount_paisa: number
+    total_amount_paisa: number
+  }>
+  event_coupon_id?: string
+  event_coupon_discount_paisa?: number
+  order_coupon_id?: string
+  order_coupon_discount_paisa?: number
+  extra_email?: string
+}
+
 type OrderCustomerOption = {
   id: string
   label: string
@@ -740,6 +763,13 @@ function App() {
     }
   }
 
+  function navigate(nextPath: string) {
+    const targetPath = nextPath.startsWith('/') ? nextPath : `/${nextPath}`
+    if (window.location.pathname === targetPath) return
+    window.history.pushState({}, '', targetPath)
+    setPath(window.location.pathname)
+  }
+
   const isValidatorRoute = path === '/admin/validator' || path.startsWith('/admin/validator/')
   const isTicketVerifyRoute = path === '/ticket/verify'
   const canAccessValidator =
@@ -792,10 +822,12 @@ function App() {
             />
           ) : (
         <PublicApp
+          currentPath={path}
           qrVerifyToken={isTicketVerifyRoute ? qrVerifyToken : null}
           user={user}
           isAuthLoading={isAuthLoading}
           theme={theme}
+          onNavigate={navigate}
           onLoginClick={() => setIsAuthOpen(true)}
           onLogout={logout}
           onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
@@ -816,18 +848,22 @@ function App() {
 }
 
 function PublicApp({
+  currentPath,
   qrVerifyToken,
   user,
   isAuthLoading,
   theme,
+  onNavigate,
   onLoginClick,
   onLogout,
   onToggleTheme
 }: {
+  currentPath: string
   qrVerifyToken: string | null
   user: AuthUser
   isAuthLoading: boolean
   theme: 'dark' | 'light'
+  onNavigate: (nextPath: string) => void
   onLoginClick: () => void
   onLogout: () => void
   onToggleTheme: () => void
@@ -858,6 +894,7 @@ function PublicApp({
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
   const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
   const [publicStatus, setPublicStatus] = useState('Loading events')
+  const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
 
   const selectedEvent = useMemo(
@@ -973,6 +1010,7 @@ function PublicApp({
   const railNextRunAtRef = useRef<Record<string, number>>({})
   const canAccessAdmin = hasAdminConsoleAccess(user)
   const canAccessTickets = hasCustomerTicketsAccess(user)
+  const isProcessPaymentRoute = currentPath === '/processpayment'
   const [isVerifyingTicket, setIsVerifyingTicket] = useState(false)
   const [verifiedTicket, setVerifiedTicket] = useState<ApiRecord | null>(null)
   const [verifiedTicketStatus, setVerifiedTicketStatus] = useState<'already_redeemed' | 'unredeemed' | 'not_found' | null>(null)
@@ -1013,11 +1051,15 @@ function PublicApp({
           setPublicPaymentSettings(paymentsResponse.data.data)
         }
         setSelectedEventId(defaultEvent?.id ?? null)
-        setPublicStatus(
-          loadedEvents.length > 0
-            ? `${loadedEvents.length} events available`
-            : ''
-        )
+        // Preserve Khalti callback status messages when returning from payment.
+        const hasKhaltiReturn = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('pidx')
+        if (!hasKhaltiReturn && !isProcessPaymentRoute) {
+          setPublicStatus(
+            loadedEvents.length > 0
+              ? `${loadedEvents.length} events available`
+              : ''
+          )
+        }
       } catch (error) {
         setPublicStatus(getErrorMessage(error))
       } finally {
@@ -1026,7 +1068,7 @@ function PublicApp({
     }
 
     void loadPublicEvents()
-  }, [])
+  }, [isProcessPaymentRoute])
 
   useEffect(() => {
     const token = qrVerifyToken?.trim() ?? ''
@@ -1182,6 +1224,228 @@ function PublicApp({
       left: direction === 'right' ? scrollAmount : -scrollAmount,
       behavior: 'smooth'
     })
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isProcessPaymentRoute) return
+    const params = new URLSearchParams(window.location.search)
+    const pidx = params.get('pidx')?.trim() ?? ''
+    const callbackStatus = params.get('status')?.trim() ?? ''
+    if (!pidx) return
+    setPublicStatus('Processing Khalti return...')
+    setProcessPaymentPhase('processing')
+    const host = window.location.hostname.toLowerCase()
+    const isLocalKhaltiTestHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    if (!user?.id) {
+      setPublicStatus('Khalti return detected. Sign in with the same account to complete checkout.')
+      setProcessPaymentPhase('failure')
+      return
+    }
+    if (!(user.webrole === 'Customers' || isLocalKhaltiTestHost)) {
+      setPublicStatus('Khalti return detected, but this role cannot complete checkout in this environment.')
+      setProcessPaymentPhase('failure')
+      return
+    }
+
+    const draftRaw = window.localStorage.getItem(khaltiCheckoutDraftStorageKey)
+    if (!draftRaw) {
+      setPublicStatus('Khalti return detected, but checkout draft is missing on this browser.')
+      setProcessPaymentPhase('failure')
+      return
+    }
+
+    let restored = null as null | {
+      cartItems: CartItem[]
+      cartEventEmails: Record<string, string>
+      cartEventCoupons: Record<string, string>
+      cartEventCouponMessages: Record<string, string>
+      cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
+      orderCouponCode: string
+      orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+      orderCouponMessage: string
+      order_groups: KhaltiCheckoutOrderGroup[]
+      pidx?: string
+    }
+    try {
+      restored = JSON.parse(draftRaw)
+    } catch {
+      restored = null
+    }
+    if (!restored || !Array.isArray(restored.cartItems) || !Array.isArray(restored.order_groups)) {
+      setPublicStatus('Khalti return detected, but checkout draft is invalid.')
+      setProcessPaymentPhase('failure')
+      return
+    }
+
+    setCartItems(restored.cartItems)
+    setCartEventEmails(restored.cartEventEmails ?? {})
+    setCartEventCoupons(restored.cartEventCoupons ?? {})
+    setCartEventCouponMessages(restored.cartEventCouponMessages ?? {})
+    setCartEventCouponDiscounts(restored.cartEventCouponDiscounts ?? {})
+    setOrderCouponCode(restored.orderCouponCode ?? '')
+    setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
+    setOrderCouponMessage(restored.orderCouponMessage ?? '')
+
+    if (callbackStatus.toLowerCase() === 'user canceled') {
+      setPublicStatus('Khalti payment was canceled.')
+      setProcessPaymentPhase('failure')
+      window.history.replaceState({}, '', window.location.pathname)
+      return
+    }
+
+    setIsSubmittingOrder(true)
+    void (async () => {
+      try {
+        const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pidx })
+        })
+        const lookupStatus = String(data.data.status ?? '').trim()
+        if (lookupStatus.toLowerCase() !== 'completed') {
+          setPublicStatus(
+            lookupStatus
+              ? `Khalti payment status: ${lookupStatus}. Payment was not completed. You can retry payment.`
+              : 'Khalti payment status is unknown. You can retry payment.'
+          )
+          setProcessPaymentPhase('failure')
+          setIsSubmittingOrder(false)
+          window.history.replaceState({}, '', window.location.pathname)
+          return
+        }
+        const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/payments/khalti/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pidx,
+            transaction_id: data.data.transaction_id ?? '',
+            order_groups: restored.order_groups
+          })
+        })
+        setPublicStatus(
+          `Checkout complete via Khalti. ${Number(completion.data?.completed_orders ?? restored.order_groups.length)} event order(s) processed.`
+        )
+        setProcessPaymentPhase('success')
+        setCartItems([])
+        setCartEventCoupons({})
+        setCartEventCouponMessages({})
+        setCartEventCouponDiscounts({})
+        setCartEventEmails({})
+        setOrderCouponCode('')
+        setOrderCouponDiscount(null)
+        setOrderCouponMessage('')
+        setIsCartCheckoutOpen(false)
+        setIsSubmittingOrder(false)
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+        }
+        window.history.replaceState({}, '', window.location.pathname)
+      } catch (error) {
+        setPublicStatus(getErrorMessage(error))
+        setProcessPaymentPhase('failure')
+        setIsSubmittingOrder(false)
+      }
+    })()
+  }, [isProcessPaymentRoute, user?.id, user?.webrole])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isProcessPaymentRoute) return
+    const hasPidx = new URLSearchParams(window.location.search).has('pidx')
+    if (!hasPidx) {
+      setPublicStatus('No Khalti callback was found. Start payment from checkout and return here.')
+      setProcessPaymentPhase('idle')
+    }
+  }, [isProcessPaymentRoute])
+
+  if (isProcessPaymentRoute) {
+    const isProcessing = processPaymentPhase === 'processing' || isSubmittingOrder
+    const isSuccess = processPaymentPhase === 'success'
+    const isFailure = processPaymentPhase === 'failure'
+    return (
+      <main className="app-shell process-payment-shell">
+        <section className={`process-payment-card ${isSuccess ? 'is-success' : isFailure ? 'is-failure' : ''}`}>
+          <div className="process-payment-backdrop" aria-hidden="true" />
+          {isProcessing ? (
+            <div className="process-payment-visual process-payment-spinner-wrap" aria-label="Processing payment">
+              <span className="process-payment-spinner" />
+            </div>
+          ) : isSuccess ? (
+            <div className="process-payment-visual process-payment-success-wrap" aria-label="Payment successful">
+              <span className="process-payment-success-ring">
+                <CheckCircle2 size={44} />
+              </span>
+            </div>
+          ) : (
+            <div className="process-payment-visual process-payment-failure-wrap" aria-label="Payment failed">
+              <span className="process-payment-failure-ring">
+                <AlertTriangle size={42} />
+              </span>
+            </div>
+          )}
+          <p className="eyebrow">Process Payment</p>
+          <h1 className="featured-title">
+            {isSuccess ? 'Payment Successful' : isFailure ? 'Payment Incomplete' : 'Processing Payment'}
+          </h1>
+          <p className="featured-description">{publicStatus || 'Waiting for Khalti callback details...'}</p>
+          {isSuccess ? (
+            <div className="process-payment-details">
+              <p className="process-payment-note">
+                <Mail size={16} />
+                Your ticket email is being sent and should arrive momentarily.
+              </p>
+              <p className="process-payment-note">
+                <Ticket size={16} />
+                You can also check your <strong>Tickets</strong> page. If anything looks off, contact support.
+              </p>
+            </div>
+          ) : null}
+          <div className="process-payment-actions">
+            {isSuccess ? (
+              <>
+                <button className="primary-admin-button" type="button" onClick={() => onNavigate('/')}>
+                  Continue to events
+                </button>
+                <a className="secondary-button process-payment-link" href="/admin">
+                  <Ticket size={16} />
+                  Open Tickets
+                </a>
+              </>
+            ) : isFailure ? (
+              <>
+                <button
+                  className="primary-admin-button"
+                  disabled={
+                    isSubmittingOrder ||
+                    cartItems.length === 0 ||
+                    !(publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate)
+                  }
+                  type="button"
+                  onClick={() => void startKhaltiCheckout()}
+                >
+                  {isSubmittingOrder ? 'Processing...' : 'Retry Khalti payment'}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    onNavigate('/')
+                    setIsCartCheckoutOpen(true)
+                  }}
+                >
+                  Return to checkout
+                </button>
+              </>
+            ) : (
+              <button className="secondary-button" disabled type="button">
+                Processing payment...
+              </button>
+            )}
+          </div>
+        </section>
+      </main>
+    )
   }
 
   return (
@@ -1679,6 +1943,51 @@ function PublicApp({
     setCartItems((current) => current.filter((item) => item.id !== itemId))
   }
 
+  function buildKhaltiCheckoutOrderGroups() {
+    const eventGroups = groupCartItemsByEvent(cartItems)
+    return eventGroups.map((group) => {
+      const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${group.event_id.slice(0, 6)}`
+      const orderId = `order-${suffix}`
+      const subtotal = group.items.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
+      const eventCoupon = cartEventCouponDiscounts[group.event_id]
+      const eventDiscount = eventCoupon?.discount ?? 0
+      const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, orderCouponDiscount)
+      const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
+      const total = Math.max(0, subtotal - totalDiscount)
+      const currency = group.items[0]?.currency ?? 'NPR'
+
+      const draft: KhaltiCheckoutOrderGroup = {
+        order_id: orderId,
+        order_number: `WAH-${suffix.toUpperCase()}`,
+        event_id: group.event_id,
+        event_location_id: group.event_location_id,
+        subtotal_amount_paisa: subtotal,
+        discount_amount_paisa: totalDiscount,
+        total_amount_paisa: total,
+        currency,
+        items: group.items.map((item) => ({
+          ticket_type_id: item.ticket_type_id,
+          quantity: item.quantity,
+          unit_price_paisa: item.unit_price_paisa,
+          subtotal_amount_paisa: item.unit_price_paisa * item.quantity,
+          total_amount_paisa: item.unit_price_paisa * item.quantity
+        })),
+        event_coupon_id: eventCoupon?.couponId,
+        event_coupon_discount_paisa: eventDiscount,
+        order_coupon_id:
+          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
+            ? orderCouponDiscount.couponId
+            : undefined,
+        order_coupon_discount_paisa:
+          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
+            ? orderDiscountShare
+            : 0,
+        extra_email: (cartEventEmails[group.event_id] ?? '').trim() || undefined
+      }
+      return draft
+    })
+  }
+
   async function startKhaltiCheckout() {
     if (!user?.id) {
       setPublicStatus('Sign in to checkout.')
@@ -1692,6 +2001,7 @@ function PublicApp({
 
     setIsSubmittingOrder(true)
     try {
+      const orderGroups = buildKhaltiCheckoutOrderGroups()
       const draft = {
         cartItems,
         cartEventEmails,
@@ -1700,7 +2010,8 @@ function PublicApp({
         cartEventCouponDiscounts,
         orderCouponCode,
         orderCouponDiscount,
-        orderCouponMessage
+        orderCouponMessage,
+        order_groups: orderGroups
       }
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(khaltiCheckoutDraftStorageKey, JSON.stringify(draft))
@@ -1715,7 +2026,8 @@ function PublicApp({
         purchase_order_name: purchaseOrderName,
         customer_name: `${String(user.first_name ?? '').trim()} ${String(user.last_name ?? '').trim()}`.trim(),
         customer_email: String(user.email ?? '').trim(),
-        customer_phone: ''
+        customer_phone: '',
+        order_groups: orderGroups
       }
       const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/payments/khalti/initiate', {
         method: 'POST',
@@ -1733,7 +2045,8 @@ function PublicApp({
             khaltiCheckoutDraftStorageKey,
             JSON.stringify({
               ...parsed,
-              pidx: data.data.pidx
+              pidx: data.data.pidx,
+              purchase_order_id: purchaseOrderId
             })
           )
         }
@@ -1744,79 +2057,6 @@ function PublicApp({
       setIsSubmittingOrder(false)
     }
   }
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const pidx = params.get('pidx')?.trim() ?? ''
-    const status = params.get('status')?.trim() ?? ''
-    if (!pidx) return
-    if (!user?.id || user.webrole !== 'Customers') return
-
-    const draftRaw = window.localStorage.getItem(khaltiCheckoutDraftStorageKey)
-    if (!draftRaw) {
-      setPublicStatus('Khalti return detected, but checkout draft is missing.')
-      return
-    }
-
-    let restored = null as null | {
-      cartItems: CartItem[]
-      cartEventEmails: Record<string, string>
-      cartEventCoupons: Record<string, string>
-      cartEventCouponMessages: Record<string, string>
-      cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
-      orderCouponCode: string
-      orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
-      orderCouponMessage: string
-      pidx?: string
-    }
-    try {
-      restored = JSON.parse(draftRaw)
-    } catch {
-      restored = null
-    }
-    if (!restored || !Array.isArray(restored.cartItems)) {
-      setPublicStatus('Khalti return detected, but checkout draft is invalid.')
-      return
-    }
-
-    setCartItems(restored.cartItems)
-    setCartEventEmails(restored.cartEventEmails ?? {})
-    setCartEventCoupons(restored.cartEventCoupons ?? {})
-    setCartEventCouponMessages(restored.cartEventCouponMessages ?? {})
-    setCartEventCouponDiscounts(restored.cartEventCouponDiscounts ?? {})
-    setOrderCouponCode(restored.orderCouponCode ?? '')
-    setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
-    setOrderCouponMessage(restored.orderCouponMessage ?? '')
-
-    if (status.toLowerCase() === 'user canceled') {
-      setPublicStatus('Khalti payment was canceled.')
-      window.history.replaceState({}, '', window.location.pathname)
-      return
-    }
-
-    setIsSubmittingOrder(true)
-    void (async () => {
-      try {
-        const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pidx })
-        })
-        if (String(data.data.status ?? '').toLowerCase() !== 'completed') {
-          throw new Error(`Khalti payment status: ${data.data.status ?? 'Unknown'}`)
-        }
-        await submitCartCheckout({
-          provider: 'khalti',
-          reference: data.data.transaction_id || pidx
-        })
-        window.history.replaceState({}, '', window.location.pathname)
-      } catch (error) {
-        setPublicStatus(getErrorMessage(error))
-        setIsSubmittingOrder(false)
-      }
-    })()
-  }, [user?.id, user?.webrole])
 
   async function submitCartCheckout(paymentContext?: { provider?: 'manual' | 'khalti'; reference?: string }) {
     if (cartItems.length === 0 || isSubmittingOrder) return
@@ -2531,6 +2771,34 @@ function AuthModal({
     }
   }
 
+  async function submitForgotPassword() {
+    if (isSubmittingAuth) return
+    const email = String(form.email ?? '').trim().toLowerCase()
+    if (!email) {
+      setStatus('Enter your email first, then click Forgot password.')
+      return
+    }
+
+    setIsSubmittingAuth(true)
+    try {
+      const { data } = await fetchJson<{ ok?: boolean; message?: string }>('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      })
+      setStatus(
+        String(
+          data.message ??
+            'If an account exists for this email, reset instructions will be provided. If needed, contact support.'
+        )
+      )
+    } catch (error) {
+      setStatus(getErrorMessage(error))
+    } finally {
+      setIsSubmittingAuth(false)
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal auth-modal" role="dialog" aria-modal="true">
@@ -2587,6 +2855,16 @@ function AuthModal({
               />
             </label>
           </div>
+          {mode === 'login' ? (
+            <button
+              className="auth-forgot-button"
+              disabled={isSubmittingAuth}
+              type="button"
+              onClick={() => void submitForgotPassword()}
+            >
+              Forgot password?
+            </button>
+          ) : null}
           <div className="auth-actions">
             <div className="auth-local-actions">
               <button
@@ -4986,7 +5264,7 @@ function AdminApp({
                 <label>
                   <span>Return URL</span>
                   <input
-                    placeholder="https://yourdomain.com/?payment=khalti"
+                    placeholder="https://yourdomain.com/processpayment"
                     type="text"
                     value={paymentSettingsData.khalti_return_url}
                     onChange={(event) =>
