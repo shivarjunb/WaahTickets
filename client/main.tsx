@@ -5751,12 +5751,19 @@ function AdminApp({
                                   <Download size={16} />
                                 </button>
                               ) : null}
-                              {selectedResource === 'tickets' && getTicketPdfDownloadUrl(record) ? (
+                              {selectedResource === 'tickets' ? (
                                 <button
                                   aria-label="Download ticket PDF"
-                                  title="Download ticket PDF"
+                                  title={getTicketPdfDownloadUrl(record) ? 'Download ticket PDF' : 'Ticket PDF is still being generated'}
                                   type="button"
-                                  onClick={() => window.open(getTicketPdfDownloadUrl(record) ?? '', '_blank', 'noopener')}
+                                  onClick={() => {
+                                    const downloadUrl = getTicketPdfDownloadUrl(record)
+                                    if (!downloadUrl) {
+                                      setStatus('Ticket PDF is still being generated. Please wait a moment and click refresh.')
+                                      return
+                                    }
+                                    window.open(downloadUrl, '_blank', 'noopener')
+                                  }}
                                 >
                                   <Download size={16} />
                                 </button>

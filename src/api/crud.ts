@@ -1434,15 +1434,36 @@ crudRoutes.get('/files/:id/download', async (c) => {
   }
 
   const scope = c.get('authScope')
-  const accessPolicy = buildAccessPolicy('files', scope)
-  if (!accessPolicy.allowed) {
-    return c.json({ error: 'Forbidden for this role.' }, 403)
-  }
+  const fileId = c.req.param('id')
+  let fileRecord: { file_name: string | null; mime_type: string | null; storage_key: string | null } | null = null
 
-  const fileRecord = await db
-    .prepare(`SELECT file_name, mime_type, storage_key FROM files WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`)
-    .bind(c.req.param('id'), ...accessPolicy.bindings)
-    .first<{ file_name: string | null; mime_type: string | null; storage_key: string | null }>()
+  if (scope.webrole === 'Customers') {
+    fileRecord = await db
+      .prepare(
+        `SELECT files.file_name, files.mime_type, files.storage_key
+         FROM files
+         WHERE files.id = ?
+           AND EXISTS (
+             SELECT 1
+             FROM tickets
+             WHERE tickets.pdf_file_id = files.id
+               AND tickets.customer_id = ?
+           )
+         LIMIT 1`
+      )
+      .bind(fileId, scope.userId)
+      .first<{ file_name: string | null; mime_type: string | null; storage_key: string | null }>()
+  } else {
+    const accessPolicy = buildAccessPolicy('files', scope)
+    if (!accessPolicy.allowed) {
+      return c.json({ error: 'Forbidden for this role.' }, 403)
+    }
+
+    fileRecord = await db
+      .prepare(`SELECT file_name, mime_type, storage_key FROM files WHERE id = ? AND ${accessPolicy.clause} LIMIT 1`)
+      .bind(fileId, ...accessPolicy.bindings)
+      .first<{ file_name: string | null; mime_type: string | null; storage_key: string | null }>()
+  }
 
   if (!fileRecord) {
     return c.json({ error: 'Record not found.' }, 404)
