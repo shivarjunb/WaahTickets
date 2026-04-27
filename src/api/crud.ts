@@ -125,52 +125,7 @@ crudRoutes.post('/tickets/redeem', async (c) => {
     return c.json({ error: 'qr_code_value is required.' }, 400)
   }
 
-  const ticket = await db
-    .prepare(
-      `SELECT
-         tickets.id,
-         tickets.ticket_number,
-         tickets.qr_code_value,
-         tickets.status,
-         tickets.redeemed_at,
-         tickets.redeemed_by,
-         tickets.event_id,
-         tickets.event_location_id,
-         tickets.customer_id,
-         events.organization_id,
-         events.name AS event_name,
-         event_locations.name AS event_location_name,
-         ticket_types.name AS ticket_type_name,
-         users.first_name AS customer_first_name,
-         users.last_name AS customer_last_name,
-         users.email AS customer_email
-       FROM tickets
-       JOIN events ON events.id = tickets.event_id
-       LEFT JOIN event_locations ON event_locations.id = tickets.event_location_id
-       LEFT JOIN ticket_types ON ticket_types.id = tickets.ticket_type_id
-       LEFT JOIN users ON users.id = tickets.customer_id
-       WHERE tickets.qr_code_value = ?
-       LIMIT 1`
-    )
-    .bind(qrCodeValue)
-    .first<{
-      id: string
-      ticket_number: string
-      qr_code_value: string
-      status: string
-      redeemed_at: string | null
-      redeemed_by: string | null
-      event_id: string
-      event_location_id: string
-      customer_id: string
-      organization_id: string
-      event_name: string | null
-      event_location_name: string | null
-      ticket_type_name: string | null
-      customer_first_name: string | null
-      customer_last_name: string | null
-      customer_email: string | null
-    }>()
+  const ticket = await fetchTicketByQrValue(db, qrCodeValue)
 
   if (!ticket) {
     return c.json({
@@ -186,20 +141,7 @@ crudRoutes.post('/tickets/redeem', async (c) => {
   }
 
   const now = new Date().toISOString()
-  const ticketSummary = {
-    id: ticket.id,
-    ticket_number: ticket.ticket_number,
-    qr_code_value: ticket.qr_code_value,
-    status: ticket.status,
-    redeemed_at: ticket.redeemed_at,
-    event_id: ticket.event_id,
-    event_location_id: ticket.event_location_id,
-    event_name: ticket.event_name,
-    event_location_name: ticket.event_location_name,
-    ticket_type_name: ticket.ticket_type_name,
-    customer_name: `${ticket.customer_first_name ?? ''} ${ticket.customer_last_name ?? ''}`.trim() || null,
-    customer_email: ticket.customer_email
-  }
+  const ticketSummary = buildTicketSummary(ticket)
 
   if (ticket.redeemed_at) {
     await createTicketScanRecord(db, {
@@ -247,11 +189,12 @@ crudRoutes.post('/tickets/redeem', async (c) => {
       scanned_at: now
     })
 
+    const latestTicket = await fetchTicketByQrValue(db, qrCodeValue)
     return c.json({
       data: {
         status: 'already_redeemed',
         message: 'Ticket was just redeemed by another scan.',
-        ticket: { ...ticketSummary, redeemed_at: now }
+        ticket: latestTicket ? buildTicketSummary(latestTicket) : { ...ticketSummary, redeemed_at: now }
       }
     })
   }
@@ -268,12 +211,79 @@ crudRoutes.post('/tickets/redeem', async (c) => {
 
   const cache = createCache(c.env)
   await Promise.all([cache.bumpResourceVersion('tickets'), cache.bumpResourceVersion('ticket_scans')])
+  const actor = await db
+    .prepare('SELECT first_name, last_name, email FROM users WHERE id = ? LIMIT 1')
+    .bind(scope.userId)
+    .first<{ first_name: string | null; last_name: string | null; email: string | null }>()
 
   return c.json({
     data: {
       status: 'redeemed',
       message: 'Ticket redeemed successfully.',
-      ticket: { ...ticketSummary, redeemed_at: now }
+      ticket: {
+        ...ticketSummary,
+        redeemed_at: now,
+        redeemed_by_name: formatPersonNameFromParts(
+          actor?.first_name,
+          actor?.last_name,
+          actor?.email
+        )
+      }
+    }
+  })
+})
+
+crudRoutes.post('/tickets/inspect', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const qrCodeValue = resolveQrCodeValue(payload)
+  if (!qrCodeValue) {
+    return c.json({ error: 'qr_code_value or token is required.' }, 400)
+  }
+
+  const ticket = await fetchTicketByQrValue(db, qrCodeValue)
+  if (!ticket) {
+    return c.json({
+      data: {
+        status: 'not_found',
+        message: 'No ticket matched the scanned QR code.'
+      }
+    })
+  }
+
+  if (scope.webrole === 'Customers') {
+    if (ticket.customer_id !== scope.userId) {
+      return c.json({ error: 'Forbidden for this ticket.' }, 403)
+    }
+  } else if (!canScopeAccessOrganization(scope, ticket.organization_id)) {
+    return c.json({ error: 'Forbidden for this event.' }, 403)
+  }
+
+  const ticketSummary = buildTicketSummary(ticket)
+  if (ticket.redeemed_at) {
+    return c.json({
+      data: {
+        status: 'already_redeemed',
+        message: 'Ticket has already been redeemed.',
+        ticket: ticketSummary
+      }
+    })
+  }
+
+  return c.json({
+    data: {
+      status: 'unredeemed',
+      message: 'Ticket is valid and ready to redeem.',
+      ticket: ticketSummary
     }
   })
 })
@@ -1352,6 +1362,123 @@ async function createTicketScanRecord(
       record.scanned_at
     )
     .run()
+}
+
+type TicketLookupRow = {
+  id: string
+  ticket_number: string
+  qr_code_value: string
+  status: string
+  redeemed_at: string | null
+  redeemed_by: string | null
+  event_id: string
+  event_location_id: string
+  customer_id: string
+  organization_id: string
+  event_name: string | null
+  event_location_name: string | null
+  ticket_type_name: string | null
+  customer_first_name: string | null
+  customer_last_name: string | null
+  customer_email: string | null
+  redeemer_first_name: string | null
+  redeemer_last_name: string | null
+  redeemer_email: string | null
+}
+
+async function fetchTicketByQrValue(db: D1Database, qrCodeValue: string) {
+  return db
+    .prepare(
+      `SELECT
+         tickets.id,
+         tickets.ticket_number,
+         tickets.qr_code_value,
+         tickets.status,
+         tickets.redeemed_at,
+         tickets.redeemed_by,
+         tickets.event_id,
+         tickets.event_location_id,
+         tickets.customer_id,
+         events.organization_id,
+         events.name AS event_name,
+         event_locations.name AS event_location_name,
+         ticket_types.name AS ticket_type_name,
+         customer.first_name AS customer_first_name,
+         customer.last_name AS customer_last_name,
+         customer.email AS customer_email,
+         redeemer.first_name AS redeemer_first_name,
+         redeemer.last_name AS redeemer_last_name,
+         redeemer.email AS redeemer_email
+       FROM tickets
+       JOIN events ON events.id = tickets.event_id
+       LEFT JOIN event_locations ON event_locations.id = tickets.event_location_id
+       LEFT JOIN ticket_types ON ticket_types.id = tickets.ticket_type_id
+       LEFT JOIN users AS customer ON customer.id = tickets.customer_id
+       LEFT JOIN users AS redeemer ON redeemer.id = tickets.redeemed_by
+       WHERE tickets.qr_code_value = ?
+       LIMIT 1`
+    )
+    .bind(qrCodeValue)
+    .first<TicketLookupRow>()
+}
+
+function buildTicketSummary(ticket: TicketLookupRow) {
+  return {
+    id: ticket.id,
+    ticket_number: ticket.ticket_number,
+    qr_code_value: ticket.qr_code_value,
+    status: ticket.status,
+    redeemed_at: ticket.redeemed_at,
+    redeemed_by_name: formatPersonNameFromParts(
+      ticket.redeemer_first_name,
+      ticket.redeemer_last_name,
+      ticket.redeemer_email
+    ),
+    event_id: ticket.event_id,
+    event_location_id: ticket.event_location_id,
+    event_name: ticket.event_name,
+    event_location_name: ticket.event_location_name,
+    ticket_type_name: ticket.ticket_type_name,
+    customer_name: formatPersonNameFromParts(ticket.customer_first_name, ticket.customer_last_name, ticket.customer_email),
+    customer_email: ticket.customer_email
+  }
+}
+
+function formatPersonNameFromParts(
+  firstName: string | null | undefined,
+  lastName: string | null | undefined,
+  fallbackEmail: string | null | undefined
+) {
+  const fullName = `${firstName ?? ''} ${lastName ?? ''}`.trim()
+  if (fullName) {
+    return fullName
+  }
+  return fallbackEmail ?? null
+}
+
+function resolveQrCodeValue(payload: JsonRecord) {
+  const qrCodeValue = typeof payload.qr_code_value === 'string' ? payload.qr_code_value.trim() : ''
+  if (qrCodeValue) {
+    return qrCodeValue
+  }
+
+  const token = typeof payload.token === 'string' ? payload.token.trim() : ''
+  if (!token) {
+    return ''
+  }
+
+  try {
+    const parsed = JSON.parse(decodeBase64Url(token)) as { qr_value?: unknown }
+    return typeof parsed.qr_value === 'string' ? parsed.qr_value.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/')
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4))
+  return atob(`${normalized}${padding}`)
 }
 
 function normalizeOrganizationUserRole(value: unknown) {

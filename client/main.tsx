@@ -437,7 +437,7 @@ type ApiMutationResponse = {
 
 type TicketRedeemResponse = {
   data?: {
-    status?: 'redeemed' | 'already_redeemed' | 'not_found'
+    status?: 'redeemed' | 'already_redeemed' | 'not_found' | 'unredeemed'
     message?: string
     ticket?: ApiRecord
   }
@@ -631,8 +631,10 @@ function App() {
   }
 
   const isValidatorRoute = path === '/admin/validator' || path.startsWith('/admin/validator/')
+  const isTicketVerifyRoute = path === '/ticket/verify'
   const canAccessValidator =
     user?.webrole === 'Admin' || user?.webrole === 'Organizations' || user?.webrole === 'TicketValidator'
+  const qrVerifyToken = isTicketVerifyRoute ? new URLSearchParams(window.location.search).get('token') : null
 
   return (
     <>
@@ -649,6 +651,7 @@ function App() {
             <AccountAccessBlocked user={user} onLogout={logout} />
           ) : user.webrole === 'TicketValidator' || (isValidatorRoute && canAccessValidator) ? (
             <TicketValidatorApp
+              initialQrToken={null}
               user={user}
               onLogout={logout}
               theme={theme}
@@ -668,8 +671,18 @@ function App() {
         ) : (
           <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
         )
-      ) : (
+        ) : (
+          isTicketVerifyRoute && user && canAccessValidator ? (
+            <TicketValidatorApp
+              initialQrToken={qrVerifyToken}
+              user={user}
+              onLogout={logout}
+              theme={theme}
+              onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            />
+          ) : (
         <PublicApp
+          qrVerifyToken={isTicketVerifyRoute ? qrVerifyToken : null}
           user={user}
           isAuthLoading={isAuthLoading}
           theme={theme}
@@ -677,6 +690,7 @@ function App() {
           onLogout={logout}
           onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
         />
+          )
       )}
       {isAuthOpen ? (
         <AuthModal
@@ -692,6 +706,7 @@ function App() {
 }
 
 function PublicApp({
+  qrVerifyToken,
   user,
   isAuthLoading,
   theme,
@@ -699,6 +714,7 @@ function PublicApp({
   onLogout,
   onToggleTheme
 }: {
+  qrVerifyToken: string | null
   user: AuthUser
   isAuthLoading: boolean
   theme: 'dark' | 'light'
@@ -892,6 +908,11 @@ function PublicApp({
   const pausedEventRailsRef = useRef<Set<string>>(new Set())
   const canAccessAdmin = hasAdminConsoleAccess(user)
   const canAccessTickets = hasCustomerTicketsAccess(user)
+  const [isVerifyingTicket, setIsVerifyingTicket] = useState(false)
+  const [verifiedTicket, setVerifiedTicket] = useState<ApiRecord | null>(null)
+  const [verifiedTicketStatus, setVerifiedTicketStatus] = useState<'already_redeemed' | 'unredeemed' | 'not_found' | null>(null)
+  const [verifiedTicketMessage, setVerifiedTicketMessage] = useState('')
+  const verifyHandledTokenRef = useRef<string>('')
 
   useEffect(() => {
     if (!user?.id) return
@@ -930,6 +951,42 @@ function PublicApp({
 
     void loadPublicEvents()
   }, [])
+
+  useEffect(() => {
+    const token = qrVerifyToken?.trim() ?? ''
+    if (!token) return
+    if (verifyHandledTokenRef.current === token) return
+    if (!user?.id || user.webrole !== 'Customers') {
+      setPublicStatus('Sign in as the ticket owner to view this ticket.')
+      return
+    }
+
+    verifyHandledTokenRef.current = token
+    setIsVerifyingTicket(true)
+    setVerifiedTicket(null)
+    setVerifiedTicketStatus(null)
+    setVerifiedTicketMessage('Checking ticket...')
+
+    void (async () => {
+      try {
+        const { data } = await fetchJson<TicketRedeemResponse>('/api/tickets/inspect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        })
+        const result = data.data
+        setVerifiedTicket((result?.ticket ?? null) as ApiRecord | null)
+        setVerifiedTicketStatus((result?.status as 'already_redeemed' | 'unredeemed' | 'not_found' | undefined) ?? null)
+        setVerifiedTicketMessage(result?.message ?? 'Ticket loaded.')
+      } catch (error) {
+        setVerifiedTicketStatus(null)
+        setVerifiedTicket(null)
+        setVerifiedTicketMessage(getErrorMessage(error))
+      } finally {
+        setIsVerifyingTicket(false)
+      }
+    })()
+  }, [qrVerifyToken, user?.id, user?.webrole])
 
   useEffect(() => {
     async function loadTicketTypes() {
@@ -1391,6 +1448,15 @@ function PublicApp({
             setSelectedEventDetailId(null)
             setIsCheckoutOpen(true)
           }}
+        />
+      ) : null}
+      {verifiedTicket ? (
+        <CustomerTicketModal
+          isLoading={isVerifyingTicket}
+          message={verifiedTicketMessage}
+          status={verifiedTicketStatus}
+          ticket={verifiedTicket}
+          onClose={() => setVerifiedTicket(null)}
         />
       ) : null}
     </main>
@@ -1926,11 +1992,13 @@ function AccountAccessBlocked({ user, onLogout }: { user: AuthUser; onLogout: ()
 }
 
 function TicketValidatorApp({
+  initialQrToken,
   user,
   onLogout,
   theme,
   onToggleTheme
 }: {
+  initialQrToken: string | null
   user: AuthUser
   onLogout: () => void
   theme: 'dark' | 'light'
@@ -1939,25 +2007,46 @@ function TicketValidatorApp({
   const [qrInput, setQrInput] = useState('')
   const [statusMessage, setStatusMessage] = useState('Ready to scan tickets.')
   const [statusTone, setStatusTone] = useState<'neutral' | 'success' | 'warning' | 'error'>('neutral')
+  const [isInspecting, setIsInspecting] = useState(false)
   const [isRedeeming, setIsRedeeming] = useState(false)
   const [isCameraActive, setIsCameraActive] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [scanResult, setScanResult] = useState<ApiRecord | null>(null)
+  const [pendingTicket, setPendingTicket] = useState<ApiRecord | null>(null)
+  const [pendingStatus, setPendingStatus] = useState<'unredeemed' | 'already_redeemed' | null>(null)
+  const [pendingQrValue, setPendingQrValue] = useState('')
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectorRef = useRef<BarcodeDetectorInstance | null>(null)
-  const isRedeemingRef = useRef(false)
+  const isBusyRef = useRef(false)
+  const initialTokenHandledRef = useRef('')
   const lastDetectedRef = useRef<{ value: string; at: number }>({ value: '', at: 0 })
 
   useEffect(() => {
-    isRedeemingRef.current = isRedeeming
-  }, [isRedeeming])
+    isBusyRef.current = isInspecting || isRedeeming
+  }, [isInspecting, isRedeeming])
 
   useEffect(() => {
     return () => {
       stopCamera()
     }
   }, [])
+
+  useEffect(() => {
+    const token = initialQrToken?.trim() ?? ''
+    if (!token || initialTokenHandledRef.current === token) return
+    const qrValue = readQrValueFromToken(token)
+    if (!qrValue) {
+      setStatusTone('error')
+      setStatusMessage('Invalid ticket token in QR link.')
+      initialTokenHandledRef.current = token
+      return
+    }
+
+    initialTokenHandledRef.current = token
+    setQrInput(qrValue)
+    void inspectTicketByQr(qrValue, 'link')
+  }, [initialQrToken])
 
   useEffect(() => {
     if (!isCameraActive) {
@@ -2013,7 +2102,7 @@ function TicketValidatorApp({
 
       detectorRef.current = new detectorCtor({ formats: ['qr_code'] })
       intervalId = window.setInterval(() => {
-        if (!isCameraActive || isRedeemingRef.current || !videoRef.current || !detectorRef.current) return
+        if (!isCameraActive || isBusyRef.current || !videoRef.current || !detectorRef.current) return
         if (videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
         void detectorRef.current
@@ -2026,7 +2115,7 @@ function TicketValidatorApp({
               return
             }
             lastDetectedRef.current = { value: nextValue, at: now }
-            void redeemTicketByQr(nextValue, 'camera')
+            void inspectTicketByQr(nextValue, 'camera')
           })
           .catch(() => {
             // Ignore detection errors and continue scanning.
@@ -2055,31 +2144,48 @@ function TicketValidatorApp({
     }
   }
 
-  async function redeemTicketByQr(value: string, source: 'camera' | 'manual') {
+  async function inspectTicketByQr(value: string, source: 'camera' | 'manual' | 'link') {
     const qrCodeValue = value.trim()
-    if (!qrCodeValue || isRedeemingRef.current) return
+    if (!qrCodeValue || isBusyRef.current) return
 
     setQrInput(qrCodeValue)
-    setIsRedeeming(true)
+    setIsInspecting(true)
     setScanResult(null)
+    setPendingTicket(null)
+    setPendingStatus(null)
+    setPendingQrValue('')
     setStatusTone('neutral')
-    setStatusMessage(source === 'camera' ? 'Validating scanned QR code...' : 'Validating QR code...')
+    setStatusMessage(
+      source === 'camera'
+        ? 'Checking scanned QR code...'
+        : source === 'link'
+          ? 'Checking ticket from QR link...'
+          : 'Checking QR code...'
+    )
 
     try {
-      const { data } = await fetchJson<TicketRedeemResponse>('/api/tickets/redeem', {
+      const { data } = await fetchJson<TicketRedeemResponse>('/api/tickets/inspect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ qr_code_value: qrCodeValue })
       })
       const result = data.data
-      setScanResult((result?.ticket ?? null) as ApiRecord | null)
+      const ticket = (result?.ticket ?? null) as ApiRecord | null
 
-      if (result?.status === 'redeemed') {
-        setStatusTone('success')
-        setStatusMessage(result.message ?? 'Ticket redeemed successfully.')
-      } else if (result?.status === 'already_redeemed') {
+      if (result?.status === 'already_redeemed' && ticket) {
+        setScanResult(ticket)
+        setPendingTicket(ticket)
+        setPendingStatus('already_redeemed')
+        setPendingQrValue(qrCodeValue)
         setStatusTone('warning')
         setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
+      } else if (result?.status === 'unredeemed' && ticket) {
+        setScanResult(ticket)
+        setPendingTicket(ticket)
+        setPendingStatus('unredeemed')
+        setPendingQrValue(qrCodeValue)
+        setStatusTone('neutral')
+        setStatusMessage(result.message ?? 'Ticket is valid. Confirm redemption.')
       } else {
         setStatusTone('error')
         setStatusMessage(result?.message ?? 'No matching ticket was found for this QR code.')
@@ -2088,6 +2194,49 @@ function TicketValidatorApp({
       setStatusTone('error')
       setStatusMessage(getErrorMessage(error))
       setScanResult(null)
+    } finally {
+      setIsInspecting(false)
+    }
+  }
+
+  async function confirmRedeem() {
+    if (!pendingTicket || pendingStatus !== 'unredeemed' || !pendingQrValue.trim() || isBusyRef.current) return
+
+    setIsRedeeming(true)
+    setStatusTone('neutral')
+    setStatusMessage('Redeeming ticket...')
+
+    try {
+      const { data } = await fetchJson<TicketRedeemResponse>('/api/tickets/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qr_code_value: pendingQrValue.trim() })
+      })
+      const result = data.data
+      const ticket = (result?.ticket ?? null) as ApiRecord | null
+      if (ticket) {
+        setScanResult(ticket)
+      }
+
+      if (result?.status === 'redeemed') {
+        setStatusTone('success')
+        setStatusMessage(result.message ?? 'Ticket redeemed successfully.')
+        setPendingTicket(ticket)
+        setPendingStatus(ticket ? 'already_redeemed' : null)
+      } else if (result?.status === 'already_redeemed') {
+        setStatusTone('warning')
+        setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
+        setPendingTicket(ticket)
+        setPendingStatus(ticket ? 'already_redeemed' : null)
+      } else {
+        setPendingTicket(null)
+        setPendingStatus(null)
+        setStatusTone('error')
+        setStatusMessage(result?.message ?? 'Unable to redeem ticket.')
+      }
+    } catch (error) {
+      setStatusTone('error')
+      setStatusMessage(getErrorMessage(error))
     } finally {
       setIsRedeeming(false)
     }
@@ -2150,23 +2299,23 @@ function TicketValidatorApp({
             className="validator-manual-form"
             onSubmit={(event) => {
               event.preventDefault()
-              void redeemTicketByQr(qrInput, 'manual')
+              void inspectTicketByQr(qrInput, 'manual')
             }}
           >
             <label>
               <span>QR code value</span>
               <input
                 autoComplete="off"
-                disabled={isRedeeming}
+                disabled={isInspecting || isRedeeming}
                 placeholder="Scan or paste the QR payload"
                 type="text"
                 value={qrInput}
                 onChange={(event) => setQrInput(event.target.value)}
               />
             </label>
-            <button className="primary-admin-button" disabled={isRedeeming || !qrInput.trim()} type="submit">
-              {isRedeeming ? <span aria-hidden="true" className="button-spinner" /> : <ScanLine size={17} />}
-              {isRedeeming ? 'Validating...' : 'Redeem ticket'}
+            <button className="primary-admin-button" disabled={isInspecting || isRedeeming || !qrInput.trim()} type="submit">
+              {isInspecting ? <span aria-hidden="true" className="button-spinner" /> : <ScanLine size={17} />}
+              {isInspecting ? 'Checking...' : 'Check ticket'}
             </button>
           </form>
 
@@ -2185,11 +2334,121 @@ function TicketValidatorApp({
               <p><strong>Type</strong> {String(scanResult.ticket_type_name ?? '-')}</p>
               <p><strong>Customer</strong> {String(scanResult.customer_name ?? scanResult.customer_email ?? '-')}</p>
               <p><strong>Redeemed at</strong> {String(scanResult.redeemed_at ?? '-')}</p>
+              <p><strong>Redeemed by</strong> {String(scanResult.redeemed_by_name ?? '-')}</p>
             </div>
           ) : null}
         </article>
       </section>
+      {pendingTicket && pendingStatus ? (
+        <TicketValidationModal
+          busy={isInspecting || isRedeeming}
+          status={pendingStatus}
+          ticket={pendingTicket}
+          onClose={() => {
+            setPendingTicket(null)
+            setPendingStatus(null)
+            setPendingQrValue('')
+          }}
+          onConfirmRedeem={() => void confirmRedeem()}
+        />
+      ) : null}
     </main>
+  )
+}
+
+function TicketValidationModal({
+  busy,
+  status,
+  ticket,
+  onClose,
+  onConfirmRedeem
+}: {
+  busy: boolean
+  status: 'unredeemed' | 'already_redeemed'
+  ticket: ApiRecord
+  onClose: () => void
+  onConfirmRedeem: () => void
+}) {
+  const title = status === 'unredeemed' ? 'Confirm ticket redemption' : 'Ticket already redeemed'
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal reservation-modal" role="dialog" aria-modal="true">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Ticket validation</p>
+            <h2>{title}</h2>
+          </div>
+          <button aria-label="Close modal" disabled={busy} type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="validator-ticket-meta">
+          <p><strong>Ticket</strong> {String(ticket.ticket_number ?? '-')}</p>
+          <p><strong>Event</strong> {String(ticket.event_name ?? '-')}</p>
+          <p><strong>Location</strong> {String(ticket.event_location_name ?? '-')}</p>
+          <p><strong>Type</strong> {String(ticket.ticket_type_name ?? '-')}</p>
+          <p><strong>Customer</strong> {String(ticket.customer_name ?? ticket.customer_email ?? '-')}</p>
+          <p><strong>Redeemed at</strong> {String(ticket.redeemed_at ?? '-')}</p>
+          <p><strong>Redeemed by</strong> {String(ticket.redeemed_by_name ?? '-')}</p>
+        </div>
+        <footer className="record-modal-actions">
+          <button disabled={busy} type="button" onClick={onClose}>
+            Close
+          </button>
+          {status === 'unredeemed' ? (
+            <button className="primary-admin-button" disabled={busy} type="button" onClick={onConfirmRedeem}>
+              {busy ? <span aria-hidden="true" className="button-spinner" /> : <CheckCircle2 size={17} />}
+              {busy ? 'Redeeming...' : 'Confirm redeem'}
+            </button>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function CustomerTicketModal({
+  isLoading,
+  status,
+  message,
+  ticket,
+  onClose
+}: {
+  isLoading: boolean
+  status: 'already_redeemed' | 'unredeemed' | 'not_found' | null
+  message: string
+  ticket: ApiRecord
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal reservation-modal" role="dialog" aria-modal="true">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">My ticket</p>
+            <h2>{String(ticket.ticket_number ?? 'Ticket')}</h2>
+          </div>
+          <button aria-label="Close modal" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className={`validator-result validator-result-${status === 'already_redeemed' ? 'warning' : 'neutral'}`}>
+          <span>{isLoading ? 'Loading ticket...' : message || 'Ticket loaded.'}</span>
+        </div>
+        <div className="validator-ticket-meta">
+          <p><strong>Status</strong> {status === 'already_redeemed' ? 'Redeemed' : 'Valid'}</p>
+          <p><strong>Event</strong> {String(ticket.event_name ?? '-')}</p>
+          <p><strong>Location</strong> {String(ticket.event_location_name ?? '-')}</p>
+          <p><strong>Type</strong> {String(ticket.ticket_type_name ?? '-')}</p>
+          <p><strong>Redeemed at</strong> {String(ticket.redeemed_at ?? '-')}</p>
+          <p><strong>Redeemed by</strong> {String(ticket.redeemed_by_name ?? '-')}</p>
+        </div>
+        <footer className="record-modal-actions">
+          <button type="button" onClick={onClose}>Close</button>
+        </footer>
+      </section>
+    </div>
   )
 }
 
@@ -4506,6 +4765,18 @@ function isValidHttpUrl(value: string) {
     return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.host)
   } catch {
     return false
+  }
+}
+
+function readQrValueFromToken(token: string) {
+  try {
+    const normalized = token.replaceAll('-', '+').replaceAll('_', '/')
+    const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4))
+    const decoded = atob(`${normalized}${padding}`)
+    const parsed = JSON.parse(decoded) as { qr_value?: unknown }
+    return typeof parsed.qr_value === 'string' ? parsed.qr_value.trim() : ''
+  } catch {
+    return ''
   }
 }
 
