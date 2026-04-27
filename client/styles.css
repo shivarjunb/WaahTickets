@@ -2003,6 +2003,16 @@ h1 {
   line-height: 1.4;
 }
 
+.auth-status {
+  margin: 0;
+  color: inherit;
+}
+
+.auth-status-error {
+  color: #ef4444;
+  font-weight: 600;
+}
+
 .button-spinner {
   display: inline-block;
   width: 14px;

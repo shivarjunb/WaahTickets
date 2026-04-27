@@ -3,6 +3,7 @@ import { authRoutes } from './api/auth.js'
 import { crudRoutes } from './api/crud.js'
 import { createCache } from './cache/upstash.js'
 import type { Bindings } from './types/bindings.js'
+import { sanitizeServerError } from './utils/errors.js'
 
 const PUBLIC_EVENTS_CACHE_TTL_SECONDS = 60
 const PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS = 60
@@ -11,13 +12,14 @@ export const app = new Hono<{ Bindings: Bindings }>()
 
 app.onError((error, c) => {
   console.error(error)
+  const sanitized = sanitizeServerError(error, 'Request failed.')
 
   return c.json(
     {
-      error: 'Request failed.',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      error: sanitized.error,
+      message: sanitized.message
     },
-    500
+    sanitized.status
   )
 })
 

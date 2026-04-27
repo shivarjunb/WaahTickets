@@ -3,6 +3,7 @@ import type { Context } from 'hono'
 import { hashPassword, hashToken, verifyPassword } from '../auth/password.js'
 import { enqueueAccountCreatedNotification } from '../notifications/service.js'
 import type { Bindings } from '../types/bindings.js'
+import { sanitizeServerError } from '../utils/errors.js'
 
 type AppContext = Context<{ Bindings: Bindings }>
 
@@ -107,13 +108,8 @@ authRoutes.post('/register', async (c) => {
     )
   } catch (error) {
     console.error(error)
-    return c.json(
-      {
-        error: 'Registration failed.',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      },
-      500
-    )
+    const sanitized = sanitizeServerError(error, 'Registration failed.')
+    return c.json({ error: sanitized.error, message: sanitized.message }, sanitized.status)
   }
 })
 
@@ -141,13 +137,8 @@ authRoutes.post('/login', async (c) => {
     return withSessionCookie(c, { user: sanitizeUser(user) }, session.token)
   } catch (error) {
     console.error(error)
-    return c.json(
-      {
-        error: 'Login failed.',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      },
-      500
-    )
+    const sanitized = sanitizeServerError(error, 'Login failed.')
+    return c.json({ error: sanitized.error, message: sanitized.message }, sanitized.status)
   }
 })
 

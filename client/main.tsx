@@ -1765,7 +1765,7 @@ function AuthModal({
           </button>
         </header>
         <div className="auth-body">
-          <p>{status}</p>
+          <p className={isErrorStatusMessage(status) ? 'auth-status auth-status-error' : 'auth-status'}>{status}</p>
           {mode === 'register' ? (
             <div className="modal-form-grid auth-name-grid">
               <label>
@@ -3703,6 +3703,16 @@ function AdminApp({
                                   <Download size={16} />
                                 </button>
                               ) : null}
+                              {selectedResource === 'tickets' && getTicketPdfDownloadUrl(record) ? (
+                                <button
+                                  aria-label="Download ticket PDF"
+                                  title="Download ticket PDF"
+                                  type="button"
+                                  onClick={() => window.open(getTicketPdfDownloadUrl(record) ?? '', '_blank', 'noopener')}
+                                >
+                                  <Download size={16} />
+                                </button>
+                              ) : null}
                             </div>
                           </td>
                         </tr>
@@ -4300,6 +4310,13 @@ function getFileDownloadUrl(record: ApiRecord) {
   return `/api/files/${encodeURIComponent(id)}/download`
 }
 
+function getTicketPdfDownloadUrl(record: ApiRecord) {
+  const raw = record.pdf_file_id
+  const fileId = typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim()
+  if (!fileId) return null
+  return `/api/files/${encodeURIComponent(fileId)}/download`
+}
+
 function formatCellValue(column: string, value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
   if (isBooleanField(column)) {
@@ -4568,10 +4585,38 @@ async function fetchJson<T>(url: string, options?: RequestInit) {
 
 function getErrorMessage(error: unknown) {
   if (!(error instanceof Error)) return 'Request failed'
-  if (error.message.includes('FOREIGN KEY constraint failed')) {
+  const cleaned = sanitizeClientErrorMessage(error.message)
+  if (cleaned.includes('FOREIGN KEY constraint failed')) {
     return 'Foreign key failed. Create, delete, or reassign the related records first, then try again.'
   }
-  return error.message
+  return cleaned
+}
+
+function sanitizeClientErrorMessage(message: string) {
+  const trimmed = message.trim()
+  if (!trimmed) return 'Request failed'
+  if (trimmed.includes('UNIQUE constraint failed') && trimmed.includes('users.email')) {
+    return 'This email address is already registered.'
+  }
+  if (trimmed.includes('UNIQUE constraint failed')) {
+    return 'A record with this value already exists.'
+  }
+  if (trimmed.includes('D1_ERROR:')) {
+    const prefix = 'D1_ERROR:'
+    const sqliteMarker = ': SQLITE_CONSTRAINT'
+    const start = trimmed.indexOf(prefix)
+    const end = trimmed.indexOf(sqliteMarker)
+    if (start !== -1 && end > start) {
+      return trimmed.slice(start + prefix.length, end).trim()
+    }
+    return 'Database request failed.'
+  }
+  return trimmed
+}
+
+function isErrorStatusMessage(message: string) {
+  const normalized = message.toLowerCase()
+  return normalized.includes('failed') || normalized.includes('error') || normalized.includes('invalid')
 }
 
 createRoot(document.getElementById('root')!).render(

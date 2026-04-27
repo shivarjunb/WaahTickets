@@ -69,6 +69,8 @@ const ACCOUNT_CREATED_MESSAGE_TYPE = 'account_created'
 const ACCOUNT_DELETED_MESSAGE_TYPE = 'account_deleted'
 const MAX_RETRY_ATTEMPTS = 5
 const EMAIL_VERIFICATION_EXPIRY_HOURS = 48
+const TICKET_FILE_TYPE = 'ticket_pdf'
+const TICKET_FILE_STORAGE_PROVIDER = 'r2'
 const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
   setting_key TEXT PRIMARY KEY,
   setting_value TEXT NOT NULL,
@@ -78,6 +80,7 @@ const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
 
 type NotificationRuntimeSettings = {
   ticketQrBaseUrl: string | null
+  r2PublicBaseUrl: string | null
 }
 
 export type NotificationDeliveryReadiness = {
@@ -459,10 +462,12 @@ async function processOrderQueueMessage(
 
   try {
     await markQueueEntryProcessing(env.DB, payload.queueEntryId, message.attempts)
+    await ensureOrderTicketsExist(env.DB, payload.orderId)
     const snapshot = await loadOrderSnapshot(env.DB, payload.orderId)
     const runtimeSettings = await loadNotificationRuntimeSettings(env.DB)
     const email = buildOrderEmail(snapshot)
     const pdfBytes = buildTicketPdf(snapshot, env, runtimeSettings)
+    await persistTicketPdfAssetForOrder(env, snapshot, pdfBytes, runtimeSettings)
     const providerResult = await sendOrderEmail({
       env,
       to: payload.recipientEmail,
@@ -569,6 +574,191 @@ async function processAccountQueueMessage(
       message.retry()
     }
   }
+}
+
+async function ensureOrderTicketsExist(db: D1Database, orderId: string) {
+  const orderRow = await db
+    .prepare(
+      `SELECT id, order_number, customer_id, event_id, event_location_id, status
+       FROM orders
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(orderId)
+    .first<{
+      id: string
+      order_number: string
+      customer_id: string
+      event_id: string
+      event_location_id: string
+      status: string
+    }>()
+
+  if (!orderRow) {
+    throw new Error(`Order ${orderId} was not found for ticket generation.`)
+  }
+
+  const orderItemsResult = await db
+    .prepare(
+      `SELECT id, ticket_type_id, quantity
+       FROM order_items
+       WHERE order_id = ?
+       ORDER BY created_at ASC`
+    )
+    .bind(orderId)
+    .all<{ id: string; ticket_type_id: string; quantity: number }>()
+
+  if (!orderItemsResult.results.length) {
+    throw new Error(`Order ${orderId} has no order_items. Unable to generate tickets.`)
+  }
+
+  const existingCountsResult = await db
+    .prepare(
+      `SELECT order_item_id, COUNT(1) AS count
+       FROM tickets
+       WHERE order_id = ?
+       GROUP BY order_item_id`
+    )
+    .bind(orderId)
+    .all<{ order_item_id: string; count: number }>()
+
+  const existingByOrderItem = new Map<string, number>()
+  for (const row of existingCountsResult.results) {
+    existingByOrderItem.set(row.order_item_id, Number(row.count ?? 0))
+  }
+
+  const now = new Date().toISOString()
+  const isPaid = ORDER_SUCCESS_STATUSES.has((orderRow.status ?? '').toLowerCase()) ? 1 : 0
+  let insertedCount = 0
+
+  for (const item of orderItemsResult.results) {
+    const targetQuantity = Math.max(0, Number(item.quantity ?? 0))
+    const existingCount = existingByOrderItem.get(item.id) ?? 0
+    const missingCount = Math.max(0, targetQuantity - existingCount)
+
+    for (let index = 0; index < missingCount; index += 1) {
+      const ticketId = crypto.randomUUID()
+      const ticketNumber = buildTicketNumber(orderRow.order_number)
+      const qrCodeValue = buildTicketQrCodeValue(orderRow.id)
+
+      await db
+        .prepare(
+          `INSERT INTO tickets (
+            id, ticket_number, order_id, order_item_id, event_id, event_location_id,
+            ticket_type_id, customer_id, qr_code_value, status, is_paid, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
+        )
+        .bind(
+          ticketId,
+          ticketNumber,
+          orderRow.id,
+          item.id,
+          orderRow.event_id,
+          orderRow.event_location_id,
+          item.ticket_type_id,
+          orderRow.customer_id,
+          qrCodeValue,
+          isPaid,
+          now,
+          now
+        )
+        .run()
+      insertedCount += 1
+    }
+  }
+
+  if (insertedCount > 0) {
+    console.log('[notifications] generated missing tickets for order', {
+      orderId,
+      insertedCount
+    })
+  }
+}
+
+async function persistTicketPdfAssetForOrder(
+  env: Bindings,
+  snapshot: OrderSnapshot,
+  pdfBytes: Uint8Array,
+  settings: NotificationRuntimeSettings
+) {
+  if (!env.DB) {
+    throw new Error('Missing DB binding for ticket PDF persistence.')
+  }
+  if (!env.FILES_BUCKET) {
+    throw new Error('Missing FILES_BUCKET binding for ticket PDF persistence.')
+  }
+
+  const existingAssigned = await env.DB
+    .prepare(
+      `SELECT pdf_file_id
+       FROM tickets
+       WHERE order_id = ?
+         AND pdf_file_id IS NOT NULL
+       LIMIT 1`
+    )
+    .bind(snapshot.order.id)
+    .first<{ pdf_file_id: string }>()
+
+  if (existingAssigned?.pdf_file_id) {
+    await assignPdfToOrderTickets(env.DB, snapshot.order.id, existingAssigned.pdf_file_id)
+    return existingAssigned.pdf_file_id
+  }
+
+  const now = new Date().toISOString()
+  const fileId = crypto.randomUUID()
+  const fileName = sanitizeFileName(`tickets-${snapshot.order.orderNumber}.pdf`)
+  const storageKey = buildTicketPdfStorageKey(snapshot.order.id, fileId, now)
+  const bucketName = (env.R2_UPLOAD_BUCKET_NAME?.trim() || 'r2-default').slice(0, 255)
+  const publicUrl = buildPublicFileUrl(settings.r2PublicBaseUrl, storageKey)
+
+  await env.FILES_BUCKET.put(storageKey, pdfBytes, {
+    httpMetadata: { contentType: 'application/pdf' },
+    customMetadata: {
+      fileType: TICKET_FILE_TYPE,
+      orderId: snapshot.order.id
+    }
+  })
+
+  try {
+    await env.DB
+      .prepare(
+        `INSERT INTO files (
+          id, file_type, file_name, mime_type, storage_provider,
+          bucket_name, storage_key, public_url, size_bytes, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+      )
+      .bind(
+        fileId,
+        TICKET_FILE_TYPE,
+        fileName,
+        'application/pdf',
+        TICKET_FILE_STORAGE_PROVIDER,
+        bucketName,
+        storageKey,
+        publicUrl,
+        pdfBytes.length,
+        now
+      )
+      .run()
+  } catch (error) {
+    await env.FILES_BUCKET.delete(storageKey)
+    throw error
+  }
+
+  await assignPdfToOrderTickets(env.DB, snapshot.order.id, fileId)
+  return fileId
+}
+
+async function assignPdfToOrderTickets(db: D1Database, orderId: string, fileId: string) {
+  await db
+    .prepare(
+      `UPDATE tickets
+       SET pdf_file_id = ?, updated_at = ?
+       WHERE order_id = ?
+         AND (pdf_file_id IS NULL OR pdf_file_id = '')`
+    )
+    .bind(fileId, new Date().toISOString(), orderId)
+    .run()
 }
 
 async function loadOrderSnapshot(db: D1Database, orderId: string): Promise<OrderSnapshot> {
@@ -1035,22 +1225,28 @@ function formatPdfNumber(value: number) {
 async function loadNotificationRuntimeSettings(db: D1Database): Promise<NotificationRuntimeSettings> {
   try {
     await db.prepare(APP_SETTINGS_TABLE_SQL).run()
-    const row = await db
+    const rows = await db
       .prepare(
-        `SELECT setting_value
+        `SELECT setting_key, setting_value
          FROM app_settings
-         WHERE setting_key = 'ticket_qr_base_url'
-         LIMIT 1`
+         WHERE setting_key IN ('ticket_qr_base_url', 'r2_public_base_url')`
       )
-      .first<{ setting_value: string }>()
+      .all<{ setting_key: string; setting_value: string }>()
+
+    const settingsByKey = new Map<string, string>()
+    for (const row of rows.results) {
+      settingsByKey.set(row.setting_key, row.setting_value)
+    }
 
     return {
-      ticketQrBaseUrl: row?.setting_value?.trim() || null
+      ticketQrBaseUrl: settingsByKey.get('ticket_qr_base_url')?.trim() || null,
+      r2PublicBaseUrl: settingsByKey.get('r2_public_base_url')?.trim() || null
     }
   } catch (error) {
     console.warn('[notifications] runtime settings unavailable', error)
     return {
-      ticketQrBaseUrl: null
+      ticketQrBaseUrl: null,
+      r2PublicBaseUrl: null
     }
   }
 }
@@ -1436,6 +1632,52 @@ function parseEmailFrom(value: string) {
   return {
     name: match[1].trim().replace(/^"|"$/g, ''),
     email: match[2].trim()
+  }
+}
+
+function buildTicketNumber(orderNumber: string) {
+  const normalizedOrderNumber = orderNumber.trim().replace(/[^a-zA-Z0-9_-]+/g, '').slice(0, 24) || 'ORDER'
+  const suffix = crypto.randomUUID().slice(0, 10).toUpperCase()
+  return `TKT-${normalizedOrderNumber}-${suffix}`
+}
+
+function buildTicketQrCodeValue(orderId: string) {
+  const orderSegment = orderId.trim().replace(/[^a-zA-Z0-9_-]+/g, '').slice(0, 24) || 'ORDER'
+  const suffix = crypto.randomUUID().replaceAll('-', '')
+  return `QR-${orderSegment}-${suffix}`
+}
+
+function sanitizeFileName(value: string) {
+  const cleaned = value
+    .trim()
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^\.+/, '')
+    .replace(/\.+$/, '')
+
+  if (!cleaned) {
+    return 'tickets.pdf'
+  }
+
+  return cleaned.slice(0, 120)
+}
+
+function buildTicketPdfStorageKey(orderId: string, fileId: string, isoDate: string) {
+  const datePath = isoDate.slice(0, 10).replaceAll('-', '/')
+  return `tickets/${datePath}/${orderId}-${fileId}.pdf`
+}
+
+function buildPublicFileUrl(baseUrl: string | null | undefined, storageKey: string) {
+  const base = baseUrl?.trim()
+  if (!base) {
+    return null
+  }
+
+  try {
+    const normalized = base.endsWith('/') ? base : `${base}/`
+    return new URL(storageKey, normalized).toString()
+  } catch {
+    return null
   }
 }
 

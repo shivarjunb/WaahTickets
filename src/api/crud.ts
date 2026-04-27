@@ -1275,8 +1275,9 @@ async function executeMutation<T>(
     return await operation()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Database mutation failed.'
+    const normalizedMessage = normalizeSqlErrorMessage(message)
 
-    if (message.includes('FOREIGN KEY constraint failed')) {
+    if (normalizedMessage.includes('FOREIGN KEY constraint failed')) {
       const userMessage =
         action === 'delete'
           ? 'This record is referenced by other records. Delete or reassign the related records first, then try again.'
@@ -1291,11 +1292,13 @@ async function executeMutation<T>(
       )
     }
 
-    if (message.includes('UNIQUE constraint failed')) {
+    if (normalizedMessage.includes('UNIQUE constraint failed')) {
+      const uniqueColumns = extractUniqueConstraintColumns(normalizedMessage)
+      const friendlyMessage = getUniqueConstraintMessage(uniqueColumns)
       return c.json(
         {
           error: 'Unique constraint failed.',
-          message: 'A record already exists with one of the unique values in this request.'
+          message: friendlyMessage
         },
         409
       )
@@ -1355,6 +1358,40 @@ function normalizeOrganizationUserRole(value: unknown) {
   if (typeof value !== 'string') return null
   const normalized = value.trim().toLowerCase().replaceAll('-', '_')
   return normalized === 'admin' || normalized === 'ticket_validator' ? normalized : null
+}
+
+function normalizeSqlErrorMessage(message: string) {
+  if (!message) return ''
+  const trimmed = message.trim()
+  const d1Prefix = 'D1_ERROR:'
+  if (!trimmed.startsWith(d1Prefix)) return trimmed
+  const sqliteMarker = ': SQLITE_CONSTRAINT'
+  const sqliteIndex = trimmed.indexOf(sqliteMarker)
+  if (sqliteIndex === -1) {
+    return trimmed.slice(d1Prefix.length).trim()
+  }
+  return trimmed.slice(d1Prefix.length, sqliteIndex).trim()
+}
+
+function extractUniqueConstraintColumns(message: string) {
+  const marker = 'UNIQUE constraint failed:'
+  const markerIndex = message.indexOf(marker)
+  if (markerIndex === -1) return []
+  return message
+    .slice(markerIndex + marker.length)
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function getUniqueConstraintMessage(columns: string[]) {
+  if (columns.includes('users.email')) {
+    return 'This email address is already registered.'
+  }
+  if (columns.includes('customers.email')) {
+    return 'This customer email already exists.'
+  }
+  return 'A record already exists with one of the unique values in this request.'
 }
 
 async function maybeSyncWebroleFromOrganizationUser(
