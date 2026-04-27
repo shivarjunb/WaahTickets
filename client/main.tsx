@@ -2191,7 +2191,7 @@ function TicketValidatorApp({
   }
 
   async function inspectTicketByQr(value: string, source: 'camera' | 'manual' | 'link') {
-    const qrCodeValue = value.trim()
+    const qrCodeValue = resolveQrCodeValueFromPayload(value)
     if (!qrCodeValue || isBusyRef.current) return
 
     setQrInput(qrCodeValue)
@@ -2219,17 +2219,21 @@ function TicketValidatorApp({
       const ticket = (result?.ticket ?? null) as ApiRecord | null
 
       if (result?.status === 'already_redeemed' && ticket) {
+        const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
         setPendingTicket(ticket)
         setPendingStatus('already_redeemed')
-        setPendingQrValue(qrCodeValue)
+        setPendingQrValue(resolvedQrCodeValue)
+        setQrInput(resolvedQrCodeValue)
         setStatusTone('warning')
         setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
       } else if (result?.status === 'unredeemed' && ticket) {
+        const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
         setPendingTicket(ticket)
         setPendingStatus('unredeemed')
-        setPendingQrValue(qrCodeValue)
+        setPendingQrValue(resolvedQrCodeValue)
+        setQrInput(resolvedQrCodeValue)
         setStatusTone('neutral')
         setStatusMessage(result.message ?? 'Ticket is valid. Confirm redemption.')
       } else {
@@ -4821,6 +4825,59 @@ function readQrValueFromToken(token: string) {
     const decoded = atob(`${normalized}${padding}`)
     const parsed = JSON.parse(decoded) as { qr_value?: unknown }
     return typeof parsed.qr_value === 'string' ? parsed.qr_value.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function resolveQrCodeValueFromPayload(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+
+  const fromUrl = readQrValueFromUrlPayload(trimmed)
+  if (fromUrl) return fromUrl
+
+  const fromToken = readQrValueFromToken(trimmed)
+  if (fromToken) return fromToken
+
+  return trimmed
+}
+
+function readQrValueFromUrlPayload(value: string) {
+  const fromAbsoluteUrl = readQrValueFromUrlSearchParams(value)
+  if (fromAbsoluteUrl) return fromAbsoluteUrl
+
+  if (value.startsWith('/') || value.startsWith('?') || value.startsWith('./')) {
+    try {
+      const localUrl = new URL(value, window.location.origin)
+      const fromLocalUrl = readQrValueFromUrlSearchParams(localUrl.toString())
+      if (fromLocalUrl) return fromLocalUrl
+    } catch {
+      // Ignore malformed local URL payload.
+    }
+  }
+
+  if (!value.includes('://') && value.includes('=')) {
+    const query = value.includes('?') ? value.slice(value.indexOf('?') + 1) : value
+    const params = new URLSearchParams(query)
+    const fromQueryToken = readQrValueFromToken(params.get('token')?.trim() ?? '')
+    if (fromQueryToken) return fromQueryToken
+    const directQrValue = params.get('qr_value')?.trim() || params.get('qr_code_value')?.trim() || ''
+    if (directQrValue) return directQrValue
+  }
+
+  return ''
+}
+
+function readQrValueFromUrlSearchParams(value: string) {
+  try {
+    const url = new URL(value)
+    const token = url.searchParams.get('token')?.trim() ?? ''
+    const fromToken = readQrValueFromToken(token)
+    if (fromToken) return fromToken
+
+    const directQrValue = url.searchParams.get('qr_value')?.trim() || url.searchParams.get('qr_code_value')?.trim() || ''
+    return directQrValue
   } catch {
     return ''
   }
