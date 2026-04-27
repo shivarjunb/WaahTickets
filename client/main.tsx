@@ -507,7 +507,8 @@ const hiddenTableColumns = new Set([
   'banner_file_id',
   'pdf_file_id',
   'google_sub',
-  'password_hash'
+  'password_hash',
+  'organization_role'
 ])
 
 const defaultSubgridRowsPerPage = 8
@@ -629,6 +630,10 @@ function App() {
     }
   }
 
+  const isValidatorRoute = path === '/admin/validator' || path.startsWith('/admin/validator/')
+  const canAccessValidator =
+    user?.webrole === 'Admin' || user?.webrole === 'Organizations' || user?.webrole === 'TicketValidator'
+
   return (
     <>
       {path.startsWith('/admin') ? (
@@ -642,7 +647,7 @@ function App() {
 
           user.is_active === false || !user.is_email_verified ? (
             <AccountAccessBlocked user={user} onLogout={logout} />
-          ) : user.webrole === 'TicketValidator' ? (
+          ) : user.webrole === 'TicketValidator' || (isValidatorRoute && canAccessValidator) ? (
             <TicketValidatorApp
               user={user}
               onLogout={logout}
@@ -3234,6 +3239,12 @@ function AdminApp({
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
+            {selectedWebRole !== 'Customers' ? (
+              <a className="admin-link-button" href="/admin/validator">
+                <ScanLine size={17} />
+                Ticket validation
+              </a>
+            ) : null}
             <a className="admin-link-button" href="/">
               <Home size={17} />
               Public site
@@ -4235,7 +4246,9 @@ function getTableColumns(records: ApiRecord[]) {
 
 function getAvailableColumns(schemaColumns: string[], records: ApiRecord[]) {
   const available = new Set([...schemaColumns, ...records.flatMap((record) => Object.keys(record))])
-  return [...available].filter((column) => column !== 'password_hash' && column !== 'google_sub')
+  return [...available].filter(
+    (column) => column !== 'password_hash' && column !== 'google_sub' && column !== 'organization_role'
+  )
 }
 
 function getStatusBreakdown(records: ApiRecord[]) {
@@ -4370,7 +4383,8 @@ function isAlwaysHiddenFormField(field: string) {
     'avatar_url',
     'last_login_at',
     'created_at',
-    'updated_at'
+    'updated_at',
+    'organization_role'
   ].includes(field)
 }
 
