@@ -19,6 +19,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply waahtickets-db --remote",
     "db:execute:local": "wrangler d1 execute waahtickets-db --local",
     "db:execute:remote": "wrangler d1 execute waahtickets-db --remote",
+    "db:repair:org-users-role:local": "wrangler d1 execute waahtickets-db --local --file scripts/repair-org-users-role-column.sql",
+    "db:repair:org-users-role:remote": "wrangler d1 execute waahtickets-db --remote --file scripts/repair-org-users-role-column.sql",
     "test:account-email-queue:local": "./scripts/test-account-email-queue-local.sh"
   },
   "dependencies": {
