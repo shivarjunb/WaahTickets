@@ -77,3 +77,30 @@ Run local queue integration tests:
 ./scripts/test-email-queue-local.sh
 ./scripts/test-account-email-queue-local.sh
 ```
+
+## Khalti Payment Secrets
+
+Khalti checkout supports sandbox (`test`) and production (`live`) modes.
+
+Set these Worker secrets:
+
+- `KHALTI_TEST_SECRET_KEY`
+- `KHALTI_LIVE_SECRET_KEY`
+
+```bash
+npx wrangler secret put KHALTI_TEST_SECRET_KEY
+npx wrangler secret put KHALTI_LIVE_SECRET_KEY
+```
+
+Khalti also provides public keys. Store them in admin settings (not as Wrangler secrets):
+
+- `Settings -> Payments -> Test public key`
+- `Settings -> Payments -> Live public key`
+
+After setting secrets, configure Khalti from admin:
+
+- `Settings -> Payments`
+- Toggle `Enable Khalti checkout`
+- Select `Mode` (`test` or `live`)
+- Set `Return URL` and `Website URL`
+- Save public keys for both modes

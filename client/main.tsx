@@ -141,6 +141,33 @@ const defaultButtonColorTheme: ButtonColorTheme = {
   secondary: defaultButtonPreset.secondary,
   text: defaultButtonPreset.text
 }
+const defaultRailsSettingsData: AdminRailsSettingsData = {
+  autoplay_interval_seconds: 9,
+  min_interval_seconds: 3,
+  max_interval_seconds: 30,
+  filter_panel_eyebrow_text: 'Browse',
+  rails: [],
+  available_events: []
+}
+const defaultPublicPaymentSettings: PublicPaymentSettingsData = {
+  khalti_enabled: false,
+  khalti_mode: 'test',
+  khalti_can_initiate: false,
+  khalti_runtime_note: 'Khalti is not configured.'
+}
+const defaultAdminPaymentSettings: AdminPaymentSettingsData = {
+  khalti_enabled: false,
+  khalti_mode: 'test',
+  khalti_return_url: '',
+  khalti_website_url: '',
+  khalti_test_public_key: '',
+  khalti_live_public_key: '',
+  khalti_public_key: '',
+  khalti_test_key_configured: false,
+  khalti_live_key_configured: false,
+  khalti_can_initiate: false,
+  khalti_runtime_note: 'Khalti is not configured.'
+}
 const eventImagePlaceholder = `data:image/svg+xml;utf8,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
     <defs>
@@ -327,6 +354,19 @@ type TicketType = ApiRecord & {
   max_per_order?: number
 }
 
+type CartItem = {
+  id: string
+  event_id: string
+  event_name: string
+  event_location_id: string
+  event_location_name: string
+  ticket_type_id: string
+  ticket_type_name: string
+  quantity: number
+  unit_price_paisa: number
+  currency: string
+}
+
 type OrderCustomerOption = {
   id: string
   label: string
@@ -435,6 +475,18 @@ type ApiMutationResponse = {
   message?: string
 }
 
+type CouponValidationResponse = {
+  valid: boolean
+  data?: {
+    coupon_id: string
+    event_id: string
+    code: string
+    discount_type: string
+    discount_amount_paisa: number
+  }
+  error?: string
+}
+
 type TicketRedeemResponse = {
   data?: {
     status?: 'redeemed' | 'already_redeemed' | 'not_found' | 'unredeemed'
@@ -453,6 +505,56 @@ type R2SettingsData = {
   ticket_qr_base_url: string
   runtime_mode?: 'local' | 'remote'
   runtime_note?: string
+}
+
+type RailConfigItem = {
+  id: string
+  label: string
+  event_ids: string[]
+  eyebrow_text: string
+  autoplay_enabled: boolean
+  autoplay_interval_seconds: number
+  accent_color: string
+  header_decor_image_url: string
+}
+
+type PublicRailsSettingsData = {
+  autoplay_interval_seconds: number
+  min_interval_seconds?: number
+  max_interval_seconds?: number
+  filter_panel_eyebrow_text?: string
+  rails: RailConfigItem[]
+}
+
+type AdminRailsSettingsData = PublicRailsSettingsData & {
+  available_events: Array<{
+    id: string
+    name: string
+    status?: string
+    start_datetime?: string
+  }>
+}
+
+type PublicPaymentSettingsData = {
+  khalti_enabled: boolean
+  khalti_mode: 'test' | 'live'
+  khalti_public_key?: string
+  khalti_can_initiate: boolean
+  khalti_runtime_note: string
+}
+
+type AdminPaymentSettingsData = {
+  khalti_enabled: boolean
+  khalti_mode: 'test' | 'live'
+  khalti_return_url: string
+  khalti_website_url: string
+  khalti_test_public_key: string
+  khalti_live_public_key: string
+  khalti_public_key?: string
+  khalti_test_key_configured: boolean
+  khalti_live_key_configured: boolean
+  khalti_can_initiate: boolean
+  khalti_runtime_note: string
 }
 
 type GoogleAuthConfig = {
@@ -515,6 +617,8 @@ const defaultSubgridRowsPerPage = 8
 const minSubgridRowsPerPage = 3
 const maxSubgridRowsPerPage = 100
 const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
+const adminSidebarCollapsedStorageKey = 'waah_admin_sidebar_collapsed'
+const khaltiCheckoutDraftStorageKey = 'waah_khalti_checkout_draft'
 const emptyColumnFilterState: Record<string, string> = {}
 
 function loadAdminSubgridRowsPerPage() {
@@ -524,6 +628,11 @@ function loadAdminSubgridRowsPerPage() {
   const parsed = Number.parseInt(raw, 10)
   if (Number.isNaN(parsed)) return defaultSubgridRowsPerPage
   return Math.min(maxSubgridRowsPerPage, Math.max(minSubgridRowsPerPage, parsed))
+}
+
+function loadAdminSidebarCollapsed() {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(adminSidebarCollapsedStorageKey) === '1'
 }
 
 function loadButtonColorTheme(): ButtonColorTheme {
@@ -734,16 +843,21 @@ function PublicApp({
   const [eventSearchQuery, setEventSearchQuery] = useState('')
   const [eventTypeFilter, setEventTypeFilter] = useState('all')
   const [eventTimeFilter, setEventTimeFilter] = useState<'all' | 'weekend' | 'month'>('all')
+  const [railsSettings, setRailsSettings] = useState<PublicRailsSettingsData>(defaultRailsSettingsData)
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
-  const [isReserveOpen, setIsReserveOpen] = useState(false)
+  const [isCartOpen, setIsCartOpen] = useState(false)
+  const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
-  const [reservationForm, setReservationForm] = useState({
-    first_name: '',
-    last_name: '',
-    email: '',
-    phone_number: ''
-  })
+  const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [cartEventEmails, setCartEventEmails] = useState<Record<string, string>>({})
+  const [cartEventCoupons, setCartEventCoupons] = useState<Record<string, string>>({})
+  const [cartEventCouponMessages, setCartEventCouponMessages] = useState<Record<string, string>>({})
+  const [cartEventCouponDiscounts, setCartEventCouponDiscounts] = useState<Record<string, { couponId: string; discount: number }>>({})
+  const [orderCouponCode, setOrderCouponCode] = useState('')
+  const [orderCouponMessage, setOrderCouponMessage] = useState('')
+  const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
   const [publicStatus, setPublicStatus] = useState('Loading events')
+  const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0],
@@ -809,83 +923,10 @@ function PublicApp({
   }, [events])
   const activeFeaturedEvent = featuredEvents[featuredSlideIndex] ?? selectedEvent ?? events[0]
   const eventRails = useMemo(() => {
-    const now = Date.now()
-    const maxEventsPerRail = 16
-    const sortedEvents = [...filteredEvents].sort((left, right) => {
-      const leftTime =
-        typeof left.start_datetime === 'string' && left.start_datetime
-          ? new Date(left.start_datetime).getTime()
-          : Number.MAX_SAFE_INTEGER
-      const rightTime =
-        typeof right.start_datetime === 'string' && right.start_datetime
-          ? new Date(right.start_datetime).getTime()
-          : Number.MAX_SAFE_INTEGER
-      return leftTime - rightTime
-    })
-    const featuredEvents = sortedEvents.filter((event) => isTruthyValue(event.is_featured))
-    const weekendEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 7))
-    const monthEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 30))
-    const typeGroups = new Map<string, PublicEvent[]>()
-    const locationGroups = new Map<string, PublicEvent[]>()
-
-    for (const event of sortedEvents) {
-      const typeName = typeof event.event_type === 'string' ? event.event_type.trim() : ''
-      if (typeName) {
-        const current = typeGroups.get(typeName) ?? []
-        current.push(event)
-        typeGroups.set(typeName, current)
-      }
-
-      const locationName =
-        typeof event.location_name === 'string' && event.location_name.trim()
-          ? event.location_name.trim()
-          : typeof event.organization_name === 'string'
-            ? event.organization_name.trim()
-            : ''
-      if (locationName) {
-        const current = locationGroups.get(locationName) ?? []
-        current.push(event)
-        locationGroups.set(locationName, current)
-      }
-    }
-
-    const topTypes = [...typeGroups.entries()]
-      .filter(([, group]) => group.length >= 2)
-      .sort((left, right) => right[1].length - left[1].length)
-      .slice(0, 2)
-    const topLocations = [...locationGroups.entries()]
-      .filter(([, group]) => group.length >= 2)
-      .sort((left, right) => right[1].length - left[1].length)
-      .slice(0, 2)
-
-    const rails: Array<{ id: string; label: string; events: PublicEvent[] }> = []
-    const addRail = (id: string, label: string, candidates: PublicEvent[]) => {
-      if (candidates.length === 0) return
-      rails.push({ id, label, events: candidates.slice(0, maxEventsPerRail) })
-    }
-
-    addRail('featured-drops', 'Featured drops', featuredEvents.length > 0 ? featuredEvents : sortedEvents)
-    addRail('this-weekend', 'This weekend', weekendEvents)
-    addRail('happening-soon', 'Happening soon', monthEvents)
-
-    for (const [typeName, group] of topTypes) {
-      addRail(`type-${typeName.toLowerCase().replaceAll(/\s+/g, '-')}`, `${formatResourceName(typeName)} picks`, group)
-    }
-
-    for (const [locationName, group] of topLocations) {
-      addRail(
-        `location-${locationName.toLowerCase().replaceAll(/\s+/g, '-')}`,
-        `More in ${locationName}`,
-        group
-      )
-    }
-
-    if (rails.length < 3 && sortedEvents.length > 0) {
-      addRail('all-upcoming', 'All upcoming events', sortedEvents)
-    }
-
-    return rails
-  }, [filteredEvents])
+    const configuredRails = buildConfiguredRails(filteredEvents, railsSettings.rails)
+    if (configuredRails.length > 0) return configuredRails
+    return buildDefaultEventRails(filteredEvents)
+  }, [filteredEvents, railsSettings.rails])
   const featuredImages = useMemo(
     () =>
       featuredEvents.length > 0
@@ -894,6 +935,28 @@ function PublicApp({
     [featuredEvents]
   )
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
+  const cartSubtotalPaisa = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0),
+    [cartItems]
+  )
+  const eventSubtotals = useMemo(() => {
+    const totals: Record<string, number> = {}
+    for (const item of cartItems) {
+      totals[item.event_id] = (totals[item.event_id] ?? 0) + item.unit_price_paisa * item.quantity
+    }
+    return totals
+  }, [cartItems])
+  const cartEventDiscountTotal = useMemo(
+    () => Object.values(cartEventCouponDiscounts).reduce((sum, item) => sum + item.discount, 0),
+    [cartEventCouponDiscounts]
+  )
+  const cartOrderDiscount = orderCouponDiscount?.discount ?? 0
+  const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartEventDiscountTotal - cartOrderDiscount)
+  const cartItemCount = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.quantity, 0),
+    [cartItems]
+  )
+  const cartGroups = useMemo(() => groupCartItemsByEvent(cartItems), [cartItems])
   const remainingTickets =
     selectedTicketType?.quantity_available === undefined
       ? null
@@ -903,9 +966,10 @@ function PublicApp({
           0
         )
   const reserveBlockedMessage = getReserveBlockedMessage()
-  const canReserve = !reserveBlockedMessage
   const eventRailRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const pausedEventRailsRef = useRef<Set<string>>(new Set())
+  const nextAutoRailIndexRef = useRef(0)
+  const railNextRunAtRef = useRef<Record<string, number>>({})
   const canAccessAdmin = hasAdminConsoleAccess(user)
   const canAccessTickets = hasCustomerTicketsAccess(user)
   const [isVerifyingTicket, setIsVerifyingTicket] = useState(false)
@@ -915,27 +979,38 @@ function PublicApp({
   const verifyHandledTokenRef = useRef<string>('')
 
   useEffect(() => {
-    if (!user?.id) return
-    setReservationForm((current) => ({
-      first_name: current.first_name || (user.first_name ?? ''),
-      last_name: current.last_name || (user.last_name ?? ''),
-      email: current.email || (user.email ?? ''),
-      phone_number: current.phone_number
-    }))
-  }, [user?.id, user?.first_name, user?.last_name, user?.email])
+    const eventIds = new Set(cartGroups.map((group) => group.event_id))
+    setCartEventCoupons((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
+    setCartEventEmails((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
+    setCartEventCouponMessages((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
+    setCartEventCouponDiscounts((current) =>
+      Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId)))
+    )
+    setOrderCouponDiscount((current) => (current && !eventIds.has(current.eventId) ? null : current))
+  }, [cartGroups])
 
   useEffect(() => {
     async function loadPublicEvents() {
       setIsEventsLoading(true)
       try {
-        const { data } = await fetchJson<ApiListResponse>('/api/public/events')
-        const loadedEvents = ((data.data ?? []) as PublicEvent[]).filter(
+        const [eventsResponse, railsResponse, paymentsResponse] = await Promise.all([
+          fetchJson<ApiListResponse>('/api/public/events'),
+          fetchJson<{ data?: PublicRailsSettingsData }>('/api/public/rails/settings').catch(() => null),
+          fetchJson<{ data?: PublicPaymentSettingsData }>('/api/public/payments/settings').catch(() => null)
+        ])
+        const loadedEvents = ((eventsResponse.data.data ?? []) as PublicEvent[]).filter(
           (event) => event.status === 'published'
         )
         const defaultEvent =
           loadedEvents.find((event) => isTruthyValue(event.is_featured)) ?? loadedEvents[0] ?? null
 
         setEvents(loadedEvents)
+        if (railsResponse?.data?.data) {
+          setRailsSettings(normalizePublicRailsSettings(railsResponse.data.data))
+        }
+        if (paymentsResponse?.data?.data) {
+          setPublicPaymentSettings(paymentsResponse.data.data)
+        }
         setSelectedEventId(defaultEvent?.id ?? null)
         setPublicStatus(
           loadedEvents.length > 0
@@ -1035,26 +1110,65 @@ function PublicApp({
     if (eventRails.length === 0) return
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
 
+    const now = Date.now()
+    const nextRunByRail = railNextRunAtRef.current
+    for (const rail of eventRails) {
+      if (!rail.autoplay_enabled) {
+        nextRunByRail[rail.id] = Number.POSITIVE_INFINITY
+        continue
+      }
+      if (!Number.isFinite(nextRunByRail[rail.id])) {
+        nextRunByRail[rail.id] = now + rail.autoplay_interval_seconds * 1000
+      }
+    }
+
     const timer = window.setInterval(() => {
-      for (const rail of eventRails) {
+      const nowTime = Date.now()
+      let didAutoScroll = false
+
+      for (let attempt = 0; attempt < eventRails.length; attempt += 1) {
+        const railIndex = nextAutoRailIndexRef.current % eventRails.length
+        nextAutoRailIndexRef.current = railIndex + 1
+        const rail = eventRails[railIndex]
+
+        if (!rail.autoplay_enabled) continue
         if (pausedEventRailsRef.current.has(rail.id)) continue
+        if ((nextRunByRail[rail.id] ?? 0) > nowTime) continue
+
         const railElement = eventRailRefs.current[rail.id]
-        if (!railElement) continue
-
-        const maxScrollLeft = Math.max(railElement.scrollWidth - railElement.clientWidth, 0)
-        if (maxScrollLeft <= 6) continue
-
-        const scrollAmount = Math.max(railElement.clientWidth * 0.68, 220)
-        const nextScrollLeft = railElement.scrollLeft + scrollAmount
-
-        if (nextScrollLeft >= maxScrollLeft - 6) {
-          railElement.scrollTo({ left: 0, behavior: 'smooth' })
+        if (!railElement) {
+          nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
           continue
         }
 
-        railElement.scrollBy({ left: scrollAmount, behavior: 'smooth' })
+        const maxScrollLeft = Math.max(railElement.scrollWidth - railElement.clientWidth, 0)
+        if (maxScrollLeft <= 6) {
+          nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
+          continue
+        }
+
+        const scrollAmount = Math.max(railElement.clientWidth * 0.52, 160)
+        const nextScrollLeft = railElement.scrollLeft + scrollAmount
+        if (nextScrollLeft >= maxScrollLeft - 6) {
+          railElement.scrollTo({ left: 0, behavior: 'smooth' })
+        } else {
+          railElement.scrollBy({ left: scrollAmount, behavior: 'smooth' })
+        }
+
+        nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
+        didAutoScroll = true
+        break
       }
-    }, 4200)
+
+      if (!didAutoScroll) {
+        for (const rail of eventRails) {
+          if (!rail.autoplay_enabled) continue
+          if (!Number.isFinite(nextRunByRail[rail.id])) {
+            nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
+          }
+        }
+      }
+    }, 500)
 
     return () => window.clearInterval(timer)
   }, [eventRails])
@@ -1071,7 +1185,7 @@ function PublicApp({
 
   return (
     <main className="app-shell">
-      <nav className="topbar" aria-label="Main navigation">
+      <nav className="topbar storefront-topbar" aria-label="Main navigation">
         <a className="brand" href="/">
           <span className="brand-mark">W</span>
           <span>Waahtickets</span>
@@ -1079,48 +1193,61 @@ function PublicApp({
         <div className="nav-links">
           <a href="#featured">Featured</a>
           <a href="#events">Events</a>
-          <button type="button" onClick={() => setIsCheckoutOpen(true)}>
-            Checkout
+        </div>
+        <label className="topbar-search">
+          <Search size={15} />
+          <input
+            aria-label="Search events"
+            placeholder="Search events, venues, organizers..."
+            type="search"
+            value={eventSearchQuery}
+            onChange={(event) => setEventSearchQuery(event.target.value)}
+          />
+        </label>
+        <div className="topbar-right">
+          {isAuthLoading ? (
+            <div className="nav-session-placeholder" aria-hidden="true" />
+          ) : user ? (
+            <div className="nav-session-actions">
+              <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              </button>
+              {canAccessTickets ? (
+                <a className="nav-action tickets-nav-action" href="/admin">
+                  <Ticket size={16} />
+                  <span>Tickets</span>
+                </a>
+              ) : canAccessAdmin ? (
+                <a className="nav-action admin-nav-action" href="/admin">
+                  <LayoutDashboard size={16} />
+                  <span>Admin</span>
+                </a>
+              ) : null}
+              <button
+                className="secondary-button compact-button logout-nav-button"
+                type="button"
+                onClick={() => void onLogout()}
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <div className="nav-session-actions">
+              <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              </button>
+              <button className="nav-action" type="button" onClick={onLoginClick}>
+                Login
+              </button>
+            </div>
+          )}
+          <button className="nav-action nav-cart-button" type="button" onClick={() => setIsCartOpen(true)}>
+            <ShoppingCart size={16} />
+            Cart ({cartItemCount})
           </button>
         </div>
-        {isAuthLoading ? (
-          <div className="nav-session-placeholder" aria-hidden="true" />
-        ) : user ? (
-          <div className="nav-session-actions">
-            <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
-              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-            {canAccessTickets ? (
-              <a className="nav-action tickets-nav-action" href="/admin">
-                <Ticket size={16} />
-                <span>Tickets</span>
-              </a>
-            ) : canAccessAdmin ? (
-              <a className="nav-action admin-nav-action" href="/admin">
-                <LayoutDashboard size={16} />
-                <span>Admin</span>
-              </a>
-            ) : null}
-            <button
-              className="secondary-button compact-button logout-nav-button"
-              type="button"
-              onClick={() => void onLogout()}
-            >
-              Logout
-            </button>
-          </div>
-        ) : (
-          <div className="nav-session-actions">
-            <button className="secondary-button compact-button" type="button" onClick={onToggleTheme}>
-              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-            <button className="nav-action" type="button" onClick={onLoginClick}>
-              Login
-            </button>
-          </div>
-        )}
       </nav>
 
       <section className="featured-shell" id="featured">
@@ -1189,7 +1316,7 @@ function PublicApp({
         {isEventsLoading ? (
           <div className="panel events-panel" id="events">
             <div className="section-heading">
-              <p className="eyebrow">Discover</p>
+              <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
               <h2>Browse events</h2>
             </div>
             <div className="event-list">
@@ -1199,7 +1326,7 @@ function PublicApp({
         ) : events.length === 0 ? (
           <div className="panel events-panel" id="events">
             <div className="section-heading">
-              <p className="eyebrow">Discover</p>
+              <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
               <h2>Browse events</h2>
             </div>
             <div className="event-list">
@@ -1208,72 +1335,77 @@ function PublicApp({
           </div>
         ) : (
           <div className="events-sections" id="events">
-            <section className="panel events-panel event-filter-panel">
-              <div className="section-heading">
-                <p className="eyebrow">Discover</p>
-                <h2>Browse events</h2>
-              </div>
-              <div className="events-toolbar">
-                <label className="events-toolbar-field">
-                  <span>Search</span>
-                  <input
-                    placeholder="Search by event, venue, organizer..."
-                    type="text"
-                    value={eventSearchQuery}
-                    onChange={(event) => setEventSearchQuery(event.target.value)}
-                  />
-                </label>
-                <label className="events-toolbar-field">
-                  <span>Type</span>
-                  <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
-                    <option value="all">All types</option>
-                    {eventTypeOptions.map((type) => (
-                      <option key={type} value={type}>
-                        {formatResourceName(type)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="events-toolbar-field">
-                  <span>When</span>
-                  <select
-                    value={eventTimeFilter}
-                    onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
-                  >
-                    <option value="all">Any time</option>
-                    <option value="weekend">This weekend</option>
-                    <option value="month">This month</option>
-                  </select>
-                </label>
-                <button
-                  className="secondary-button compact-button"
-                  disabled={!hasEventFilters}
-                  type="button"
-                  onClick={() => {
-                    setEventSearchQuery('')
-                    setEventTypeFilter('all')
-                    setEventTimeFilter('all')
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            </section>
-
-            {eventRails.length === 0 ? (
-              <section className="panel events-panel">
-                <div className="public-empty">
-                  No events match your filters.
+            <div className="events-layout">
+              <aside className="panel events-panel event-filter-panel">
+                <div className="section-heading">
+                  <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
+                  <h2>Browse events</h2>
                 </div>
-              </section>
-            ) : (
-              eventRails.map((rail) => (
-                <section className="panel events-panel event-row-section" key={rail.id}>
-                  <header className="event-rail-header section-heading">
+                <div className="events-toolbar">
+                  <label className="events-toolbar-field">
+                    <span>Type</span>
+                    <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
+                      <option value="all">All types</option>
+                      {eventTypeOptions.map((type) => (
+                        <option key={type} value={type}>
+                          {formatResourceName(type)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="events-toolbar-field">
+                    <span>When</span>
+                    <select
+                      value={eventTimeFilter}
+                      onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
+                    >
+                      <option value="all">Any time</option>
+                      <option value="weekend">This weekend</option>
+                      <option value="month">This month</option>
+                    </select>
+                  </label>
+                  <button
+                    className="secondary-button compact-button"
+                    disabled={!hasEventFilters}
+                    type="button"
+                    onClick={() => {
+                      setEventSearchQuery('')
+                      setEventTypeFilter('all')
+                      setEventTimeFilter('all')
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </aside>
+
+              <div className="events-rails-column">
+                {eventRails.length === 0 ? (
+                  <section className="panel events-panel">
+                    <div className="public-empty">
+                      No events match your filters.
+                    </div>
+                  </section>
+                ) : (
+                  eventRails.map((rail) => (
+                    <section className="panel events-panel event-row-section" key={rail.id}>
+                  <header
+                    className="event-rail-header section-heading"
+                    style={{ ['--rail-accent-color' as string]: rail.accent_color }}
+                  >
                     <div>
-                      <p className="eyebrow">Discover</p>
+                      <p className="eyebrow">{rail.eyebrow_text || 'Featured'}</p>
                       <h2>{rail.label}</h2>
                     </div>
+                    {rail.header_decor_image_url ? (
+                      <img
+                        alt=""
+                        aria-hidden="true"
+                        className="event-rail-decor"
+                        loading="lazy"
+                        src={rail.header_decor_image_url}
+                      />
+                    ) : null}
                     <div className="event-rail-controls" aria-label={`${rail.label} controls`}>
                       <button
                         aria-label={`Scroll ${rail.label} left`}
@@ -1379,9 +1511,11 @@ function PublicApp({
                       </article>
                     ))}
                   </div>
-                </section>
-              ))
-            )}
+                    </section>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         )}
       </section>
@@ -1401,39 +1535,71 @@ function PublicApp({
           onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
           onClose={() => setIsCheckoutOpen(false)}
           onReserve={() => {
+            addCurrentSelectionToCart()
             setIsCheckoutOpen(false)
-            openReservation()
+            setIsCartOpen(true)
           }}
+        />
+      ) : null}
+
+      {isCartOpen ? (
+        <CartModal
+          cartGroups={cartGroups}
+          totalPaisa={cartSubtotalPaisa}
+          onClose={() => setIsCartOpen(false)}
+          onCheckout={() => {
+            setIsCartOpen(false)
+            setIsCartCheckoutOpen(true)
+          }}
+          onUpdateQuantity={(itemId, nextQty) => updateCartItemQuantity(itemId, nextQty)}
+          onRemoveItem={(itemId) => removeCartItem(itemId)}
+        />
+      ) : null}
+
+      {isCartCheckoutOpen ? (
+        <CartCheckoutModal
+          cartGroups={cartGroups}
+          eventSubtotals={eventSubtotals}
+          eventEmails={cartEventEmails}
+          eventCoupons={cartEventCoupons}
+          eventCouponMessages={cartEventCouponMessages}
+          eventCouponDiscounts={cartEventCouponDiscounts}
+          orderCouponCode={orderCouponCode}
+          orderCouponDiscount={orderCouponDiscount}
+          orderCouponMessage={orderCouponMessage}
+          subtotalPaisa={cartSubtotalPaisa}
+          eventDiscountTotalPaisa={cartEventDiscountTotal}
+          orderDiscountPaisa={cartOrderDiscount}
+          totalPaisa={cartGrandTotalPaisa}
+          isSubmitting={isSubmittingOrder}
+          onClose={() => setIsCartCheckoutOpen(false)}
+          onChangeEventEmail={(eventId, value) =>
+            setCartEventEmails((current) => ({ ...current, [eventId]: value }))
+          }
+          onChangeEventCoupon={(eventId, value) =>
+            setCartEventCoupons((current) => ({ ...current, [eventId]: value }))
+          }
+          onApplyEventCoupon={(eventId) => void applyEventCoupon(eventId)}
+          onChangeOrderCoupon={setOrderCouponCode}
+          onApplyOrderCoupon={() => void applyOrderCouponAcrossCart()}
+          onPlaceOrder={() => void submitCartCheckout()}
+          onPayWithKhalti={() => void startKhaltiCheckout()}
+          khaltiReady={publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate}
+          khaltiMode={publicPaymentSettings.khalti_mode}
+          khaltiNote={publicPaymentSettings.khalti_runtime_note}
         />
       ) : null}
 
       {!isCheckoutOpen ? (
         <button
-          aria-label="Open checkout"
+          aria-label="Open cart"
           className="checkout-pill-launcher"
           type="button"
-          onClick={() => setIsCheckoutOpen(true)}
+          onClick={() => setIsCartOpen(true)}
         >
-          <Ticket size={16} />
-          <span>Checkout</span>
+          <ShoppingCart size={16} />
+          <span>Cart ({cartItemCount})</span>
         </button>
-      ) : null}
-
-      {isReserveOpen ? (
-        <ReservationModal
-          event={selectedEvent}
-          form={reservationForm}
-          quantity={quantity}
-          ticketType={selectedTicketType}
-          totalPaisa={totalPaisa}
-          setForm={setReservationForm}
-          isSubmitting={isSubmittingOrder}
-          onClose={() => {
-            if (isSubmittingOrder) return
-            setIsReserveOpen(false)
-          }}
-          onSubmit={() => void submitReservation()}
-        />
       ) : null}
 
       {selectedEventDetails ? (
@@ -1462,68 +1628,423 @@ function PublicApp({
     </main>
   )
 
-  function openReservation() {
+  function addCurrentSelectionToCart() {
+    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
       return
     }
 
-    setIsReserveOpen(true)
+    const unitPrice = selectedTicketType.price_paisa ?? 0
+    const key = `${selectedEvent.id}::${selectedTicketType.id}`
+    setCartItems((current) => {
+      const existing = current.find((item) => item.id === key)
+      if (existing) {
+        return current.map((item) =>
+          item.id === key ? { ...item, quantity: Math.min(item.quantity + quantity, 99) } : item
+        )
+      }
+
+      return [
+        ...current,
+        {
+          id: key,
+          event_id: selectedEvent.id,
+          event_name: String(selectedEvent.name ?? 'Event'),
+          event_location_id: String(selectedEvent.location_id),
+          event_location_name: String(selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'),
+          ticket_type_id: selectedTicketType.id,
+          ticket_type_name: String(selectedTicketType.name ?? 'Ticket'),
+          quantity: Math.max(1, quantity),
+          unit_price_paisa: unitPrice,
+          currency: String(selectedTicketType.currency ?? 'NPR')
+        }
+      ]
+    })
+    setPublicStatus(`${quantity} ticket(s) added to cart.`)
   }
 
-  async function submitReservation() {
-    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id || isSubmittingOrder) return
+  function updateCartItemQuantity(itemId: string, nextQuantity: number) {
+    if (nextQuantity <= 0) {
+      removeCartItem(itemId)
+      return
+    }
+    setCartItems((current) =>
+      current.map((item) => (item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item))
+    )
+  }
+
+  function removeCartItem(itemId: string) {
+    setCartItems((current) => current.filter((item) => item.id !== itemId))
+  }
+
+  async function startKhaltiCheckout() {
     if (!user?.id) {
-      setPublicStatus('Sign in to reserve tickets.')
+      setPublicStatus('Sign in to checkout.')
+      return
+    }
+    if (cartItems.length === 0 || isSubmittingOrder) return
+    if (!(publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate)) {
+      setPublicStatus(publicPaymentSettings.khalti_runtime_note || 'Khalti is not configured right now.')
       return
     }
 
-    const suffix = Date.now().toString(36)
-    const customerId = user.id
-    const orderId = `order-${suffix}`
-    const unitPrice = selectedTicketType.price_paisa ?? 0
-    const total = unitPrice * quantity
+    setIsSubmittingOrder(true)
+    try {
+      const draft = {
+        cartItems,
+        cartEventEmails,
+        cartEventCoupons,
+        cartEventCouponMessages,
+        cartEventCouponDiscounts,
+        orderCouponCode,
+        orderCouponDiscount,
+        orderCouponMessage
+      }
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(khaltiCheckoutDraftStorageKey, JSON.stringify(draft))
+      }
+
+      const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+      const purchaseOrderId = `khalti-${user.id}-${suffix}`
+      const purchaseOrderName = `Waah Tickets (${cartGroups.length} event${cartGroups.length === 1 ? '' : 's'})`
+      const payload = {
+        amount_paisa: cartGrandTotalPaisa,
+        purchase_order_id: purchaseOrderId,
+        purchase_order_name: purchaseOrderName,
+        customer_name: `${String(user.first_name ?? '').trim()} ${String(user.last_name ?? '').trim()}`.trim(),
+        customer_email: String(user.email ?? '').trim(),
+        customer_phone: ''
+      }
+      const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/payments/khalti/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      if (!data.data?.payment_url || !data.data?.pidx) {
+        throw new Error('Khalti initiate did not return a payment URL.')
+      }
+      if (typeof window !== 'undefined') {
+        const draftRaw = window.localStorage.getItem(khaltiCheckoutDraftStorageKey)
+        if (draftRaw) {
+          const parsed = JSON.parse(draftRaw) as Record<string, unknown>
+          window.localStorage.setItem(
+            khaltiCheckoutDraftStorageKey,
+            JSON.stringify({
+              ...parsed,
+              pidx: data.data.pidx
+            })
+          )
+        }
+      }
+      window.location.href = data.data.payment_url
+    } catch (error) {
+      setPublicStatus(getErrorMessage(error))
+      setIsSubmittingOrder(false)
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const pidx = params.get('pidx')?.trim() ?? ''
+    const status = params.get('status')?.trim() ?? ''
+    if (!pidx) return
+    if (!user?.id || user.webrole !== 'Customers') return
+
+    const draftRaw = window.localStorage.getItem(khaltiCheckoutDraftStorageKey)
+    if (!draftRaw) {
+      setPublicStatus('Khalti return detected, but checkout draft is missing.')
+      return
+    }
+
+    let restored = null as null | {
+      cartItems: CartItem[]
+      cartEventEmails: Record<string, string>
+      cartEventCoupons: Record<string, string>
+      cartEventCouponMessages: Record<string, string>
+      cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
+      orderCouponCode: string
+      orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+      orderCouponMessage: string
+      pidx?: string
+    }
+    try {
+      restored = JSON.parse(draftRaw)
+    } catch {
+      restored = null
+    }
+    if (!restored || !Array.isArray(restored.cartItems)) {
+      setPublicStatus('Khalti return detected, but checkout draft is invalid.')
+      return
+    }
+
+    setCartItems(restored.cartItems)
+    setCartEventEmails(restored.cartEventEmails ?? {})
+    setCartEventCoupons(restored.cartEventCoupons ?? {})
+    setCartEventCouponMessages(restored.cartEventCouponMessages ?? {})
+    setCartEventCouponDiscounts(restored.cartEventCouponDiscounts ?? {})
+    setOrderCouponCode(restored.orderCouponCode ?? '')
+    setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
+    setOrderCouponMessage(restored.orderCouponMessage ?? '')
+
+    if (status.toLowerCase() === 'user canceled') {
+      setPublicStatus('Khalti payment was canceled.')
+      window.history.replaceState({}, '', window.location.pathname)
+      return
+    }
+
+    setIsSubmittingOrder(true)
+    void (async () => {
+      try {
+        const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pidx })
+        })
+        if (String(data.data.status ?? '').toLowerCase() !== 'completed') {
+          throw new Error(`Khalti payment status: ${data.data.status ?? 'Unknown'}`)
+        }
+        await submitCartCheckout({
+          provider: 'khalti',
+          reference: data.data.transaction_id || pidx
+        })
+        window.history.replaceState({}, '', window.location.pathname)
+      } catch (error) {
+        setPublicStatus(getErrorMessage(error))
+        setIsSubmittingOrder(false)
+      }
+    })()
+  }, [user?.id, user?.webrole])
+
+  async function submitCartCheckout(paymentContext?: { provider?: 'manual' | 'khalti'; reference?: string }) {
+    if (cartItems.length === 0 || isSubmittingOrder) return
+    if (!user?.id) {
+      setPublicStatus('Sign in to checkout.')
+      return
+    }
 
     setIsSubmittingOrder(true)
 
     try {
-      await fetchJson<ApiMutationResponse>('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: orderId,
-          order_number: `WAH-${suffix.toUpperCase()}`,
-          customer_id: customerId,
-          event_id: selectedEvent.id,
-          event_location_id: selectedEvent.location_id,
-          status: 'paid',
-          subtotal_amount_paisa: total,
-          total_amount_paisa: total,
-          currency: selectedTicketType.currency ?? 'NPR',
-          order_datetime: new Date().toISOString()
-        })
-      })
+      const eventGroups = groupCartItemsByEvent(cartItems)
+      const now = new Date().toISOString()
+      let createdOrders = 0
 
-      await fetchJson<ApiMutationResponse>('/api/order_items', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order_id: orderId,
-          ticket_type_id: selectedTicketType.id,
-          quantity,
-          unit_price_paisa: unitPrice,
-          subtotal_amount_paisa: total,
-          total_amount_paisa: total
-        })
-      })
+      for (const group of eventGroups) {
+        const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        const orderId = `order-${suffix}`
+        const subtotal = group.items.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
+        const eventDiscount = cartEventCouponDiscounts[group.event_id]?.discount ?? 0
+        const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, orderCouponDiscount)
+        const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
+        const total = Math.max(0, subtotal - totalDiscount)
+        const currency = group.items[0]?.currency ?? 'NPR'
 
-      setPublicStatus(`Reserved ${quantity} ticket(s). Order WAH-${suffix.toUpperCase()} created.`)
-      setIsReserveOpen(false)
+        await fetchJson<ApiMutationResponse>('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: orderId,
+            order_number: `WAH-${suffix.toUpperCase()}`,
+            customer_id: user.id,
+            event_id: group.event_id,
+            event_location_id: group.event_location_id,
+            status: 'paid',
+            subtotal_amount_paisa: subtotal,
+            discount_amount_paisa: totalDiscount,
+            total_amount_paisa: total,
+            currency,
+            order_datetime: now
+          })
+        })
+
+        for (const item of group.items) {
+          await fetchJson<ApiMutationResponse>('/api/order_items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              order_id: orderId,
+              ticket_type_id: item.ticket_type_id,
+              quantity: item.quantity,
+              unit_price_paisa: item.unit_price_paisa,
+              subtotal_amount_paisa: item.unit_price_paisa * item.quantity,
+              total_amount_paisa: item.unit_price_paisa * item.quantity
+            })
+          })
+        }
+
+        const eventCoupon = cartEventCouponDiscounts[group.event_id]
+        if (eventCoupon && eventCoupon.discount > 0) {
+          await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              coupon_id: eventCoupon.couponId,
+              order_id: orderId,
+              customer_id: user.id,
+              discount_amount_paisa: eventCoupon.discount,
+              redeemed_at: now
+            })
+          })
+        }
+
+        if (
+          orderCouponDiscount &&
+          orderCouponDiscount.discount > 0 &&
+          orderCouponDiscount.eventId === group.event_id &&
+          orderDiscountShare > 0
+        ) {
+          await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              coupon_id: orderCouponDiscount.couponId,
+              order_id: orderId,
+              customer_id: user.id,
+              discount_amount_paisa: orderDiscountShare,
+              redeemed_at: now
+            })
+          })
+        }
+
+        const extraEmail = cartEventEmails[group.event_id]?.trim()
+        if (extraEmail) {
+          await fetchJson<ApiMutationResponse>(`/api/orders/${orderId}/email-copy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: extraEmail })
+          })
+        }
+
+        createdOrders += 1
+      }
+
+      const providerLabel = paymentContext?.provider === 'khalti' ? ' via Khalti' : ''
+      setPublicStatus(`Checkout complete${providerLabel}. ${createdOrders} event order(s) created.`)
+      setCartItems([])
+      setCartEventCoupons({})
+      setCartEventCouponMessages({})
+      setCartEventCouponDiscounts({})
+      setCartEventEmails({})
+      setOrderCouponCode('')
+      setOrderCouponDiscount(null)
+      setOrderCouponMessage('')
+      setIsCartCheckoutOpen(false)
+      if (paymentContext?.provider === 'khalti' && typeof window !== 'undefined') {
+        window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+      }
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
     } finally {
       setIsSubmittingOrder(false)
     }
+  }
+
+  async function applyEventCoupon(eventId: string) {
+    const code = cartEventCoupons[eventId]?.trim()
+    const subtotal = eventSubtotals[eventId] ?? 0
+    if (!code) {
+      setCartEventCouponMessages((current) => ({ ...current, [eventId]: 'Enter a coupon code.' }))
+      setCartEventCouponDiscounts((current) => {
+        const next = { ...current }
+        delete next[eventId]
+        return next
+      })
+      return
+    }
+    if (subtotal <= 0) {
+      setCartEventCouponMessages((current) => ({ ...current, [eventId]: 'No items for this event.' }))
+      return
+    }
+
+    try {
+      const { data } = await fetchJson<CouponValidationResponse>('/api/public/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          event_id: eventId,
+          subtotal_amount_paisa: subtotal
+        })
+      })
+      if (!data.valid || !data.data) {
+        throw new Error(data.error ?? 'Coupon is invalid.')
+      }
+      setCartEventCouponDiscounts((current) => ({
+        ...current,
+        [eventId]: {
+          couponId: data.data.coupon_id,
+          discount: data.data.discount_amount_paisa
+        }
+      }))
+      setCartEventCouponMessages((current) => ({
+        ...current,
+        [eventId]: `Coupon applied: -${formatMoney(data.data.discount_amount_paisa)}`
+      }))
+    } catch (error) {
+      setCartEventCouponMessages((current) => ({
+        ...current,
+        [eventId]: getErrorMessage(error)
+      }))
+      setCartEventCouponDiscounts((current) => {
+        const next = { ...current }
+        delete next[eventId]
+        return next
+      })
+    }
+  }
+
+  async function applyOrderCouponAcrossCart() {
+    const code = orderCouponCode.trim()
+    if (!code) {
+      setOrderCouponDiscount(null)
+      setOrderCouponMessage('Enter an order-level coupon code.')
+      return
+    }
+    if (cartGroups.length === 0) {
+      setOrderCouponDiscount(null)
+      setOrderCouponMessage('Your cart is empty.')
+      return
+    }
+
+    let best: { couponId: string; eventId: string; discount: number } | null = null
+    const failures: string[] = []
+
+    for (const group of cartGroups) {
+      const subtotal = eventSubtotals[group.event_id] ?? 0
+      if (subtotal <= 0) continue
+      try {
+        const { data } = await fetchJson<CouponValidationResponse>('/api/public/coupons/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            event_id: group.event_id,
+            subtotal_amount_paisa: subtotal
+          })
+        })
+        if (!data.valid || !data.data) continue
+        if (!best || data.data.discount_amount_paisa > best.discount) {
+          best = {
+            couponId: data.data.coupon_id,
+            eventId: group.event_id,
+            discount: data.data.discount_amount_paisa
+          }
+        }
+      } catch (error) {
+        failures.push(getErrorMessage(error))
+      }
+    }
+
+    if (!best) {
+      setOrderCouponDiscount(null)
+      setOrderCouponMessage(failures[0] ?? 'Order-level coupon is invalid for the events in your cart.')
+      return
+    }
+
+    setOrderCouponDiscount(best)
+    setOrderCouponMessage(`Order coupon applied: -${formatMoney(best.discount)}`)
   }
 
   function getReserveBlockedMessage() {
@@ -1683,74 +2204,260 @@ function CheckoutModal({
           <button type="button" onClick={onClose}>Close</button>
           <button className="primary-admin-button" disabled={!canReserve} type="button" onClick={onReserve}>
             {isSubmittingOrder
-              ? 'Creating order...'
+              ? 'Adding...'
               : isTicketTypesLoading
                 ? 'Loading ticket types...'
-                : 'Reserve tickets'}
+                : 'Add to cart'}
           </button>
         </footer>
-        {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : null}
+        {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : <p className="checkout-hint">Pick ticket type and quantity, then add to cart.</p>}
       </section>
     </div>
   )
 }
 
-function ReservationModal({
-  event,
-  form,
-  quantity,
-  ticketType,
+function CartModal({
+  cartGroups,
+  totalPaisa,
+  onClose,
+  onCheckout,
+  onUpdateQuantity,
+  onRemoveItem
+}: {
+  cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
+  totalPaisa: number
+  onClose: () => void
+  onCheckout: () => void
+  onUpdateQuantity: (itemId: string, quantity: number) => void
+  onRemoveItem: (itemId: string) => void
+}) {
+  const isEmpty = cartGroups.length === 0
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal reservation-modal cart-modal-modern" role="dialog" aria-modal="true">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Cart</p>
+            <h2>Your cart</h2>
+          </div>
+          <button aria-label="Close modal" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="cart-modal-layout">
+          <div className="checkout-stack cart-modal-main">
+            {isEmpty ? (
+              <p className="checkout-hint">Your cart is empty.</p>
+            ) : (
+              cartGroups.map((group) => (
+                <div className="cart-event-group" key={group.event_id}>
+                  <p className="eyebrow">{group.event_name}</p>
+                  <p className="checkout-event-meta">{group.event_location_name}</p>
+                  {group.items.map((item) => (
+                    <div className="cart-item-row" key={item.id}>
+                      <div>
+                        <strong>{item.ticket_type_name}</strong>
+                        <p>{formatMoney(item.unit_price_paisa)} each</p>
+                      </div>
+                      <div className="cart-item-actions">
+                        <button type="button" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}>-</button>
+                        <span>{item.quantity}</span>
+                        <button type="button" onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}>+</button>
+                        <button type="button" onClick={() => onRemoveItem(item.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+          <aside className="cart-modal-summary">
+            <div className="cart-summary-card">
+              <p className="cart-summary-label">Subtotal</p>
+              <p className="cart-summary-amount">{formatMoney(totalPaisa)}</p>
+              <p className="checkout-hint">Coupons and discounts are applied on checkout.</p>
+            </div>
+            <button type="button" onClick={onClose}>Close</button>
+            <button className="primary-admin-button" disabled={isEmpty} type="button" onClick={onCheckout}>
+              <CreditCard size={17} />
+              Checkout
+            </button>
+          </aside>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CartCheckoutModal({
+  cartGroups,
+  eventSubtotals,
+  eventEmails,
+  eventCoupons,
+  eventCouponMessages,
+  eventCouponDiscounts,
+  orderCouponCode,
+  orderCouponDiscount,
+  orderCouponMessage,
+  subtotalPaisa,
+  eventDiscountTotalPaisa,
+  orderDiscountPaisa,
   totalPaisa,
   isSubmitting,
-  setForm,
   onClose,
-  onSubmit
+  onChangeEventEmail,
+  onChangeEventCoupon,
+  onApplyEventCoupon,
+  onChangeOrderCoupon,
+  onApplyOrderCoupon,
+  onPlaceOrder,
+  onPayWithKhalti,
+  khaltiReady,
+  khaltiMode,
+  khaltiNote
 }: {
-  event?: PublicEvent
-  form: Record<'first_name' | 'last_name' | 'email' | 'phone_number', string>
-  quantity: number
-  ticketType?: TicketType
+  cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
+  eventSubtotals: Record<string, number>
+  eventEmails: Record<string, string>
+  eventCoupons: Record<string, string>
+  eventCouponMessages: Record<string, string>
+  eventCouponDiscounts: Record<string, { couponId: string; discount: number }>
+  orderCouponCode: string
+  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+  orderCouponMessage: string
+  subtotalPaisa: number
+  eventDiscountTotalPaisa: number
+  orderDiscountPaisa: number
   totalPaisa: number
   isSubmitting: boolean
-  setForm: (value: Record<'first_name' | 'last_name' | 'email' | 'phone_number', string>) => void
   onClose: () => void
-  onSubmit: () => void
+  onChangeEventEmail: (eventId: string, value: string) => void
+  onChangeEventCoupon: (eventId: string, value: string) => void
+  onApplyEventCoupon: (eventId: string) => void
+  onChangeOrderCoupon: (value: string) => void
+  onApplyOrderCoupon: () => void
+  onPlaceOrder: () => void
+  onPayWithKhalti: () => void
+  khaltiReady: boolean
+  khaltiMode: 'test' | 'live'
+  khaltiNote: string
 }) {
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="record-modal reservation-modal" role="dialog" aria-modal="true">
+      <section className="record-modal checkout-modal cart-checkout-modern" role="dialog" aria-modal="true">
         <header className="record-modal-header">
           <div>
-            <p className="admin-breadcrumb">{event?.name ?? 'Reservation'}</p>
-            <h2>Reserve tickets</h2>
+            <p className="admin-breadcrumb">Checkout</p>
+            <h2>Review and place order</h2>
           </div>
           <button aria-label="Close modal" disabled={isSubmitting} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
-        <div className="modal-form-grid">
-          {(['first_name', 'last_name', 'email', 'phone_number'] as const).map((field) => (
-            <label key={field}>
-              <span>{formatResourceName(field)}</span>
-              <input
-                disabled={isSubmitting}
-                value={form[field]}
-                onChange={(event) => setForm({ ...form, [field]: event.target.value })}
-              />
-            </label>
-          ))}
+        <div className="cart-checkout-layout">
+          <div className="checkout-stack cart-checkout-main">
+            {cartGroups.map((group) => (
+              <fieldset className="cart-checkout-group" key={group.event_id}>
+                <legend>{group.event_name}</legend>
+                <p className="checkout-event-meta">{group.event_location_name}</p>
+                {group.items.map((item) => (
+                  <div className="checkout-line" key={item.id}>
+                    <span>{item.quantity} x {item.ticket_type_name}</span>
+                    <strong>{formatMoney(item.unit_price_paisa * item.quantity)}</strong>
+                  </div>
+                ))}
+                <div className="checkout-line">
+                  <span>Event subtotal</span>
+                  <strong>{formatMoney(eventSubtotals[group.event_id] ?? 0)}</strong>
+                </div>
+                <label className="public-select-label">
+                  <span>Send ticket copy to another email (optional)</span>
+                  <input
+                    placeholder="name@example.com"
+                    type="email"
+                    value={eventEmails[group.event_id] ?? ''}
+                    onChange={(event) => onChangeEventEmail(group.event_id, event.target.value)}
+                  />
+                </label>
+                <div className="cart-coupon-row">
+                  <input
+                    placeholder="Event coupon code"
+                    type="text"
+                    value={eventCoupons[group.event_id] ?? ''}
+                    onChange={(event) => onChangeEventCoupon(group.event_id, event.target.value)}
+                  />
+                  <button type="button" onClick={() => onApplyEventCoupon(group.event_id)}>Apply</button>
+                </div>
+                {eventCouponMessages[group.event_id] ? <p className="checkout-hint">{eventCouponMessages[group.event_id]}</p> : null}
+                {(eventCouponDiscounts[group.event_id]?.discount ?? 0) > 0 ? (
+                  <div className="checkout-line">
+                    <span>Event discount</span>
+                    <strong>-{formatMoney(eventCouponDiscounts[group.event_id].discount)}</strong>
+                  </div>
+                ) : null}
+              </fieldset>
+            ))}
+
+            <fieldset className="cart-checkout-group">
+              <legend>Order-level coupon</legend>
+              <div className="cart-coupon-row">
+                <input
+                  placeholder="Order coupon code"
+                  type="text"
+                  value={orderCouponCode}
+                  onChange={(event) => onChangeOrderCoupon(event.target.value)}
+                />
+                <button type="button" onClick={onApplyOrderCoupon}>Apply</button>
+              </div>
+              {orderCouponMessage ? <p className="checkout-hint">{orderCouponMessage}</p> : null}
+              {orderCouponDiscount ? (
+                <div className="checkout-line">
+                  <span>Order-level discount</span>
+                  <strong>-{formatMoney(orderCouponDiscount.discount)}</strong>
+                </div>
+              ) : null}
+            </fieldset>
+          </div>
+
+          <aside className="cart-checkout-summary">
+            <div className="cart-summary-card">
+              <div className="checkout-total">
+                <span>Subtotal</span>
+                <strong>{formatMoney(subtotalPaisa)}</strong>
+              </div>
+              <div className="checkout-line">
+                <span>Event discounts</span>
+                <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
+              </div>
+              <div className="checkout-line">
+                <span>Order discount</span>
+                <strong>-{formatMoney(orderDiscountPaisa)}</strong>
+              </div>
+              <div className="checkout-total grand">
+                <span>Total</span>
+                <strong>{formatMoney(totalPaisa)}</strong>
+              </div>
+            </div>
+            <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
+            <button
+              className="khalti-pay-button"
+              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+              type="button"
+              onClick={onPayWithKhalti}
+            >
+              <CreditCard size={17} />
+              {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
+            </button>
+            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
+              {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+              {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
+            </button>
+            <p className="checkout-hint">{khaltiNote}</p>
+          </aside>
         </div>
-        <div className="reservation-summary">
-          <span>{quantity} x {ticketType?.name ?? 'Ticket'}</span>
-          <strong>{formatMoney(totalPaisa)}</strong>
-        </div>
-        <footer className="record-modal-actions">
-          <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
-          <button className="primary-admin-button" disabled={isSubmitting} type="button" onClick={onSubmit}>
-            {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-            {isSubmitting ? 'Creating order...' : 'Create order'}
-          </button>
-        </footer>
       </section>
     </div>
   )
@@ -2503,6 +3210,7 @@ function AdminApp({
   const [recordError, setRecordError] = useState('')
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null)
   const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => loadAdminSidebarCollapsed())
   const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>({
     eventsLoaded: 0,
     ticketTypes: 0,
@@ -2518,6 +3226,16 @@ function AdminApp({
   const [isSettingsLoading, setIsSettingsLoading] = useState(false)
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'payments' | 'appearance' | 'grid'>('storage')
+  const [railsSettingsData, setRailsSettingsData] = useState<AdminRailsSettingsData>(defaultRailsSettingsData)
+  const [isRailsSettingsLoading, setIsRailsSettingsLoading] = useState(false)
+  const [isRailsSettingsSaving, setIsRailsSettingsSaving] = useState(false)
+  const [railsSettingsError, setRailsSettingsError] = useState('')
+  const [railEventSearchByRailId, setRailEventSearchByRailId] = useState<Record<string, string>>({})
+  const [paymentSettingsData, setPaymentSettingsData] = useState<AdminPaymentSettingsData>(defaultAdminPaymentSettings)
+  const [isPaymentSettingsLoading, setIsPaymentSettingsLoading] = useState(false)
+  const [isPaymentSettingsSaving, setIsPaymentSettingsSaving] = useState(false)
+  const [paymentSettingsError, setPaymentSettingsError] = useState('')
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
@@ -2736,8 +3454,15 @@ function AdminApp({
   }, [isAdminUser, user?.webrole])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(adminSidebarCollapsedStorageKey, isSidebarCollapsed ? '1' : '0')
+  }, [isSidebarCollapsed])
+
+  useEffect(() => {
     if (!(isSettingsView && isAdminUser && selectedWebRole === 'Admin')) return
     void loadR2Settings()
+    void loadRailsSettings()
+    void loadPaymentSettings()
   }, [isAdminUser, isSettingsView, selectedWebRole])
 
   async function loadR2Settings() {
@@ -2799,6 +3524,268 @@ function AdminApp({
     } finally {
       setIsSettingsSaving(false)
     }
+  }
+
+  async function loadRailsSettings() {
+    setIsRailsSettingsLoading(true)
+    setRailsSettingsError('')
+
+    try {
+      const { data } = await fetchJson<{ data: AdminRailsSettingsData }>('/api/settings/rails')
+      setRailsSettingsData(normalizeAdminRailsSettings(data.data))
+      setStatus('Loaded rails settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setRailsSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsRailsSettingsLoading(false)
+    }
+  }
+
+  async function saveRailsSettings() {
+    const minInterval = Number(railsSettingsData.min_interval_seconds ?? 3)
+    const maxInterval = Number(railsSettingsData.max_interval_seconds ?? 30)
+    const payloadRails: RailConfigItem[] = []
+    const usedRailIds = new Set<string>()
+    const filterPanelEyebrowText = String(railsSettingsData.filter_panel_eyebrow_text ?? '').trim().slice(0, 48) || 'Browse'
+
+    for (let index = 0; index < railsSettingsData.rails.length; index += 1) {
+      const rail = railsSettingsData.rails[index]
+      const label = String(rail.label ?? '').trim()
+      if (!label) {
+        const message = `Rail ${index + 1} is missing a label.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      const railId = normalizeRailId(String(rail.id ?? '').trim() || label)
+      if (!railId) {
+        const message = `Rail ${index + 1} has an invalid id.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      if (usedRailIds.has(railId)) {
+        const message = `Duplicate rail id "${railId}" is not allowed.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      usedRailIds.add(railId)
+
+      const eventIds = Array.from(
+        new Set((rail.event_ids ?? []).map((eventId) => String(eventId ?? '').trim()).filter(Boolean))
+      )
+      const eyebrowText = String(rail.eyebrow_text ?? '').trim().slice(0, 48) || 'Featured'
+      const intervalRaw = Number(rail.autoplay_interval_seconds ?? railsSettingsData.autoplay_interval_seconds ?? minInterval)
+      if (!Number.isFinite(intervalRaw)) {
+        const message = `Rail "${label}" autoplay interval must be a number.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      const autoplayIntervalSeconds = Math.max(minInterval, Math.min(maxInterval, Math.floor(intervalRaw)))
+      const accentColor = normalizeHexColor(rail.accent_color) ?? null
+      if (!accentColor) {
+        const message = `Rail "${label}" accent color must be a 6-digit hex color.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      const headerDecorImageUrl = String(rail.header_decor_image_url ?? '').trim()
+      if (headerDecorImageUrl && !isValidHttpUrl(headerDecorImageUrl)) {
+        const message = `Rail "${label}" decorative image URL must be a valid http or https URL.`
+        setRailsSettingsError(message)
+        setStatus(message)
+        return
+      }
+      payloadRails.push({
+        id: railId,
+        label,
+        event_ids: eventIds,
+        eyebrow_text: eyebrowText,
+        autoplay_enabled: Boolean(rail.autoplay_enabled),
+        autoplay_interval_seconds: autoplayIntervalSeconds,
+        accent_color: accentColor,
+        header_decor_image_url: headerDecorImageUrl
+      })
+    }
+
+    setIsRailsSettingsSaving(true)
+    setRailsSettingsError('')
+
+    try {
+      const { data } = await fetchJson<{ data: AdminRailsSettingsData }>('/api/settings/rails', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          autoplay_interval_seconds: Math.max(
+            minInterval,
+            Math.min(maxInterval, Number(railsSettingsData.autoplay_interval_seconds || minInterval))
+          ),
+          filter_panel_eyebrow_text: filterPanelEyebrowText,
+          rails: payloadRails
+        })
+      })
+      setRailsSettingsData((current) => normalizeAdminRailsSettings({ ...current, ...data.data }))
+      setStatus('Rails settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setRailsSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsRailsSettingsSaving(false)
+    }
+  }
+
+  async function loadPaymentSettings() {
+    setIsPaymentSettingsLoading(true)
+    setPaymentSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: AdminPaymentSettingsData }>('/api/settings/payments')
+      setPaymentSettingsData(normalizeAdminPaymentSettings(data.data))
+      setStatus('Loaded payment settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setPaymentSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsPaymentSettingsLoading(false)
+    }
+  }
+
+  async function savePaymentSettings() {
+    const returnUrl = String(paymentSettingsData.khalti_return_url ?? '').trim()
+    const websiteUrl = String(paymentSettingsData.khalti_website_url ?? '').trim()
+    const testPublicKey = String(paymentSettingsData.khalti_test_public_key ?? '').trim()
+    const livePublicKey = String(paymentSettingsData.khalti_live_public_key ?? '').trim()
+    if (returnUrl && !isValidHttpUrl(returnUrl)) {
+      const message = 'Khalti return URL must be a valid http or https URL.'
+      setPaymentSettingsError(message)
+      setStatus(message)
+      return
+    }
+    if (websiteUrl && !isValidHttpUrl(websiteUrl)) {
+      const message = 'Khalti website URL must be a valid http or https URL.'
+      setPaymentSettingsError(message)
+      setStatus(message)
+      return
+    }
+    if (testPublicKey.length > 200 || livePublicKey.length > 200) {
+      const message = 'Khalti public keys must be at most 200 characters.'
+      setPaymentSettingsError(message)
+      setStatus(message)
+      return
+    }
+
+    setIsPaymentSettingsSaving(true)
+    setPaymentSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: AdminPaymentSettingsData }>('/api/settings/payments', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          khalti_enabled: paymentSettingsData.khalti_enabled,
+          khalti_mode: paymentSettingsData.khalti_mode,
+          khalti_return_url: returnUrl,
+          khalti_website_url: websiteUrl,
+          khalti_test_public_key: testPublicKey,
+          khalti_live_public_key: livePublicKey
+        })
+      })
+      setPaymentSettingsData(normalizeAdminPaymentSettings(data.data))
+      setStatus('Payment settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setPaymentSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsPaymentSettingsSaving(false)
+    }
+  }
+
+  function addRailConfig() {
+    const nextIndex = railsSettingsData.rails.length + 1
+    setRailsSettingsData((current) => ({
+      ...current,
+      rails: [
+        ...current.rails,
+        {
+          id: `rail-${nextIndex}`,
+          label: `Rail ${nextIndex}`,
+          event_ids: [],
+          eyebrow_text: 'Featured',
+          autoplay_enabled: true,
+          autoplay_interval_seconds: Math.max(
+            Number(current.min_interval_seconds ?? 3),
+            Math.min(
+              Number(current.max_interval_seconds ?? 30),
+              Number(current.autoplay_interval_seconds ?? 9)
+            )
+          ),
+          accent_color: '#4f8df5',
+          header_decor_image_url: ''
+        }
+      ]
+    }))
+  }
+
+  function removeRailConfig(railIndex: number) {
+    setRailsSettingsData((current) => ({
+      ...current,
+      rails: current.rails.filter((_, index) => index !== railIndex)
+    }))
+  }
+
+  function updateRailConfigField(railIndex: number, field: 'id' | 'label', value: string) {
+    setRailsSettingsData((current) => ({
+      ...current,
+      rails: current.rails.map((rail, index) => (index === railIndex ? { ...rail, [field]: value } : rail))
+    }))
+  }
+
+  function updateRailConfigPresentationField(
+    railIndex: number,
+    field: 'eyebrow_text' | 'autoplay_enabled' | 'autoplay_interval_seconds' | 'accent_color' | 'header_decor_image_url',
+    value: string | number | boolean
+  ) {
+    setRailsSettingsData((current) => ({
+      ...current,
+      rails: current.rails.map((rail, index) =>
+        index === railIndex
+          ? {
+              ...rail,
+              [field]:
+                field === 'autoplay_interval_seconds'
+                  ? Math.max(
+                      Number(current.min_interval_seconds ?? 3),
+                      Math.min(Number(current.max_interval_seconds ?? 30), Math.floor(Number(value) || 0))
+                    )
+                  : value
+            }
+          : rail
+      )
+    }))
+  }
+
+  function toggleRailEventSelection(railIndex: number, eventId: string) {
+    setRailsSettingsData((current) => ({
+      ...current,
+      rails: current.rails.map((rail, index) => {
+        if (index !== railIndex) return rail
+        const selected = new Set(rail.event_ids ?? [])
+        if (selected.has(eventId)) {
+          selected.delete(eventId)
+        } else {
+          selected.add(eventId)
+        }
+        return {
+          ...rail,
+          event_ids: Array.from(selected)
+        }
+      })
+    }))
   }
 
   function applyButtonPreset(presetId: string) {
@@ -3397,12 +4384,22 @@ function AdminApp({
   const viewLabel = isSettingsView ? 'Settings' : formatResourceName(selectedResource)
 
   return (
-    <div className="admin-app">
-      <aside className="admin-sidebar">
-        <a className="admin-brand" href="/">
-          <span className="brand-mark">W</span>
-          <span>Waahtickets</span>
-        </a>
+    <div className={isSidebarCollapsed ? 'admin-app sidebar-collapsed' : 'admin-app'}>
+      <aside className={isSidebarCollapsed ? 'admin-sidebar collapsed' : 'admin-sidebar'}>
+        <div className="admin-sidebar-top">
+          <a className="admin-brand" href="/">
+            <span className="brand-mark">W</span>
+            <span>Waahtickets</span>
+          </a>
+          <button
+            aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="admin-sidebar-toggle"
+            type="button"
+            onClick={() => setIsSidebarCollapsed((current) => !current)}
+          >
+            {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
         <div className="admin-user-panel">
           <div className="admin-avatar">{getInitials(user)}</div>
           <div>
@@ -3451,6 +4448,7 @@ function AdminApp({
                   return (
                     <button
                       className={resource === selectedResource ? 'active' : ''}
+                      data-label={formatResourceName(resource)}
                       key={resource}
                       style={{ animationDelay: `${itemIndex * 28}ms` }}
                       type="button"
@@ -3469,6 +4467,7 @@ function AdminApp({
               <div className="admin-menu-items" style={{ maxHeight: '46px' }}>
                 <button
                   className={isSettingsView ? 'active' : ''}
+                  data-label="Settings"
                   type="button"
                   onClick={() => setSelectedResource(SETTINGS_VIEW)}
                 >
@@ -3521,6 +4520,47 @@ function AdminApp({
 
         {isSettingsView ? (
           <>
+            <section className="admin-card settings-card settings-nav-card">
+              <div className="settings-subnav">
+                <button
+                  className={settingsSection === 'storage' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('storage')}
+                >
+                  Storage
+                </button>
+                <button
+                  className={settingsSection === 'rails' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('rails')}
+                >
+                  Rails
+                </button>
+                <button
+                  className={settingsSection === 'payments' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('payments')}
+                >
+                  Payments
+                </button>
+                <button
+                  className={settingsSection === 'appearance' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('appearance')}
+                >
+                  Appearance
+                </button>
+                <button
+                  className={settingsSection === 'grid' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('grid')}
+                >
+                  Grid
+                </button>
+              </div>
+            </section>
+
+            {settingsSection === 'storage' ? (
             <section className="admin-card settings-card">
               <div className="admin-card-header">
                 <div>
@@ -3592,7 +4632,414 @@ function AdminApp({
                 </button>
               </footer>
             </section>
+            ) : null}
 
+            {settingsSection === 'rails' ? (
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Rails Settings</h2>
+                  <p>Control event grouping, per-rail motion, and rail presentation from one place.</p>
+                </div>
+              </div>
+              <div className="settings-grid rails-settings-grid">
+                <label>
+                  <span>Events filter eyebrow text</span>
+                  <input
+                    maxLength={48}
+                    placeholder="Browse"
+                    type="text"
+                    value={railsSettingsData.filter_panel_eyebrow_text ?? ''}
+                    onChange={(event) =>
+                      setRailsSettingsData((current) => ({
+                        ...current,
+                        filter_panel_eyebrow_text: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label className="rails-interval-control">
+                  <span>Default auto-slide interval for new rails</span>
+                  <input
+                    min={String(railsSettingsData.min_interval_seconds ?? 3)}
+                    max={String(railsSettingsData.max_interval_seconds ?? 30)}
+                    step="1"
+                    type="range"
+                    value={String(railsSettingsData.autoplay_interval_seconds ?? 9)}
+                    onChange={(event) =>
+                      setRailsSettingsData((current) => ({
+                        ...current,
+                        autoplay_interval_seconds: Number(event.target.value)
+                      }))
+                    }
+                  />
+                  <small>
+                    {Math.max(
+                      Number(railsSettingsData.min_interval_seconds ?? 3),
+                      Math.min(
+                        Number(railsSettingsData.max_interval_seconds ?? 30),
+                        Number(railsSettingsData.autoplay_interval_seconds ?? 9)
+                      )
+                    )}
+                    s
+                  </small>
+                </label>
+              </div>
+              <div className="rails-settings-list">
+                {railsSettingsData.rails.length === 0 ? (
+                  <p className="upload-hint">No rails configured yet. Add a rail to start.</p>
+                ) : (
+                  railsSettingsData.rails.map((rail, index) => {
+                    const railKey = rail.id || `rail-${index}`
+                    const searchQuery = (railEventSearchByRailId[railKey] ?? '').trim().toLowerCase()
+                    const filteredEvents = railsSettingsData.available_events.filter((event) => {
+                      if (!searchQuery) return true
+                      const haystack = `${event.name} ${event.status ?? ''} ${event.start_datetime ?? ''}`.toLowerCase()
+                      return haystack.includes(searchQuery)
+                    })
+                    const selectedEvents = railsSettingsData.available_events.filter((event) =>
+                      (rail.event_ids ?? []).includes(event.id)
+                    )
+                    const minInterval = Number(railsSettingsData.min_interval_seconds ?? 3)
+                    const maxInterval = Number(railsSettingsData.max_interval_seconds ?? 30)
+                    const railInterval = Math.max(
+                      minInterval,
+                      Math.min(maxInterval, Number(rail.autoplay_interval_seconds ?? railsSettingsData.autoplay_interval_seconds ?? minInterval))
+                    )
+
+                    return (
+                      <div className="rail-config-card" key={`${rail.id}-${index}`}>
+                        <div className="rail-config-header">
+                          <strong>Rail {index + 1}</strong>
+                          <button type="button" onClick={() => removeRailConfig(index)}>
+                            Remove
+                          </button>
+                        </div>
+                        <div className="settings-grid rails-card-grid">
+                          <label>
+                            <span>Rail label</span>
+                            <input
+                              placeholder="Featured drops"
+                              type="text"
+                              value={rail.label}
+                              onChange={(event) => updateRailConfigField(index, 'label', event.target.value)}
+                            />
+                          </label>
+                          <label>
+                            <span>Rail id (optional)</span>
+                            <input
+                              placeholder="featured-drops"
+                              type="text"
+                              value={rail.id}
+                              onChange={(event) => updateRailConfigField(index, 'id', event.target.value)}
+                            />
+                          </label>
+                          <label>
+                            <span>Rail eyebrow text</span>
+                            <input
+                              maxLength={48}
+                              placeholder="Featured"
+                              type="text"
+                              value={rail.eyebrow_text ?? ''}
+                              onChange={(event) =>
+                                updateRailConfigPresentationField(index, 'eyebrow_text', event.target.value)
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>Accent color</span>
+                            <div className="rail-color-input-row">
+                              <input
+                                type="color"
+                                value={normalizeHexColor(rail.accent_color) ?? '#4f8df5'}
+                                onChange={(event) =>
+                                  updateRailConfigPresentationField(index, 'accent_color', event.target.value)
+                                }
+                              />
+                              <input
+                                maxLength={7}
+                                placeholder="#4f8df5"
+                                type="text"
+                                value={rail.accent_color ?? ''}
+                                onChange={(event) =>
+                                  updateRailConfigPresentationField(index, 'accent_color', event.target.value)
+                                }
+                              />
+                            </div>
+                          </label>
+                          <label className="rail-autoplay-toggle">
+                            <span>Autoplay enabled</span>
+                            <input
+                              checked={Boolean(rail.autoplay_enabled)}
+                              type="checkbox"
+                              onChange={(event) =>
+                                updateRailConfigPresentationField(index, 'autoplay_enabled', event.target.checked)
+                              }
+                            />
+                          </label>
+                          <label className="rails-interval-control rail-interval-per-rail">
+                            <span>
+                              Rail auto-slide interval
+                            </span>
+                            <input
+                              disabled={!rail.autoplay_enabled}
+                              min={String(minInterval)}
+                              max={String(maxInterval)}
+                              step="1"
+                              type="range"
+                              value={String(railInterval)}
+                              onChange={(event) =>
+                                updateRailConfigPresentationField(
+                                  index,
+                                  'autoplay_interval_seconds',
+                                  Number(event.target.value)
+                                )
+                              }
+                            />
+                            <small>{railInterval}s</small>
+                          </label>
+                          <label className="rails-events-select">
+                            <span>Decorative header image URL (optional)</span>
+                            <input
+                              placeholder="https://example.com/header-decor.png"
+                              type="text"
+                              value={rail.header_decor_image_url ?? ''}
+                              onChange={(event) =>
+                                updateRailConfigPresentationField(index, 'header_decor_image_url', event.target.value)
+                              }
+                            />
+                          </label>
+                          <div className="rails-events-select rails-events-picker">
+                            <div className="rails-events-picker-header">
+                              <span>Events in this rail ({selectedEvents.length})</span>
+                              <input
+                                placeholder="Search events..."
+                                type="search"
+                                value={railEventSearchByRailId[railKey] ?? ''}
+                                onChange={(event) =>
+                                  setRailEventSearchByRailId((current) => ({
+                                    ...current,
+                                    [railKey]: event.target.value
+                                  }))
+                                }
+                              />
+                            </div>
+                            {selectedEvents.length > 0 ? (
+                              <div className="rails-selected-chips">
+                                {selectedEvents.map((event) => (
+                                  <button
+                                    className="rails-selected-chip"
+                                    key={`chip-${railKey}-${event.id}`}
+                                    type="button"
+                                    onClick={() => toggleRailEventSelection(index, event.id)}
+                                  >
+                                    {event.name}
+                                    <X size={12} />
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="rails-event-checkbox-list">
+                              {filteredEvents.length === 0 ? (
+                                <p className="upload-hint">No events match your search.</p>
+                              ) : (
+                                filteredEvents.map((event) => (
+                                  <label className="rails-event-checkbox-row" key={`event-${railKey}-${event.id}`}>
+                                    <input
+                                      checked={(rail.event_ids ?? []).includes(event.id)}
+                                      type="checkbox"
+                                      onChange={() => toggleRailEventSelection(index, event.id)}
+                                    />
+                                    <span>
+                                      {event.name}
+                                      {event.start_datetime ? ` • ${formatEventDate(event.start_datetime)}` : ''}
+                                    </span>
+                                  </label>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+              {railsSettingsError ? <p className="record-modal-error">{railsSettingsError}</p> : null}
+              <footer className="record-modal-actions">
+                <button
+                  disabled={isRailsSettingsLoading || isRailsSettingsSaving}
+                  type="button"
+                  onClick={() => addRailConfig()}
+                >
+                  <Plus size={17} />
+                  Add rail
+                </button>
+                <button
+                  disabled={isRailsSettingsLoading || isRailsSettingsSaving}
+                  type="button"
+                  onClick={() => void loadRailsSettings()}
+                >
+                  <RefreshCw className={isRailsSettingsLoading ? 'spinning-icon' : ''} size={17} />
+                  Reload rails
+                </button>
+                <button
+                  className="primary-admin-button"
+                  disabled={isRailsSettingsLoading || isRailsSettingsSaving}
+                  type="button"
+                  onClick={() => void saveRailsSettings()}
+                >
+                  {isRailsSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                  {isRailsSettingsSaving ? 'Saving...' : 'Save rails settings'}
+                </button>
+              </footer>
+            </section>
+            ) : null}
+
+            {settingsSection === 'payments' ? (
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Khalti Payment Setup</h2>
+                  <p>Configure test/live mode and checkout URLs for Khalti ePayment.</p>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <label className="rail-autoplay-toggle">
+                  <span>Enable Khalti checkout</span>
+                  <input
+                    checked={paymentSettingsData.khalti_enabled}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_enabled: event.target.checked
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Mode</span>
+                  <select
+                    value={paymentSettingsData.khalti_mode}
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_mode: event.target.value === 'live' ? 'live' : 'test'
+                      }))
+                    }
+                  >
+                    <option value="test">Test (Sandbox)</option>
+                    <option value="live">Live (Production)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Return URL</span>
+                  <input
+                    placeholder="https://yourdomain.com/?payment=khalti"
+                    type="text"
+                    value={paymentSettingsData.khalti_return_url}
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_return_url: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Website URL</span>
+                  <input
+                    placeholder="https://yourdomain.com"
+                    type="text"
+                    value={paymentSettingsData.khalti_website_url}
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_website_url: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Test public key</span>
+                  <input
+                    placeholder="test_public_key_xxx"
+                    type="text"
+                    value={paymentSettingsData.khalti_test_public_key}
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_test_public_key: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Live public key</span>
+                  <input
+                    placeholder="live_public_key_xxx"
+                    type="text"
+                    value={paymentSettingsData.khalti_live_public_key}
+                    onChange={(event) =>
+                      setPaymentSettingsData((current) => ({
+                        ...current,
+                        khalti_live_public_key: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Active public key</span>
+                  <input
+                    disabled
+                    type="text"
+                    value={
+                      paymentSettingsData.khalti_mode === 'live'
+                        ? paymentSettingsData.khalti_live_public_key || 'Not set'
+                        : paymentSettingsData.khalti_test_public_key || 'Not set'
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Test key binding</span>
+                  <input disabled type="text" value={paymentSettingsData.khalti_test_key_configured ? 'Configured' : 'Missing KHALTI_TEST_SECRET_KEY'} />
+                </label>
+                <label>
+                  <span>Live key binding</span>
+                  <input disabled type="text" value={paymentSettingsData.khalti_live_key_configured ? 'Configured' : 'Missing KHALTI_LIVE_SECRET_KEY'} />
+                </label>
+              </div>
+              <p className="upload-hint">
+                {paymentSettingsData.khalti_runtime_note}
+              </p>
+              <p className="upload-hint">
+                Add secrets with `wrangler secret put KHALTI_TEST_SECRET_KEY` and `wrangler secret put KHALTI_LIVE_SECRET_KEY`.
+              </p>
+              {paymentSettingsError ? <p className="record-modal-error">{paymentSettingsError}</p> : null}
+              <footer className="record-modal-actions">
+                <button
+                  disabled={isPaymentSettingsLoading || isPaymentSettingsSaving}
+                  type="button"
+                  onClick={() => void loadPaymentSettings()}
+                >
+                  <RefreshCw className={isPaymentSettingsLoading ? 'spinning-icon' : ''} size={17} />
+                  Reload payments
+                </button>
+                <button
+                  className="primary-admin-button"
+                  disabled={isPaymentSettingsLoading || isPaymentSettingsSaving}
+                  type="button"
+                  onClick={() => void savePaymentSettings()}
+                >
+                  {isPaymentSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                  {isPaymentSettingsSaving ? 'Saving...' : 'Save payment settings'}
+                </button>
+              </footer>
+            </section>
+            ) : null}
+
+            {settingsSection === 'appearance' ? (
             <section className="admin-card settings-card">
               <div className="admin-card-header">
                 <div>
@@ -3676,7 +5123,9 @@ function AdminApp({
                 </button>
               </footer>
             </section>
+            ) : null}
 
+            {settingsSection === 'grid' ? (
             <section className="admin-card settings-card">
               <div className="admin-card-header">
                 <div>
@@ -3707,6 +5156,7 @@ function AdminApp({
                 </button>
               </footer>
             </section>
+            ) : null}
           </>
         ) : (
           <>
@@ -4574,6 +6024,301 @@ function getRecentRecordTrend(records: ApiRecord[]) {
   }
 
   return dayBuckets
+}
+
+function normalizeRailId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 64)
+}
+
+function normalizePublicRailsSettings(value: unknown): PublicRailsSettingsData {
+  const source = value && typeof value === 'object' ? (value as Partial<PublicRailsSettingsData>) : {}
+  const min = Number(source.min_interval_seconds ?? 3)
+  const max = Number(source.max_interval_seconds ?? 30)
+  const minInterval = Number.isFinite(min) ? Math.max(1, Math.floor(min)) : 3
+  const maxInterval = Number.isFinite(max) ? Math.max(minInterval, Math.floor(max)) : 30
+  const autoplayRaw = Number(source.autoplay_interval_seconds ?? 9)
+  const autoplayIntervalSeconds = Number.isFinite(autoplayRaw)
+    ? Math.max(minInterval, Math.min(maxInterval, Math.floor(autoplayRaw)))
+    : 9
+  const filterPanelEyebrowText = String(source.filter_panel_eyebrow_text ?? '').trim().slice(0, 48) || 'Browse'
+  const rails = Array.isArray(source.rails)
+    ? source.rails
+        .map((rail) => {
+          if (!rail || typeof rail !== 'object') return null
+          const candidate = rail as Partial<RailConfigItem>
+          const label = String(candidate.label ?? '').trim()
+          const id = normalizeRailId(String(candidate.id ?? '').trim() || label)
+          if (!id || !label) return null
+          const eventIds = Array.isArray(candidate.event_ids)
+            ? Array.from(
+                new Set(
+                  candidate.event_ids
+                    .map((eventId) => String(eventId ?? '').trim())
+                    .filter((eventId) => eventId.length > 0)
+                )
+              )
+            : []
+          const eyebrowText = String(candidate.eyebrow_text ?? '').trim().slice(0, 48) || 'Featured'
+          const autoplayEnabled = typeof candidate.autoplay_enabled === 'boolean' ? candidate.autoplay_enabled : true
+          const railIntervalRaw = Number(candidate.autoplay_interval_seconds ?? autoplayIntervalSeconds)
+          const railInterval = Number.isFinite(railIntervalRaw)
+            ? Math.max(minInterval, Math.min(maxInterval, Math.floor(railIntervalRaw)))
+            : autoplayIntervalSeconds
+          const accentColor = normalizeHexColor(candidate.accent_color) ?? '#4f8df5'
+          const decorImageUrl =
+            typeof candidate.header_decor_image_url === 'string' && isValidHttpUrl(candidate.header_decor_image_url.trim())
+              ? candidate.header_decor_image_url.trim()
+              : ''
+          return {
+            id,
+            label,
+            event_ids: eventIds,
+            eyebrow_text: eyebrowText,
+            autoplay_enabled: autoplayEnabled,
+            autoplay_interval_seconds: railInterval,
+            accent_color: accentColor,
+            header_decor_image_url: decorImageUrl
+          }
+        })
+        .filter((rail): rail is RailConfigItem => Boolean(rail))
+    : []
+
+  return {
+    autoplay_interval_seconds: autoplayIntervalSeconds,
+    min_interval_seconds: minInterval,
+    max_interval_seconds: maxInterval,
+    filter_panel_eyebrow_text: filterPanelEyebrowText,
+    rails
+  }
+}
+
+function normalizeAdminRailsSettings(value: unknown): AdminRailsSettingsData {
+  const normalized = normalizePublicRailsSettings(value)
+  const source = value && typeof value === 'object' ? (value as Partial<AdminRailsSettingsData>) : {}
+  const availableEvents = Array.isArray(source.available_events)
+    ? source.available_events
+        .map((event) => {
+          if (!event || typeof event !== 'object') return null
+          const candidate = event as Partial<AdminRailsSettingsData['available_events'][number]>
+          const id = String(candidate.id ?? '').trim()
+          const name = String(candidate.name ?? '').trim()
+          if (!id || !name) return null
+          return {
+            id,
+            name,
+            status: String(candidate.status ?? ''),
+            start_datetime: String(candidate.start_datetime ?? '')
+          }
+        })
+        .filter((event): event is AdminRailsSettingsData['available_events'][number] => Boolean(event))
+    : []
+  return {
+    ...defaultRailsSettingsData,
+    ...normalized,
+    available_events: availableEvents
+  }
+}
+
+function normalizeAdminPaymentSettings(value: unknown): AdminPaymentSettingsData {
+  const source = value && typeof value === 'object' ? (value as Partial<AdminPaymentSettingsData>) : {}
+  const mode = source.khalti_mode === 'live' ? 'live' : 'test'
+  const returnUrl = typeof source.khalti_return_url === 'string' ? source.khalti_return_url.trim() : ''
+  const websiteUrl = typeof source.khalti_website_url === 'string' ? source.khalti_website_url.trim() : ''
+  const testPublicKey =
+    typeof source.khalti_test_public_key === 'string' ? source.khalti_test_public_key.trim().slice(0, 200) : ''
+  const livePublicKey =
+    typeof source.khalti_live_public_key === 'string' ? source.khalti_live_public_key.trim().slice(0, 200) : ''
+  const activePublicKey = mode === 'live' ? livePublicKey : testPublicKey
+  return {
+    khalti_enabled: Boolean(source.khalti_enabled),
+    khalti_mode: mode,
+    khalti_return_url: returnUrl,
+    khalti_website_url: websiteUrl,
+    khalti_test_public_key: testPublicKey,
+    khalti_live_public_key: livePublicKey,
+    khalti_public_key: activePublicKey,
+    khalti_test_key_configured: Boolean(source.khalti_test_key_configured),
+    khalti_live_key_configured: Boolean(source.khalti_live_key_configured),
+    khalti_can_initiate: Boolean(source.khalti_can_initiate),
+    khalti_runtime_note: String(source.khalti_runtime_note ?? '')
+  }
+}
+
+function buildConfiguredRails(events: PublicEvent[], configRails: RailConfigItem[]) {
+  if (!Array.isArray(configRails) || configRails.length === 0) {
+    return [] as Array<{
+      id: string
+      label: string
+      eyebrow_text: string
+      autoplay_enabled: boolean
+      autoplay_interval_seconds: number
+      accent_color: string
+      header_decor_image_url: string
+      events: PublicEvent[]
+    }>
+  }
+  const eventsById = new Map(events.map((event) => [String(event.id ?? ''), event]))
+  const rails: Array<{
+    id: string
+    label: string
+    eyebrow_text: string
+    autoplay_enabled: boolean
+    autoplay_interval_seconds: number
+    accent_color: string
+    header_decor_image_url: string
+    events: PublicEvent[]
+  }> = []
+
+  for (const rail of configRails) {
+    const eventList = (rail.event_ids ?? [])
+      .map((eventId) => eventsById.get(String(eventId ?? '').trim()))
+      .filter((event): event is PublicEvent => Boolean(event))
+    if (eventList.length === 0) continue
+    rails.push({
+      id: rail.id,
+      label: rail.label,
+      eyebrow_text: rail.eyebrow_text,
+      autoplay_enabled: rail.autoplay_enabled,
+      autoplay_interval_seconds: rail.autoplay_interval_seconds,
+      accent_color: rail.accent_color,
+      header_decor_image_url: rail.header_decor_image_url,
+      events: eventList
+    })
+  }
+
+  return rails
+}
+
+function buildDefaultEventRails(events: PublicEvent[]) {
+  const now = Date.now()
+  const maxEventsPerRail = 16
+  const sortedEvents = [...events].sort((left, right) => {
+    const leftTime =
+      typeof left.start_datetime === 'string' && left.start_datetime
+        ? new Date(left.start_datetime).getTime()
+        : Number.MAX_SAFE_INTEGER
+    const rightTime =
+      typeof right.start_datetime === 'string' && right.start_datetime
+        ? new Date(right.start_datetime).getTime()
+        : Number.MAX_SAFE_INTEGER
+    return leftTime - rightTime
+  })
+  const featuredEvents = sortedEvents.filter((event) => isTruthyValue(event.is_featured))
+  const weekendEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 7))
+  const monthEvents = sortedEvents.filter((event) => isEventWithinRange(event, now, 30))
+  const typeGroups = new Map<string, PublicEvent[]>()
+  const locationGroups = new Map<string, PublicEvent[]>()
+
+  for (const event of sortedEvents) {
+    const typeName = typeof event.event_type === 'string' ? event.event_type.trim() : ''
+    if (typeName) {
+      const current = typeGroups.get(typeName) ?? []
+      current.push(event)
+      typeGroups.set(typeName, current)
+    }
+
+    const locationName =
+      typeof event.location_name === 'string' && event.location_name.trim()
+        ? event.location_name.trim()
+        : typeof event.organization_name === 'string'
+          ? event.organization_name.trim()
+          : ''
+    if (locationName) {
+      const current = locationGroups.get(locationName) ?? []
+      current.push(event)
+      locationGroups.set(locationName, current)
+    }
+  }
+
+  const topTypes = [...typeGroups.entries()]
+    .filter(([, group]) => group.length >= 2)
+    .sort((left, right) => right[1].length - left[1].length)
+    .slice(0, 2)
+  const topLocations = [...locationGroups.entries()]
+    .filter(([, group]) => group.length >= 2)
+    .sort((left, right) => right[1].length - left[1].length)
+    .slice(0, 2)
+
+  const rails: Array<{
+    id: string
+    label: string
+    eyebrow_text: string
+    autoplay_enabled: boolean
+    autoplay_interval_seconds: number
+    accent_color: string
+    header_decor_image_url: string
+    events: PublicEvent[]
+  }> = []
+  const addRail = (id: string, label: string, candidates: PublicEvent[]) => {
+    if (candidates.length === 0) return
+    rails.push({
+      id,
+      label,
+      eyebrow_text: 'Featured',
+      autoplay_enabled: true,
+      autoplay_interval_seconds: 9,
+      accent_color: '#4f8df5',
+      header_decor_image_url: '',
+      events: candidates.slice(0, maxEventsPerRail)
+    })
+  }
+
+  addRail('featured-drops', 'Featured drops', featuredEvents.length > 0 ? featuredEvents : sortedEvents)
+  addRail('this-weekend', 'This weekend', weekendEvents)
+  addRail('happening-soon', 'Happening soon', monthEvents)
+
+  for (const [typeName, group] of topTypes) {
+    addRail(`type-${typeName.toLowerCase().replaceAll(/\s+/g, '-')}`, `${formatResourceName(typeName)} picks`, group)
+  }
+
+  for (const [locationName, group] of topLocations) {
+    addRail(
+      `location-${locationName.toLowerCase().replaceAll(/\s+/g, '-')}`,
+      `More in ${locationName}`,
+      group
+    )
+  }
+
+  if (rails.length < 3 && sortedEvents.length > 0) {
+    addRail('all-upcoming', 'All upcoming events', sortedEvents)
+  }
+
+  return rails
+}
+
+function groupCartItemsByEvent(items: CartItem[]) {
+  const grouped = new Map<string, { event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>()
+  for (const item of items) {
+    const existing = grouped.get(item.event_id)
+    if (existing) {
+      existing.items.push(item)
+      continue
+    }
+    grouped.set(item.event_id, {
+      event_id: item.event_id,
+      event_name: item.event_name,
+      event_location_id: item.event_location_id,
+      event_location_name: item.event_location_name,
+      items: [item]
+    })
+  }
+  return [...grouped.values()]
+}
+
+function allocateOrderDiscountShare(
+  eventId: string,
+  groups: Array<{ event_id: string; items: CartItem[] }>,
+  orderDiscount: { couponId: string; eventId: string; discount: number } | null
+) {
+  if (!orderDiscount || orderDiscount.discount <= 0) return 0
+  return orderDiscount.eventId === eventId ? orderDiscount.discount : 0
 }
 
 function getFileDownloadUrl(record: ApiRecord) {

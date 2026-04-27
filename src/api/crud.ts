@@ -4,6 +4,7 @@ import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
 import {
+  enqueueOrderCopyNotification,
   enqueueAccountDeletedNotification,
   getNotificationDeliveryReadiness,
   maybeEnqueueAccountCreatedNotification,
@@ -36,6 +37,28 @@ const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
   updated_by TEXT
 )`
 const R2_SETTING_KEYS = ['r2_public_base_url', 'ticket_qr_base_url'] as const
+const PAYMENT_SETTING_KEYS = [
+  'payments_khalti_enabled',
+  'payments_khalti_mode',
+  'payments_khalti_return_url',
+  'payments_khalti_website_url',
+  'payments_khalti_test_public_key',
+  'payments_khalti_live_public_key'
+] as const
+const RAILS_SETTING_KEYS = [
+  'rails_autoplay_interval_seconds',
+  'rails_config_json',
+  'rails_filter_panel_eyebrow_text'
+] as const
+const DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS = 9
+const MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS = 3
+const MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS = 30
+const DEFAULT_FILTER_PANEL_EYEBROW_TEXT = 'Browse'
+const DEFAULT_RAIL_EYEBROW_TEXT = 'Featured'
+const DEFAULT_RAIL_AUTOPLAY_ENABLED = true
+const DEFAULT_RAIL_ACCENT_COLOR = '#4f8df5'
+const MAX_CONFIGURED_RAILS = 24
+const MAX_EVENTS_PER_RAIL = 48
 const ORGANIZER_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -44,6 +67,32 @@ const ORGANIZER_IMAGE_MIME_TYPES = new Set([
 ])
 
 type R2SettingKey = (typeof R2_SETTING_KEYS)[number]
+type PaymentSettingKey = (typeof PAYMENT_SETTING_KEYS)[number]
+type RailsSettingKey = (typeof RAILS_SETTING_KEYS)[number]
+type RailsConfigItem = {
+  id: string
+  label: string
+  event_ids: string[]
+  eyebrow_text: string
+  autoplay_enabled: boolean
+  autoplay_interval_seconds: number
+  accent_color: string
+  header_decor_image_url: string
+}
+type KhaltiMode = 'test' | 'live'
+type PaymentSettingsData = {
+  khalti_enabled: boolean
+  khalti_mode: KhaltiMode
+  khalti_return_url: string
+  khalti_website_url: string
+  khalti_test_public_key: string
+  khalti_live_public_key: string
+  khalti_public_key: string
+  khalti_test_key_configured: boolean
+  khalti_live_key_configured: boolean
+  khalti_can_initiate: boolean
+  khalti_runtime_note: string
+}
 
 export const crudRoutes = new Hono<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>()
 
@@ -381,6 +430,361 @@ crudRoutes.get('/settings/notifications', async (c) => {
   })
 })
 
+crudRoutes.get('/settings/rails', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, RAILS_SETTING_KEYS)
+  const autoplayIntervalSeconds = parseRailsAutoplayIntervalSeconds(stored.rails_autoplay_interval_seconds)
+  const rails = parseRailsConfig(stored.rails_config_json, autoplayIntervalSeconds)
+  const filterPanelEyebrowText = parseRailsFilterPanelEyebrowText(stored.rails_filter_panel_eyebrow_text)
+  const availableEventsRows = await db
+    .prepare(
+      `SELECT id, name, status, start_datetime
+       FROM events
+       ORDER BY start_datetime ASC, created_at ASC
+       LIMIT 500`
+    )
+    .all<{ id: string; name: string | null; status: string | null; start_datetime: string | null }>()
+
+  return c.json({
+    data: {
+      autoplay_interval_seconds: autoplayIntervalSeconds,
+      min_interval_seconds: MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+      max_interval_seconds: MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+      filter_panel_eyebrow_text: filterPanelEyebrowText,
+      rails,
+      available_events: availableEventsRows.results.map((event) => ({
+        id: event.id,
+        name: event.name ?? event.id,
+        status: event.status ?? '',
+        start_datetime: event.start_datetime ?? ''
+      }))
+    }
+  })
+})
+
+crudRoutes.get('/settings/payments', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
+  const settings = buildPaymentSettingsFromStored(stored, c.env, c.req.url)
+  return c.json({ data: settings })
+})
+
+crudRoutes.put('/settings/payments', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const khaltiEnabled = normalizeBoolean(payload.khalti_enabled, false)
+  const khaltiMode = parseKhaltiMode(payload.khalti_mode)
+  if (!khaltiMode) {
+    return c.json({ error: 'khalti_mode must be either "test" or "live".' }, 400)
+  }
+  const khaltiReturnUrl = String(payload.khalti_return_url ?? '').trim()
+  const khaltiWebsiteUrl = String(payload.khalti_website_url ?? '').trim()
+  const khaltiTestPublicKey = String(payload.khalti_test_public_key ?? '').trim()
+  const khaltiLivePublicKey = String(payload.khalti_live_public_key ?? '').trim()
+  if (khaltiReturnUrl && !isValidUrl(khaltiReturnUrl)) {
+    return c.json({ error: 'Khalti return URL must be a valid http or https URL.' }, 400)
+  }
+  if (khaltiWebsiteUrl && !isValidUrl(khaltiWebsiteUrl)) {
+    return c.json({ error: 'Khalti website URL must be a valid http or https URL.' }, 400)
+  }
+  if (khaltiTestPublicKey.length > 200 || khaltiLivePublicKey.length > 200) {
+    return c.json({ error: 'Khalti public keys must be at most 200 characters.' }, 400)
+  }
+
+  await ensureAppSettingsTable(db)
+  const now = new Date().toISOString()
+  const values: Record<PaymentSettingKey, string> = {
+    payments_khalti_enabled: khaltiEnabled ? '1' : '0',
+    payments_khalti_mode: khaltiMode,
+    payments_khalti_return_url: khaltiReturnUrl,
+    payments_khalti_website_url: khaltiWebsiteUrl,
+    payments_khalti_test_public_key: khaltiTestPublicKey,
+    payments_khalti_live_public_key: khaltiLivePublicKey
+  }
+  for (const key of PAYMENT_SETTING_KEYS) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(setting_key) DO UPDATE SET
+           setting_value = excluded.setting_value,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by`
+      )
+      .bind(key, values[key], now, scope.userId)
+      .run()
+  }
+
+  const settings = buildPaymentSettingsFromStored(values, c.env, c.req.url)
+  return c.json({ data: { ...settings, updated_at: now } })
+})
+
+crudRoutes.post('/payments/khalti/initiate', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const amountPaisa = Number(payload.amount_paisa ?? 0)
+  if (!Number.isFinite(amountPaisa) || amountPaisa <= 0) {
+    return c.json({ error: 'amount_paisa must be a positive number.' }, 400)
+  }
+  const purchaseOrderId = String(payload.purchase_order_id ?? '').trim()
+  if (!purchaseOrderId) {
+    return c.json({ error: 'purchase_order_id is required.' }, 400)
+  }
+  const purchaseOrderName = String(payload.purchase_order_name ?? '').trim() || 'Ticket order'
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
+  const settings = buildPaymentSettingsFromStored(stored, c.env, c.req.url)
+  if (!settings.khalti_enabled) {
+    return c.json({ error: 'Khalti payments are currently disabled.' }, 409)
+  }
+  if (!settings.khalti_can_initiate) {
+    return c.json({ error: settings.khalti_runtime_note }, 409)
+  }
+
+  const secretKey = settings.khalti_mode === 'live' ? c.env.KHALTI_LIVE_SECRET_KEY : c.env.KHALTI_TEST_SECRET_KEY
+  const khaltiBaseUrl = settings.khalti_mode === 'live' ? 'https://khalti.com/api/v2' : 'https://dev.khalti.com/api/v2'
+  const customerName = String(payload.customer_name ?? '').trim()
+  const customerEmail = String(payload.customer_email ?? '').trim()
+  const customerPhone = String(payload.customer_phone ?? '').trim()
+
+  const requestBody = {
+    return_url: settings.khalti_return_url,
+    website_url: settings.khalti_website_url,
+    amount: Math.floor(amountPaisa),
+    purchase_order_id: purchaseOrderId,
+    purchase_order_name: purchaseOrderName,
+    customer_info: {
+      name: customerName || 'Waah Tickets Customer',
+      email: customerEmail || 'customer@example.com',
+      phone: customerPhone || '9800000001'
+    }
+  }
+
+  const response = await fetch(`${khaltiBaseUrl}/epayment/initiate/`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${secretKey ?? ''}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  })
+  const rawText = await response.text()
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {}
+  } catch {
+    parsed = {}
+  }
+
+  if (!response.ok) {
+    const message = String(parsed.detail ?? parsed.message ?? parsed.error_key ?? 'Unable to initiate Khalti payment.')
+    return c.json({ error: message }, 502)
+  }
+
+  return c.json({
+    data: {
+      pidx: String(parsed.pidx ?? ''),
+      payment_url: String(parsed.payment_url ?? ''),
+      expires_at: String(parsed.expires_at ?? ''),
+      expires_in: Number(parsed.expires_in ?? 0)
+    }
+  })
+})
+
+crudRoutes.post('/payments/khalti/lookup', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+  const pidx = String(payload.pidx ?? '').trim()
+  if (!pidx) {
+    return c.json({ error: 'pidx is required.' }, 400)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
+  const settings = buildPaymentSettingsFromStored(stored, c.env, c.req.url)
+  if (!settings.khalti_can_initiate) {
+    return c.json({ error: settings.khalti_runtime_note }, 409)
+  }
+
+  const secretKey = settings.khalti_mode === 'live' ? c.env.KHALTI_LIVE_SECRET_KEY : c.env.KHALTI_TEST_SECRET_KEY
+  const khaltiBaseUrl = settings.khalti_mode === 'live' ? 'https://khalti.com/api/v2' : 'https://dev.khalti.com/api/v2'
+  const response = await fetch(`${khaltiBaseUrl}/epayment/lookup/`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${secretKey ?? ''}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ pidx })
+  })
+  const rawText = await response.text()
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {}
+  } catch {
+    parsed = {}
+  }
+  if (!response.ok) {
+    const message = String(parsed.detail ?? parsed.message ?? parsed.error_key ?? 'Unable to lookup Khalti payment.')
+    return c.json({ error: message }, 502)
+  }
+
+  return c.json({
+    data: {
+      pidx: String(parsed.pidx ?? pidx),
+      status: String(parsed.status ?? ''),
+      total_amount: Number(parsed.total_amount ?? 0),
+      transaction_id: String(parsed.transaction_id ?? ''),
+      fee: Number(parsed.fee ?? 0),
+      refunded: Boolean(parsed.refunded)
+    }
+  })
+})
+
+crudRoutes.put('/settings/rails', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const autoplayRaw = Number(payload.autoplay_interval_seconds ?? DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS)
+  if (!Number.isFinite(autoplayRaw)) {
+    return c.json({ error: 'autoplay_interval_seconds must be a number.' }, 400)
+  }
+  const autoplayIntervalSeconds = Math.max(
+    MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+    Math.min(MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS, Math.floor(autoplayRaw))
+  )
+
+  const normalizedRails = normalizeRailsConfigPayload(payload.rails, autoplayIntervalSeconds)
+  if (!normalizedRails.ok) {
+    return c.json({ error: normalizedRails.error }, 400)
+  }
+  const filterPanelEyebrowText = normalizeEyebrowText(payload.filter_panel_eyebrow_text, DEFAULT_FILTER_PANEL_EYEBROW_TEXT)
+  const railsToPersist = normalizedRails.value
+
+  const allEventIds = Array.from(new Set(normalizedRails.value.flatMap((rail) => rail.event_ids)))
+  if (allEventIds.length > 0) {
+    const placeholders = allEventIds.map(() => '?').join(', ')
+    const rows = await db
+      .prepare(`SELECT id FROM events WHERE id IN (${placeholders})`)
+      .bind(...allEventIds)
+      .all<{ id: string }>()
+    const existing = new Set(rows.results.map((row) => row.id))
+    const missing = allEventIds.filter((eventId) => !existing.has(eventId))
+    if (missing.length > 0) {
+      return c.json(
+        {
+          error: 'One or more selected events are invalid.',
+          message: `Unknown event ids: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}`
+        },
+        409
+      )
+    }
+  }
+
+  await ensureAppSettingsTable(db)
+  const now = new Date().toISOString()
+  const values: Record<RailsSettingKey, string> = {
+    rails_autoplay_interval_seconds: String(autoplayIntervalSeconds),
+    rails_config_json: JSON.stringify(railsToPersist),
+    rails_filter_panel_eyebrow_text: filterPanelEyebrowText
+  }
+
+  for (const key of RAILS_SETTING_KEYS) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(setting_key) DO UPDATE SET
+           setting_value = excluded.setting_value,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by`
+      )
+      .bind(key, values[key], now, scope.userId)
+      .run()
+  }
+
+  return c.json({
+    data: {
+      autoplay_interval_seconds: autoplayIntervalSeconds,
+      min_interval_seconds: MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+      max_interval_seconds: MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+      filter_panel_eyebrow_text: filterPanelEyebrowText,
+      rails: railsToPersist,
+      updated_at: now
+    }
+  })
+})
+
 crudRoutes.put('/settings/r2', async (c) => {
   const db = getDatabase(c.env)
   if (!db) {
@@ -686,6 +1090,43 @@ crudRoutes.get('/files/:id/download', async (c) => {
   }
 
   return new Response(object.body, { status: 200, headers })
+})
+
+crudRoutes.post('/orders/:id/email-copy', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  const orderId = c.req.param('id')
+  const payload = await readJsonBody(c.req)
+  const email = typeof payload?.email === 'string' ? payload.email.trim().toLowerCase() : ''
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return c.json({ error: 'A valid email address is required.' }, 400)
+  }
+
+  const order = await db
+    .prepare('SELECT id, customer_id FROM orders WHERE id = ? LIMIT 1')
+    .bind(orderId)
+    .first<{ id: string; customer_id: string }>()
+
+  if (!order) {
+    return c.json({ error: 'Order not found.' }, 404)
+  }
+
+  if (scope.webrole !== 'Admin' && scope.userId !== order.customer_id) {
+    return c.json({ error: 'Forbidden for this order.' }, 403)
+  }
+
+  await enqueueOrderCopyNotification({
+    env: c.env,
+    orderId,
+    recipientEmail: email
+  })
+
+  return c.json({ ok: true })
 })
 
 crudRoutes.get('/:resource', async (c) => {
@@ -1230,7 +1671,7 @@ async function ensureAppSettingsTable(db: D1Database) {
   await db.prepare(APP_SETTINGS_TABLE_SQL).run()
 }
 
-async function getAppSettings<TKey extends readonly R2SettingKey[]>(db: D1Database, keys: TKey) {
+async function getAppSettings<TKey extends readonly string[]>(db: D1Database, keys: TKey) {
   const placeholders = keys.map(() => '?').join(', ')
   const rows = await db
     .prepare(
@@ -1239,7 +1680,7 @@ async function getAppSettings<TKey extends readonly R2SettingKey[]>(db: D1Databa
        WHERE setting_key IN (${placeholders})`
     )
     .bind(...keys)
-    .all<{ setting_key: R2SettingKey; setting_value: string }>()
+    .all<{ setting_key: string; setting_value: string }>()
 
   const values = Object.fromEntries(
     keys.map((key) => {
@@ -1249,6 +1690,201 @@ async function getAppSettings<TKey extends readonly R2SettingKey[]>(db: D1Databa
   ) as Record<TKey[number], string | null>
 
   return values
+}
+
+function parseKhaltiMode(value: unknown): KhaltiMode | null {
+  const mode = String(value ?? '').trim().toLowerCase()
+  if (mode === 'test' || mode === 'live') return mode
+  return null
+}
+
+function normalizeBoolean(value: unknown, fallback = false) {
+  if (typeof value === 'boolean') return value
+  if (value === 1 || value === '1') return true
+  if (value === 0 || value === '0') return false
+  return fallback
+}
+
+function buildPaymentSettingsFromStored(
+  stored: Record<PaymentSettingKey, string | null> | Record<PaymentSettingKey, string>,
+  env: Partial<Bindings> | undefined,
+  requestUrl: string
+): PaymentSettingsData {
+  const mode = parseKhaltiMode(stored.payments_khalti_mode) ?? 'test'
+  const runtimeMode = getRequestRuntimeMode(requestUrl)
+  const fallbackOrigin = buildPublicOrigin(new URL(requestUrl).origin)
+  const khaltiReturnUrlRaw = String(stored.payments_khalti_return_url ?? '').trim()
+  const khaltiWebsiteUrlRaw = String(stored.payments_khalti_website_url ?? '').trim()
+  const khaltiTestPublicKey = String(stored.payments_khalti_test_public_key ?? '').trim().slice(0, 200)
+  const khaltiLivePublicKey = String(stored.payments_khalti_live_public_key ?? '').trim().slice(0, 200)
+  const khaltiPublicKey = mode === 'live' ? khaltiLivePublicKey : khaltiTestPublicKey
+  const khaltiReturnUrl = khaltiReturnUrlRaw && isValidUrl(khaltiReturnUrlRaw) ? khaltiReturnUrlRaw : fallbackOrigin
+  const khaltiWebsiteUrl = khaltiWebsiteUrlRaw && isValidUrl(khaltiWebsiteUrlRaw) ? khaltiWebsiteUrlRaw : fallbackOrigin
+  const khaltiEnabled = normalizeBoolean(stored.payments_khalti_enabled, false)
+  const khaltiTestKeyConfigured = Boolean(env?.KHALTI_TEST_SECRET_KEY && env.KHALTI_TEST_SECRET_KEY.trim())
+  const khaltiLiveKeyConfigured = Boolean(env?.KHALTI_LIVE_SECRET_KEY && env.KHALTI_LIVE_SECRET_KEY.trim())
+  const activeKeyConfigured = mode === 'live' ? khaltiLiveKeyConfigured : khaltiTestKeyConfigured
+  const khaltiCanInitiate = khaltiEnabled && activeKeyConfigured
+  const runtimeNote = !khaltiEnabled
+    ? 'Khalti is disabled in settings.'
+    : !activeKeyConfigured
+      ? `Missing ${mode === 'live' ? 'KHALTI_LIVE_SECRET_KEY' : 'KHALTI_TEST_SECRET_KEY'} binding.`
+      : runtimeMode === 'local'
+        ? 'Khalti is configured in local runtime. Use sandbox mode + test key for local testing.'
+        : 'Khalti is configured and ready.'
+
+  return {
+    khalti_enabled: khaltiEnabled,
+    khalti_mode: mode,
+    khalti_return_url: khaltiReturnUrl,
+    khalti_website_url: khaltiWebsiteUrl,
+    khalti_test_public_key: khaltiTestPublicKey,
+    khalti_live_public_key: khaltiLivePublicKey,
+    khalti_public_key: khaltiPublicKey,
+    khalti_test_key_configured: khaltiTestKeyConfigured,
+    khalti_live_key_configured: khaltiLiveKeyConfigured,
+    khalti_can_initiate: khaltiCanInitiate,
+    khalti_runtime_note: runtimeNote
+  }
+}
+
+function parseRailsAutoplayIntervalSeconds(raw: string | null) {
+  const parsed = Number(raw ?? '')
+  if (!Number.isFinite(parsed)) return DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS
+  return Math.max(
+    MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+    Math.min(MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS, Math.floor(parsed))
+  )
+}
+
+function parseRailsFilterPanelEyebrowText(raw: string | null) {
+  return normalizeEyebrowText(raw, DEFAULT_FILTER_PANEL_EYEBROW_TEXT)
+}
+
+function parseRailsConfig(raw: string | null, fallbackAutoplayIntervalSeconds = DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS): RailsConfigItem[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const normalized = normalizeRailsConfigPayload(parsed, fallbackAutoplayIntervalSeconds)
+    if (!normalized.ok) return []
+    return normalized.value
+  } catch {
+    return []
+  }
+}
+
+function normalizeRailsConfigPayload(
+  value: unknown,
+  fallbackAutoplayIntervalSeconds = DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS
+): { ok: true; value: RailsConfigItem[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) {
+    return { ok: false, error: 'rails must be an array.' }
+  }
+
+  if (value.length > MAX_CONFIGURED_RAILS) {
+    return { ok: false, error: `You can configure up to ${MAX_CONFIGURED_RAILS} rails.` }
+  }
+
+  const seenRailIds = new Set<string>()
+  const normalized: RailsConfigItem[] = []
+
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index]
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, error: `Rail at position ${index + 1} is invalid.` }
+    }
+
+    const idRaw = String((item as JsonRecord).id ?? '').trim()
+    const label = String((item as JsonRecord).label ?? '').trim()
+    const id = normalizeRailId(idRaw || label)
+    if (!id) {
+      return { ok: false, error: `Rail ${index + 1} is missing an id or label.` }
+    }
+    if (!label) {
+      return { ok: false, error: `Rail ${index + 1} label is required.` }
+    }
+    if (seenRailIds.has(id)) {
+      return { ok: false, error: `Duplicate rail id "${id}" is not allowed.` }
+    }
+    seenRailIds.add(id)
+
+    const eventIdsRaw = Array.isArray((item as JsonRecord).event_ids) ? ((item as JsonRecord).event_ids as unknown[]) : []
+    const eventIds = Array.from(
+      new Set(
+        eventIdsRaw
+          .map((eventId) => String(eventId ?? '').trim())
+          .filter((eventId) => eventId.length > 0)
+      )
+    )
+    if (eventIds.length > MAX_EVENTS_PER_RAIL) {
+      return { ok: false, error: `Rail "${label}" has too many events. Max is ${MAX_EVENTS_PER_RAIL}.` }
+    }
+
+    const eyebrowText = normalizeEyebrowText((item as JsonRecord).eyebrow_text, DEFAULT_RAIL_EYEBROW_TEXT)
+    const autoplayEnabledRaw = (item as JsonRecord).autoplay_enabled
+    const autoplayEnabled =
+      typeof autoplayEnabledRaw === 'boolean'
+        ? autoplayEnabledRaw
+        : autoplayEnabledRaw === 1 || autoplayEnabledRaw === '1'
+          ? true
+          : autoplayEnabledRaw === 0 || autoplayEnabledRaw === '0'
+            ? false
+            : DEFAULT_RAIL_AUTOPLAY_ENABLED
+
+    const intervalRaw = Number((item as JsonRecord).autoplay_interval_seconds ?? fallbackAutoplayIntervalSeconds)
+    if (!Number.isFinite(intervalRaw)) {
+      return { ok: false, error: `Rail "${label}" autoplay interval must be a number.` }
+    }
+    const autoplayIntervalSeconds = Math.max(
+      MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS,
+      Math.min(MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS, Math.floor(intervalRaw))
+    )
+
+    const accentColor = normalizeHexColorValue((item as JsonRecord).accent_color) ?? DEFAULT_RAIL_ACCENT_COLOR
+    if (!accentColor) {
+      return { ok: false, error: `Rail "${label}" accent color must be a 6-digit hex color.` }
+    }
+
+    const headerDecorImageUrl = String((item as JsonRecord).header_decor_image_url ?? '').trim()
+    if (headerDecorImageUrl && !isValidUrl(headerDecorImageUrl)) {
+      return { ok: false, error: `Rail "${label}" decorative image URL must be a valid http or https URL.` }
+    }
+
+    normalized.push({
+      id,
+      label,
+      event_ids: eventIds,
+      eyebrow_text: eyebrowText,
+      autoplay_enabled: autoplayEnabled,
+      autoplay_interval_seconds: autoplayIntervalSeconds,
+      accent_color: accentColor,
+      header_decor_image_url: headerDecorImageUrl
+    })
+  }
+
+  return { ok: true, value: normalized }
+}
+
+function normalizeEyebrowText(value: unknown, fallback: string) {
+  const raw = String(value ?? '').trim()
+  return raw.slice(0, 48) || fallback
+}
+
+function normalizeHexColorValue(value: unknown) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : null
+}
+
+function normalizeRailId(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+  return normalized.slice(0, 64)
 }
 
 function pickAllowedColumns(payload: JsonRecord, columns: readonly string[]) {
@@ -2041,6 +2677,36 @@ async function authorizeCustomerCreateRecord(
 
       if (!inScope?.ok) {
         return c.json({ error: 'Forbidden for this order.' }, 403)
+      }
+
+      return null
+    }
+    case 'coupon_redemptions': {
+      const couponId = typeof record.coupon_id === 'string' ? record.coupon_id : ''
+      const orderId = typeof record.order_id === 'string' ? record.order_id : ''
+      const customerId = typeof record.customer_id === 'string' ? record.customer_id : ''
+      if (!couponId || !orderId || !customerId) {
+        return c.json({ error: 'coupon_id, order_id, and customer_id are required.' }, 400)
+      }
+      if (customerId !== scope.userId) {
+        return c.json({ error: 'coupon redemptions must belong to the authenticated user.' }, 403)
+      }
+
+      const allowed = await db
+        .prepare(
+          `SELECT 1 AS ok
+           FROM orders
+           JOIN coupons ON coupons.id = ?
+           WHERE orders.id = ?
+             AND orders.customer_id = ?
+             AND coupons.event_id = orders.event_id
+           LIMIT 1`
+        )
+        .bind(couponId, orderId, scope.userId)
+        .first<{ ok: number }>()
+
+      if (!allowed?.ok) {
+        return c.json({ error: 'Forbidden coupon for this order.' }, 403)
       }
 
       return null

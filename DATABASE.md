@@ -12,6 +12,11 @@ Runtime settings (including R2 and ticket QR URL settings) are persisted in:
 migrations/0006_app_settings.sql
 ```
 
+Rails storefront settings are also persisted in `app_settings` using:
+
+- `rails_autoplay_interval_seconds`
+- `rails_config_json`
+
 Event featuring support (`events.is_featured`) is added in:
 
 ```bash

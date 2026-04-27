@@ -12,4 +12,6 @@ export type Bindings = {
   R2_UPLOAD_BUCKET_NAME?: string
   UPSTASH_REDIS_REST_URL?: string
   UPSTASH_REDIS_REST_TOKEN?: string
+  KHALTI_TEST_SECRET_KEY?: string
+  KHALTI_LIVE_SECRET_KEY?: string
 }

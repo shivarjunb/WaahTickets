@@ -65,6 +65,7 @@ type OrderSnapshot = {
 const ORDER_SUCCESS_STATUSES = new Set(['paid', 'completed', 'confirmed'])
 const PAYMENT_SUCCESS_STATUSES = new Set(['paid', 'completed', 'verified', 'success', 'succeeded'])
 const ORDER_MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf'
+const ORDER_COPY_MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf_copy'
 const ACCOUNT_CREATED_MESSAGE_TYPE = 'account_created'
 const ACCOUNT_DELETED_MESSAGE_TYPE = 'account_deleted'
 const MAX_RETRY_ATTEMPTS = 5
@@ -159,6 +160,44 @@ export async function maybeEnqueueOrderNotification(args: {
     return
   }
 
+  await enqueueOrderNotificationForRecipient({
+    env,
+    orderId,
+    messageType: ORDER_MESSAGE_TYPE,
+    recipientEmail: null
+  })
+}
+
+export async function enqueueOrderCopyNotification(args: {
+  env: Bindings
+  orderId: string
+  recipientEmail: string
+}) {
+  await enqueueOrderNotificationForRecipient({
+    env: args.env,
+    orderId: args.orderId,
+    recipientEmail: args.recipientEmail,
+    messageType: ORDER_COPY_MESSAGE_TYPE
+  })
+}
+
+async function enqueueOrderNotificationForRecipient(args: {
+  env: Bindings
+  orderId: string
+  recipientEmail: string | null
+  messageType: string
+}) {
+  const { env } = args
+  const readiness = getNotificationDeliveryReadiness(env)
+  const emailQueue = env.EMAIL_QUEUE
+
+  if (!readiness.dbBound || !readiness.emailQueueBound || !emailQueue) {
+    console.warn('[notifications] enqueue skipped: required bindings missing', {
+      missing: readiness.missing.filter((entry) => entry === 'DB' || entry === 'EMAIL_QUEUE')
+    })
+    return
+  }
+
   const orderContext = await env.DB
     .prepare(
       `SELECT orders.order_number, users.email AS customer_email
@@ -167,11 +206,12 @@ export async function maybeEnqueueOrderNotification(args: {
        WHERE orders.id = ?
        LIMIT 1`
     )
-    .bind(orderId)
+    .bind(args.orderId)
     .first<{ order_number: string; customer_email: string | null }>()
 
-  if (!orderContext?.customer_email) {
-    console.warn('[notifications] enqueue skipped: customer email missing', { orderId, tableName })
+  const targetEmail = args.recipientEmail?.trim() || orderContext?.customer_email?.trim() || ''
+  if (!targetEmail) {
+    console.warn('[notifications] enqueue skipped: customer email missing', { orderId: args.orderId })
     return
   }
 
@@ -183,14 +223,19 @@ export async function maybeEnqueueOrderNotification(args: {
        WHERE messages.regarding_entity_type = 'order'
          AND messages.regarding_entity_id = ?
          AND messages.message_type = ?
+         AND lower(messages.recipient_email) = lower(?)
          AND notification_queue.status IN ('pending', 'processing', 'sent')
        LIMIT 1`
     )
-    .bind(orderId, ORDER_MESSAGE_TYPE)
+    .bind(args.orderId, args.messageType, targetEmail)
     .first<{ id: string }>()
 
   if (existing) {
-    console.log('[notifications] enqueue skipped: active queue entry already exists', { orderId })
+    console.log('[notifications] enqueue skipped: active queue entry already exists', {
+      orderId: args.orderId,
+      messageType: args.messageType,
+      recipientEmail: targetEmail
+    })
     return
   }
 
@@ -208,11 +253,11 @@ export async function maybeEnqueueOrderNotification(args: {
     )
     .bind(
       messageId,
-      ORDER_MESSAGE_TYPE,
-      `Order confirmation queued - ${orderContext.order_number}`,
+      args.messageType,
+      `Order confirmation queued - ${orderContext?.order_number ?? args.orderId}`,
       'Order confirmation is queued for delivery.',
-      orderContext.customer_email,
-      orderId,
+      targetEmail,
+      args.orderId,
       now,
       now
     )
@@ -232,19 +277,20 @@ export async function maybeEnqueueOrderNotification(args: {
     await emailQueue.send({
       queueEntryId,
       messageId,
-      orderId,
-      recipientEmail: orderContext.customer_email,
+      orderId: args.orderId,
+      recipientEmail: targetEmail,
       queuedAt: now
-    })
-    console.log('[notifications] enqueued order notification', {
-      orderId,
-      queueEntryId,
-      messageId,
-      recipientEmail: orderContext.customer_email
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error('[notifications] queue send failed', { orderId, queueEntryId, messageId, error: message })
+    console.error('[notifications] queue send failed', {
+      orderId: args.orderId,
+      queueEntryId,
+      messageId,
+      messageType: args.messageType,
+      recipientEmail: targetEmail,
+      error: message
+    })
     await markQueueEntryFailed(env.DB, queueEntryId, messageId, 0, message)
     throw error
   }
