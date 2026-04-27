@@ -47,6 +47,7 @@ import {
   Users,
   X
 } from 'lucide-react'
+import jsQR from 'jsqr'
 import './styles.css'
 
 const fallbackResources = [
@@ -2725,6 +2726,8 @@ function TicketValidatorApp({
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectorRef = useRef<BarcodeDetectorInstance | null>(null)
+  const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const fallbackContextRef = useRef<CanvasRenderingContext2D | null>(null)
   const isBusyRef = useRef(false)
   const initialTokenHandledRef = useRef('')
   const lastDetectedRef = useRef<{ value: string; at: number }>({ value: '', at: 0 })
@@ -2767,23 +2770,24 @@ function TicketValidatorApp({
     async function startCamera() {
       setCameraError('')
       const detectorCtor = getBarcodeDetectorConstructor()
-      if (!detectorCtor) {
-        setCameraError('Camera QR scanning is not supported in this browser. Use manual scan input below.')
-        setIsCameraActive(false)
-        return
+      let canUseNativeDetector = false
+
+      if (detectorCtor) {
+        canUseNativeDetector = true
+        if (typeof detectorCtor.getSupportedFormats === 'function') {
+          try {
+            const supported = await detectorCtor.getSupportedFormats()
+            canUseNativeDetector = supported.includes('qr_code')
+          } catch {
+            // Continue with detector creation.
+          }
+        }
       }
 
-      if (typeof detectorCtor.getSupportedFormats === 'function') {
-        try {
-          const supported = await detectorCtor.getSupportedFormats()
-          if (!supported.includes('qr_code')) {
-            setCameraError('QR code scanning is not available in this browser. Use manual scan input below.')
-            setIsCameraActive(false)
-            return
-          }
-        } catch {
-          // Continue with detector creation.
-        }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError('Unable to access camera. Check permissions and try again.')
+        setIsCameraActive(false)
+        return
       }
 
       try {
@@ -2807,26 +2811,65 @@ function TicketValidatorApp({
         return
       }
 
-      detectorRef.current = new detectorCtor({ formats: ['qr_code'] })
+      detectorRef.current = canUseNativeDetector && detectorCtor ? new detectorCtor({ formats: ['qr_code'] }) : null
       intervalId = window.setInterval(() => {
-        if (!isCameraActive || isBusyRef.current || !videoRef.current || !detectorRef.current) return
+        if (!isCameraActive || isBusyRef.current || !videoRef.current) return
         if (videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
-        void detectorRef.current
-          .detect(videoRef.current)
-          .then((codes) => {
-            const nextValue = typeof codes[0]?.rawValue === 'string' ? codes[0].rawValue.trim() : ''
-            if (!nextValue) return
-            const now = Date.now()
-            if (lastDetectedRef.current.value === nextValue && now - lastDetectedRef.current.at < 4000) {
-              return
-            }
-            lastDetectedRef.current = { value: nextValue, at: now }
-            void inspectTicketByQr(nextValue, 'camera')
-          })
-          .catch(() => {
-            // Ignore detection errors and continue scanning.
-          })
+        if (detectorRef.current) {
+          void detectorRef.current
+            .detect(videoRef.current)
+            .then((codes) => {
+              const nextValue = typeof codes[0]?.rawValue === 'string' ? codes[0].rawValue.trim() : ''
+              if (!nextValue) return
+              const now = Date.now()
+              if (lastDetectedRef.current.value === nextValue && now - lastDetectedRef.current.at < 4000) {
+                return
+              }
+              lastDetectedRef.current = { value: nextValue, at: now }
+              void inspectTicketByQr(nextValue, 'camera')
+            })
+            .catch(() => {
+              // Ignore detection errors and continue scanning.
+            })
+          return
+        }
+
+        const sourceWidth = videoRef.current.videoWidth
+        const sourceHeight = videoRef.current.videoHeight
+        if (!sourceWidth || !sourceHeight) return
+
+        const maxDimension = 960
+        const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight))
+        const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+        const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+
+        if (!fallbackCanvasRef.current) {
+          fallbackCanvasRef.current = document.createElement('canvas')
+        }
+        const canvas = fallbackCanvasRef.current
+        if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+          canvas.width = targetWidth
+          canvas.height = targetHeight
+          fallbackContextRef.current = canvas.getContext('2d', { willReadFrequently: true })
+        }
+
+        const context =
+          fallbackContextRef.current ?? canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) return
+        fallbackContextRef.current = context
+
+        context.drawImage(videoRef.current, 0, 0, targetWidth, targetHeight)
+        const imageData = context.getImageData(0, 0, targetWidth, targetHeight)
+        const code = jsQR(imageData.data, targetWidth, targetHeight, { inversionAttempts: 'attemptBoth' })
+        const nextValue = code?.data?.trim() ?? ''
+        if (!nextValue) return
+        const now = Date.now()
+        if (lastDetectedRef.current.value === nextValue && now - lastDetectedRef.current.at < 4000) {
+          return
+        }
+        lastDetectedRef.current = { value: nextValue, at: now }
+        void inspectTicketByQr(nextValue, 'camera')
       }, 850)
     }
 
@@ -2846,13 +2889,16 @@ function TicketValidatorApp({
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
     }
+    detectorRef.current = null
+    fallbackCanvasRef.current = null
+    fallbackContextRef.current = null
     if (videoRef.current) {
       videoRef.current.srcObject = null
     }
   }
 
   async function inspectTicketByQr(value: string, source: 'camera' | 'manual' | 'link') {
-    const qrCodeValue = value.trim()
+    const qrCodeValue = resolveQrCodeValueFromPayload(value)
     if (!qrCodeValue || isBusyRef.current) return
 
     setQrInput(qrCodeValue)
@@ -2880,17 +2926,21 @@ function TicketValidatorApp({
       const ticket = (result?.ticket ?? null) as ApiRecord | null
 
       if (result?.status === 'already_redeemed' && ticket) {
+        const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
         setPendingTicket(ticket)
         setPendingStatus('already_redeemed')
-        setPendingQrValue(qrCodeValue)
+        setPendingQrValue(resolvedQrCodeValue)
+        setQrInput(resolvedQrCodeValue)
         setStatusTone('warning')
         setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
       } else if (result?.status === 'unredeemed' && ticket) {
+        const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
         setPendingTicket(ticket)
         setPendingStatus('unredeemed')
-        setPendingQrValue(qrCodeValue)
+        setPendingQrValue(resolvedQrCodeValue)
+        setQrInput(resolvedQrCodeValue)
         setStatusTone('neutral')
         setStatusMessage(result.message ?? 'Ticket is valid. Confirm redemption.')
       } else {
@@ -6520,6 +6570,59 @@ function readQrValueFromToken(token: string) {
     const decoded = atob(`${normalized}${padding}`)
     const parsed = JSON.parse(decoded) as { qr_value?: unknown }
     return typeof parsed.qr_value === 'string' ? parsed.qr_value.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function resolveQrCodeValueFromPayload(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+
+  const fromUrl = readQrValueFromUrlPayload(trimmed)
+  if (fromUrl) return fromUrl
+
+  const fromToken = readQrValueFromToken(trimmed)
+  if (fromToken) return fromToken
+
+  return trimmed
+}
+
+function readQrValueFromUrlPayload(value: string) {
+  const fromAbsoluteUrl = readQrValueFromUrlSearchParams(value)
+  if (fromAbsoluteUrl) return fromAbsoluteUrl
+
+  if (value.startsWith('/') || value.startsWith('?') || value.startsWith('./')) {
+    try {
+      const localUrl = new URL(value, window.location.origin)
+      const fromLocalUrl = readQrValueFromUrlSearchParams(localUrl.toString())
+      if (fromLocalUrl) return fromLocalUrl
+    } catch {
+      // Ignore malformed local URL payload.
+    }
+  }
+
+  if (!value.includes('://') && value.includes('=')) {
+    const query = value.includes('?') ? value.slice(value.indexOf('?') + 1) : value
+    const params = new URLSearchParams(query)
+    const fromQueryToken = readQrValueFromToken(params.get('token')?.trim() ?? '')
+    if (fromQueryToken) return fromQueryToken
+    const directQrValue = params.get('qr_value')?.trim() || params.get('qr_code_value')?.trim() || ''
+    if (directQrValue) return directQrValue
+  }
+
+  return ''
+}
+
+function readQrValueFromUrlSearchParams(value: string) {
+  try {
+    const url = new URL(value)
+    const token = url.searchParams.get('token')?.trim() ?? ''
+    const fromToken = readQrValueFromToken(token)
+    if (fromToken) return fromToken
+
+    const directQrValue = url.searchParams.get('qr_value')?.trim() || url.searchParams.get('qr_code_value')?.trim() || ''
+    return directQrValue
   } catch {
     return ''
   }
