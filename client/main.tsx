@@ -3329,6 +3329,17 @@ function TicketValidatorApp({
     }
   }
 
+  function redeemAnotherTicket() {
+    if (isBusyRef.current) return
+    setQrInput('')
+    setScanResult(null)
+    setPendingTicket(null)
+    setPendingStatus(null)
+    setPendingQrValue('')
+    setStatusTone('neutral')
+    setStatusMessage('Ready to scan tickets.')
+  }
+
   const scanStateLabel = isCameraActive ? 'Camera live' : 'Camera idle'
   const lastCheckLabel =
     statusTone === 'success'
@@ -3435,15 +3446,22 @@ function TicketValidatorApp({
           </div>
 
           {scanResult ? (
-            <div className="validator-ticket-meta">
-              <p><strong>Ticket</strong> {String(scanResult.ticket_number ?? '-')}</p>
-              <p><strong>Event</strong> {String(scanResult.event_name ?? '-')}</p>
-              <p><strong>Location</strong> {String(scanResult.event_location_name ?? '-')}</p>
-              <p><strong>Type</strong> {String(scanResult.ticket_type_name ?? '-')}</p>
-              <p><strong>Customer</strong> {String(scanResult.customer_name ?? scanResult.customer_email ?? '-')}</p>
-              <p><strong>Redeemed at</strong> {String(scanResult.redeemed_at ?? '-')}</p>
-              <p><strong>Redeemed by</strong> {String(scanResult.redeemed_by_name ?? '-')}</p>
-            </div>
+            <>
+              <div className="validator-ticket-meta">
+                <p><strong>Ticket</strong> {String(scanResult.ticket_number ?? '-')}</p>
+                <p><strong>Event</strong> {String(scanResult.event_name ?? '-')}</p>
+                <p><strong>Location</strong> {String(scanResult.event_location_name ?? '-')}</p>
+                <p><strong>Type</strong> {String(scanResult.ticket_type_name ?? '-')}</p>
+                <p><strong>Customer</strong> {String(scanResult.customer_name ?? scanResult.customer_email ?? '-')}</p>
+                <p><strong>Redeemed at</strong> {String(scanResult.redeemed_at ?? '-')}</p>
+                <p><strong>Redeemed by</strong> {String(scanResult.redeemed_by_name ?? '-')}</p>
+              </div>
+              <div className="validator-actions">
+                <button className="primary-admin-button" disabled={isInspecting || isRedeeming} type="button" onClick={redeemAnotherTicket}>
+                  Redeem another ticket
+                </button>
+              </div>
+            </>
           ) : null}
         </article>
       </section>
