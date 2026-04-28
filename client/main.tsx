@@ -2743,6 +2743,15 @@ function CartCheckoutModal({
             <CreditCard size={17} />
             {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
           </button>
+          <button
+            className="esewa-pay-button"
+            disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+            type="button"
+            onClick={onPayWithKhalti}
+          >
+            <CreditCard size={17} />
+            {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
+          </button>
           <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
             {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
             {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
