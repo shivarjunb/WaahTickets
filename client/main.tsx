@@ -395,6 +395,13 @@ type KhaltiCheckoutOrderGroup = {
   extra_email?: string
 }
 
+type CheckoutSubmissionSnapshot = {
+  cartItems: CartItem[]
+  cartEventEmails: Record<string, string>
+  cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
+  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+}
+
 type OrderCustomerOption = {
   id: string
   label: string
@@ -931,6 +938,7 @@ function PublicApp({
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
+  const processedPaymentCallbackRef = useRef('')
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0],
@@ -1268,9 +1276,45 @@ function PublicApp({
     const pidx = params.get('pidx')?.trim() ?? ''
     const esewaData = params.get('data')?.trim() ?? ''
     const callbackStatus = params.get('status')?.trim() ?? ''
-    if (!pidx && !esewaData) return
+    const normalizedCallbackStatus = callbackStatus.toLowerCase()
+    const isEsewaFailureReturn =
+      !pidx &&
+      !esewaData &&
+      (params.has('esewa_failed') ||
+        normalizedCallbackStatus === 'failed' ||
+        normalizedCallbackStatus === 'failure' ||
+        normalizedCallbackStatus === 'canceled' ||
+        normalizedCallbackStatus === 'cancelled')
+    if (isEsewaFailureReturn) {
+      setPublicStatus('eSewa payment was not completed. You can return to checkout and try again.')
+      setProcessPaymentPhase('failure')
+      return
+    }
+    const esewaDraftRaw = window.localStorage.getItem(esewaCheckoutDraftStorageKey)
+    let esewaDraftForEmptyCallback = null as null | Record<string, unknown>
+    if (!pidx && !esewaData && esewaDraftRaw) {
+      try {
+        esewaDraftForEmptyCallback = JSON.parse(esewaDraftRaw) as Record<string, unknown>
+      } catch {
+        esewaDraftForEmptyCallback = null
+      }
+    }
+    const hasEsewaDraftFallback =
+      !pidx &&
+      !esewaData &&
+      typeof esewaDraftForEmptyCallback?.esewa_transaction_uuid === 'string' &&
+      typeof esewaDraftForEmptyCallback?.esewa_total_amount === 'string' &&
+      esewaDraftForEmptyCallback.esewa_transaction_uuid.trim() !== '' &&
+      esewaDraftForEmptyCallback.esewa_total_amount.trim() !== ''
+    if (!pidx && !esewaData && !hasEsewaDraftFallback) return
     const provider: 'khalti' | 'esewa' = pidx ? 'khalti' : 'esewa'
-    setPublicStatus(provider === 'khalti' ? 'Processing Khalti return...' : 'Processing eSewa return...')
+    setPublicStatus(
+      provider === 'khalti'
+        ? 'Processing Khalti return...'
+        : esewaData
+          ? 'Processing eSewa return...'
+          : 'Checking eSewa payment status...'
+    )
     setProcessPaymentPhase('processing')
     const host = window.location.hostname.toLowerCase()
     const isLocalKhaltiTestHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
@@ -1317,6 +1361,9 @@ function PublicApp({
       order_groups: KhaltiCheckoutOrderGroup[]
       pidx?: string
       mode?: 'test' | 'live'
+      esewa_transaction_uuid?: string
+      esewa_total_amount?: string
+      esewa_product_code?: string
     }
     try {
       restored = JSON.parse(draftRaw)
@@ -1338,12 +1385,16 @@ function PublicApp({
     setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
     setOrderCouponMessage(restored.orderCouponMessage ?? '')
 
-    if (provider === 'khalti' && callbackStatus.toLowerCase() === 'user canceled') {
+    if (provider === 'khalti' && normalizedCallbackStatus === 'user canceled') {
       setPublicStatus('Khalti payment was canceled.')
       setProcessPaymentPhase('failure')
       window.history.replaceState({}, '', window.location.pathname)
       return
     }
+
+    const callbackKey = `${provider}:${pidx || esewaData || `${restored.esewa_transaction_uuid ?? ''}:${restored.esewa_total_amount ?? ''}`}:${user.id}`
+    if (processedPaymentCallbackRef.current === callbackKey) return
+    processedPaymentCallbackRef.current = callbackKey
 
     setIsSubmittingOrder(true)
     void (async () => {
@@ -1379,11 +1430,23 @@ function PublicApp({
             `Checkout complete via Khalti. ${Number(completion.data?.completed_orders ?? restored.order_groups.length)} event order(s) processed.`
           )
         } else {
-          const { data } = await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data: esewaData, mode: restored.mode ?? publicPaymentSettings.esewa_mode })
-          })
+          const { data } = esewaData
+            ? await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: esewaData, mode: restored.mode ?? publicPaymentSettings.esewa_mode }),
+                timeoutMs: 20000
+              })
+            : await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  transaction_uuid: restored.esewa_transaction_uuid ?? '',
+                  total_amount: restored.esewa_total_amount ?? '',
+                  mode: restored.mode ?? publicPaymentSettings.esewa_mode
+                }),
+                timeoutMs: 20000
+              })
           const status = String(data.data.status ?? '').trim().toUpperCase()
           if (status !== 'COMPLETE') {
             setPublicStatus(`eSewa payment status: ${status || 'UNKNOWN'}. Payment was not completed.`)
@@ -1393,7 +1456,15 @@ function PublicApp({
             return
           }
           setIsSubmittingOrder(false)
-          const completed = await submitCartCheckout({ provider: 'esewa', reference: data.data.transaction_code ?? '' })
+          const completed = await submitCartCheckout(
+            { provider: 'esewa', reference: data.data.transaction_code ?? '' },
+            {
+              cartItems: restored.cartItems,
+              cartEventEmails: restored.cartEventEmails ?? {},
+              cartEventCouponDiscounts: restored.cartEventCouponDiscounts ?? {},
+              orderCouponDiscount: restored.orderCouponDiscount ?? null
+            }
+          )
           if (!completed) {
             setProcessPaymentPhase('failure')
             window.history.replaceState({}, '', window.location.pathname)
@@ -1416,6 +1487,7 @@ function PublicApp({
         }
         window.history.replaceState({}, '', window.location.pathname)
       } catch (error) {
+        processedPaymentCallbackRef.current = ''
         setPublicStatus(getErrorMessage(error))
         setProcessPaymentPhase('failure')
         setIsSubmittingOrder(false)
@@ -1429,9 +1501,30 @@ function PublicApp({
     const params = new URLSearchParams(window.location.search)
     const hasKhalti = params.has('pidx')
     const hasEsewa = params.has('data')
-    if (!hasKhalti && !hasEsewa) {
-      setPublicStatus('No payment callback was found. Start payment from checkout and return here.')
-      setProcessPaymentPhase('idle')
+    const status = params.get('status')?.trim().toLowerCase() ?? ''
+    const hasEsewaFailureReturn =
+      params.has('esewa_failed') ||
+      status === 'failed' ||
+      status === 'failure' ||
+      status === 'canceled' ||
+      status === 'cancelled'
+    let hasEsewaDraftFallback = false
+    const draftRaw = window.localStorage.getItem(esewaCheckoutDraftStorageKey)
+    if (draftRaw) {
+      try {
+        const draft = JSON.parse(draftRaw) as Record<string, unknown>
+        hasEsewaDraftFallback =
+          typeof draft.esewa_transaction_uuid === 'string' &&
+          typeof draft.esewa_total_amount === 'string' &&
+          draft.esewa_transaction_uuid.trim() !== '' &&
+          draft.esewa_total_amount.trim() !== ''
+      } catch {
+        hasEsewaDraftFallback = false
+      }
+    }
+    if (!hasKhalti && !hasEsewa && !hasEsewaFailureReturn && !hasEsewaDraftFallback) {
+      setPublicStatus('No payment callback was found. The payment was not completed. Return to checkout and try again.')
+      setProcessPaymentPhase('failure')
     }
   }, [isProcessPaymentRoute])
 
@@ -1492,15 +1585,11 @@ function PublicApp({
               <>
                 <button
                   className="primary-admin-button"
-                  disabled={
-                    isSubmittingOrder ||
-                    cartItems.length === 0 ||
-                    !(publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate)
-                  }
+                  disabled={isSubmittingOrder || cartItems.length === 0 || !publicPaymentSettings.esewa_can_initiate}
                   type="button"
-                  onClick={() => void startKhaltiCheckout()}
+                  onClick={() => void startEsewaCheckout()}
                 >
-                  {isSubmittingOrder ? 'Processing...' : 'Retry Khalti payment'}
+                  {isSubmittingOrder ? 'Processing...' : `Retry eSewa payment (${publicPaymentSettings.esewa_mode})`}
                 </button>
                 <button
                   className="secondary-button"
@@ -2208,6 +2297,15 @@ function PublicApp({
       }
 
       if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          esewaCheckoutDraftStorageKey,
+          JSON.stringify({
+            ...draft,
+            esewa_transaction_uuid: String(data.data.fields.transaction_uuid ?? ''),
+            esewa_total_amount: String(data.data.fields.total_amount ?? ''),
+            esewa_product_code: String(data.data.fields.product_code ?? '')
+          })
+        )
         const form = document.createElement('form')
         form.method = 'POST'
         form.action = data.data.form_action
@@ -2227,8 +2325,15 @@ function PublicApp({
     }
   }
 
-  async function submitCartCheckout(paymentContext?: { provider?: 'manual' | 'khalti' | 'esewa'; reference?: string }) {
-    if (cartItems.length === 0 || isSubmittingOrder) return false
+  async function submitCartCheckout(
+    paymentContext?: { provider?: 'manual' | 'khalti' | 'esewa'; reference?: string },
+    snapshot?: CheckoutSubmissionSnapshot
+  ) {
+    const submissionCartItems = snapshot?.cartItems ?? cartItems
+    const submissionCartEventEmails = snapshot?.cartEventEmails ?? cartEventEmails
+    const submissionCartEventCouponDiscounts = snapshot?.cartEventCouponDiscounts ?? cartEventCouponDiscounts
+    const submissionOrderCouponDiscount = snapshot?.orderCouponDiscount ?? orderCouponDiscount
+    if (submissionCartItems.length === 0 || (isSubmittingOrder && !snapshot)) return false
     if (!user?.id) {
       setPublicStatus('Sign in to checkout.')
       return false
@@ -2237,16 +2342,17 @@ function PublicApp({
     setIsSubmittingOrder(true)
 
     try {
-      const eventGroups = groupCartItemsByEvent(cartItems)
+      const eventGroups = groupCartItemsByEvent(submissionCartItems)
       const now = new Date().toISOString()
       let createdOrders = 0
+      const requestTimeoutMs = paymentContext?.provider ? 20000 : undefined
 
       for (const group of eventGroups) {
         const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
         const orderId = `order-${suffix}`
         const subtotal = group.items.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
-        const eventDiscount = cartEventCouponDiscounts[group.event_id]?.discount ?? 0
-        const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, orderCouponDiscount)
+        const eventDiscount = submissionCartEventCouponDiscounts[group.event_id]?.discount ?? 0
+        const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, submissionOrderCouponDiscount)
         const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
         const total = Math.max(0, subtotal - totalDiscount)
         const currency = group.items[0]?.currency ?? 'NPR'
@@ -2266,7 +2372,8 @@ function PublicApp({
             total_amount_paisa: total,
             currency,
             order_datetime: now
-          })
+          }),
+          timeoutMs: requestTimeoutMs
         })
 
         for (const item of group.items) {
@@ -2280,11 +2387,12 @@ function PublicApp({
               unit_price_paisa: item.unit_price_paisa,
               subtotal_amount_paisa: item.unit_price_paisa * item.quantity,
               total_amount_paisa: item.unit_price_paisa * item.quantity
-            })
+            }),
+            timeoutMs: requestTimeoutMs
           })
         }
 
-        const eventCoupon = cartEventCouponDiscounts[group.event_id]
+        const eventCoupon = submissionCartEventCouponDiscounts[group.event_id]
         if (eventCoupon && eventCoupon.discount > 0) {
           await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
             method: 'POST',
@@ -2295,35 +2403,38 @@ function PublicApp({
               customer_id: user.id,
               discount_amount_paisa: eventCoupon.discount,
               redeemed_at: now
-            })
+            }),
+            timeoutMs: requestTimeoutMs
           })
         }
 
         if (
-          orderCouponDiscount &&
-          orderCouponDiscount.discount > 0 &&
-          orderCouponDiscount.eventId === group.event_id &&
+          submissionOrderCouponDiscount &&
+          submissionOrderCouponDiscount.discount > 0 &&
+          submissionOrderCouponDiscount.eventId === group.event_id &&
           orderDiscountShare > 0
         ) {
           await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              coupon_id: orderCouponDiscount.couponId,
+              coupon_id: submissionOrderCouponDiscount.couponId,
               order_id: orderId,
               customer_id: user.id,
               discount_amount_paisa: orderDiscountShare,
               redeemed_at: now
-            })
+            }),
+            timeoutMs: requestTimeoutMs
           })
         }
 
-        const extraEmail = cartEventEmails[group.event_id]?.trim()
+        const extraEmail = submissionCartEventEmails[group.event_id]?.trim()
         if (extraEmail) {
           await fetchJson<ApiMutationResponse>(`/api/orders/${orderId}/email-copy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: extraEmail })
+            body: JSON.stringify({ email: extraEmail }),
+            timeoutMs: requestTimeoutMs
           })
         }
 
@@ -7483,8 +7594,32 @@ function getBarcodeDetectorConstructor() {
   return typeof candidate === 'function' ? candidate : null
 }
 
-async function fetchJson<T>(url: string, options?: RequestInit) {
-  const response = await fetch(url, options)
+type FetchJsonOptions = RequestInit & {
+  timeoutMs?: number
+}
+
+async function fetchJson<T>(url: string, options?: FetchJsonOptions) {
+  const timeoutMs = options?.timeoutMs
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options ?? {}
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  let controller: AbortController | null = null
+  if (timeoutMs && timeoutMs > 0 && !fetchOptions.signal) {
+    controller = new AbortController()
+    fetchOptions.signal = controller.signal
+    timeout = setTimeout(() => controller?.abort(), timeoutMs)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(url, fetchOptions)
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new Error('The payment request took too long. Please check your tickets or try again from checkout.')
+    }
+    throw error
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
   const contentType = response.headers.get('content-type') ?? ''
 
   if (!contentType.includes('application/json')) {

@@ -54,6 +54,28 @@ app.get('/api/status', (c) => {
 
 app.get('/health', (c) => c.json({ ok: true }))
 
+app.get('/processpayment', (c) => {
+  if (c.env.ASSETS) {
+    return c.env.ASSETS.fetch(c.req.raw)
+  }
+
+  return c.text('Payment page assets are not available in this runtime.', 503)
+})
+
+app.post('/processpayment', async (c) => {
+  const currentUrl = new URL(c.req.url)
+  const body = await c.req.parseBody()
+  const data = getFirstFormValue(body.data ?? body.Data)
+  const status = getFirstFormValue(body.status ?? body.Status)
+  const query = new URLSearchParams(currentUrl.search)
+
+  if (data) query.set('data', data)
+  if (status) query.set('status', status)
+
+  const suffix = query.toString()
+  return c.redirect(`/processpayment${suffix ? `?${suffix}` : ''}`, 303)
+})
+
 app.get('/api/public/events', async (c) => {
   if (!c.env.DB) {
     return c.json({ data: [] })
@@ -472,6 +494,11 @@ app.notFound((c) => {
 
   return c.text('Not Found', 404)
 })
+
+function getFirstFormValue(value: FormDataEntryValue | FormDataEntryValue[] | undefined) {
+  const entry = Array.isArray(value) ? value[0] : value
+  return typeof entry === 'string' ? entry.trim() : ''
+}
 
 function parseRailsAutoplayIntervalSeconds(raw: string | null) {
   const parsed = Number(raw ?? '')

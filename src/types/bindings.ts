@@ -1,4 +1,5 @@
 export type Bindings = {
+  ASSETS?: Fetcher
   DB: D1Database
   FILES_BUCKET?: R2Bucket
   EMAIL_QUEUE?: Queue

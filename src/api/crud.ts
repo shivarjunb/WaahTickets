@@ -856,6 +856,9 @@ crudRoutes.post('/payments/esewa/initiate', async (c) => {
   })
   const publicOrigin = buildPublicOrigin(new URL(c.req.url).origin)
   const callbackBase = `${publicOrigin}/processpayment`
+  const failureUrl = new URL(callbackBase)
+  failureUrl.searchParams.set('esewa_failed', '1')
+  failureUrl.searchParams.set('status', 'FAILED')
   const formAction =
     mode === 'live'
       ? 'https://epay.esewa.com.np/api/epay/main/v2/form'
@@ -874,7 +877,7 @@ crudRoutes.post('/payments/esewa/initiate', async (c) => {
         product_service_charge: '0',
         product_delivery_charge: '0',
         success_url: callbackBase,
-        failure_url: callbackBase,
+        failure_url: failureUrl.toString(),
         signed_field_names: signedFieldNames,
         signature
       }
@@ -955,7 +958,23 @@ crudRoutes.post('/payments/esewa/verify', async (c) => {
   statusUrl.searchParams.set('total_amount', totalAmountRaw)
   statusUrl.searchParams.set('transaction_uuid', transactionUuid)
 
-  const response = await fetch(statusUrl.toString(), { method: 'GET' })
+  let response: Response
+  try {
+    response = await fetchWithTimeout(statusUrl.toString(), { method: 'GET' }, 10000)
+  } catch {
+    if (callbackStatus === 'COMPLETE') {
+      return c.json({
+        data: {
+          status: 'COMPLETE',
+          transaction_uuid: transactionUuid,
+          transaction_code: String(decoded.transaction_code ?? '').trim(),
+          total_amount: totalAmountRaw,
+          verification_source: 'signed_callback'
+        }
+      })
+    }
+    return c.json({ error: 'Unable to verify eSewa payment before the request timed out.' }, 504)
+  }
   const raw = await response.text()
   let parsed: Record<string, unknown> = {}
   try {
@@ -985,6 +1004,73 @@ crudRoutes.post('/payments/esewa/verify', async (c) => {
       status: 'COMPLETE',
       transaction_uuid: transactionUuid,
       transaction_code: String(parsed.ref_id ?? decoded.transaction_code ?? '').trim(),
+      total_amount: totalAmountRaw
+    }
+  })
+})
+
+crudRoutes.post('/payments/esewa/status', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const transactionUuid = String(payload.transaction_uuid ?? '').trim()
+  const totalAmountRaw = String(payload.total_amount ?? '').trim()
+  if (!transactionUuid || !totalAmountRaw) {
+    return c.json({ error: 'transaction_uuid and total_amount are required.' }, 400)
+  }
+
+  const mode: EsewaMode = parseKhaltiMode(payload.mode) === 'live' ? 'live' : 'test'
+  const productCode =
+    mode === 'live'
+      ? String(c.env.ESEWA_LIVE_PRODUCT_CODE ?? '').trim()
+      : String(c.env.ESEWA_TEST_PRODUCT_CODE ?? '').trim() || 'EPAYTEST'
+  if (!productCode) {
+    return c.json({ error: `eSewa ${mode} product code is not configured.` }, 409)
+  }
+
+  const statusUrlBase =
+    mode === 'live'
+      ? 'https://esewa.com.np/api/epay/transaction/status/'
+      : 'https://rc.esewa.com.np/api/epay/transaction/status/'
+  const statusUrl = new URL(statusUrlBase)
+  statusUrl.searchParams.set('product_code', productCode)
+  statusUrl.searchParams.set('total_amount', totalAmountRaw)
+  statusUrl.searchParams.set('transaction_uuid', transactionUuid)
+
+  let response: Response
+  try {
+    response = await fetchWithTimeout(statusUrl.toString(), { method: 'GET' }, 10000)
+  } catch {
+    return c.json({ error: 'Unable to check eSewa payment status before the request timed out.' }, 504)
+  }
+
+  const raw = await response.text()
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+  } catch {
+    parsed = {}
+  }
+  if (!response.ok) {
+    return c.json({ error: String(parsed.error_message ?? 'Unable to check eSewa payment status.') }, 502)
+  }
+
+  return c.json({
+    data: {
+      status: String(parsed.status ?? '').trim().toUpperCase() || 'UNKNOWN',
+      transaction_uuid: transactionUuid,
+      transaction_code: String(parsed.ref_id ?? '').trim(),
       total_amount: totalAmountRaw
     }
   })
@@ -2275,6 +2361,16 @@ async function readJsonBody(req: { json: () => Promise<unknown> }) {
     return body as JsonRecord
   } catch {
     return null
+  }
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
