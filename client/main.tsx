@@ -1316,22 +1316,11 @@ function PublicApp({
           : 'Checking eSewa payment status...'
     )
     setProcessPaymentPhase('processing')
-    const host = window.location.hostname.toLowerCase()
-    const isLocalKhaltiTestHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
     if (!user?.id) {
       setPublicStatus(
         provider === 'khalti'
           ? 'Khalti return detected. Sign in with the same account to complete checkout.'
           : 'eSewa return detected. Sign in with the same account to complete checkout.'
-      )
-      setProcessPaymentPhase('failure')
-      return
-    }
-    if (!(user.webrole === 'Customers' || isLocalKhaltiTestHost)) {
-      setPublicStatus(
-        provider === 'khalti'
-          ? 'Khalti return detected, but this role cannot complete checkout in this environment.'
-          : 'eSewa return detected, but this role cannot complete checkout in this environment.'
       )
       setProcessPaymentPhase('failure')
       return
@@ -1704,6 +1693,18 @@ function PublicApp({
           </button>
         </div>
       </nav>
+
+      <button
+        aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
+        className="mobile-sticky-cart-button"
+        type="button"
+        onClick={() => setIsCartOpen(true)}
+      >
+        <ShoppingCart size={20} />
+        <span className="mobile-sticky-cart-badge" aria-hidden="true">
+          {cartItemCount}
+        </span>
+      </button>
 
       <section className="featured-shell" id="featured">
         <article className="featured-event-card" aria-label="Featured event">

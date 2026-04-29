@@ -5227,6 +5227,10 @@ body[data-theme='dark'] .cart-checkout-modern .checkout-total.grand strong {
   white-space: nowrap;
 }
 
+.mobile-sticky-cart-button {
+  display: none;
+}
+
 .events-layout {
   display: grid;
   grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
@@ -5355,6 +5359,10 @@ body[data-theme='dark'] .topbar-search input::placeholder {
 }
 
 @media (max-width: 700px) {
+  .app-shell {
+    padding-bottom: 96px;
+  }
+
   .storefront-topbar {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -5398,18 +5406,46 @@ body[data-theme='dark'] .topbar-search input::placeholder {
   }
 
   .storefront-topbar .nav-cart-button {
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
-    min-height: 40px;
-    padding: 0;
-    border-radius: 999px;
-    font-size: 0;
-    justify-content: center;
+    display: none;
   }
 
-  .storefront-topbar .nav-cart-button svg {
-    margin: 0;
+  .mobile-sticky-cart-button {
+    position: fixed;
+    right: 16px;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    z-index: 45;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 58px;
+    height: 58px;
+    border: 0;
+    border-radius: 999px;
+    color: #ffffff;
+    background: linear-gradient(145deg, #14b8a6, #0f766e);
+    box-shadow:
+      0 18px 36px rgba(15, 118, 110, 0.32),
+      0 4px 12px rgba(15, 23, 42, 0.18);
+    animation: mobile-icon-pop 240ms ease both;
+  }
+
+  .mobile-sticky-cart-badge {
+    position: absolute;
+    top: -4px;
+    right: -3px;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 0.76rem;
+    font-weight: 800;
+    line-height: 1;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
   }
 
   .mobile-inline-search {
@@ -5446,6 +5482,19 @@ body[data-theme='dark'] .topbar-search input::placeholder {
   .event-card-media {
     min-height: 176px;
     height: 176px;
+  }
+
+  body[data-theme='dark'] .mobile-sticky-cart-button {
+    color: #04111d;
+    background: linear-gradient(145deg, #34d399, #14b8a6);
+    box-shadow:
+      0 18px 38px rgba(20, 184, 166, 0.28),
+      0 4px 12px rgba(2, 6, 23, 0.28);
+  }
+
+  body[data-theme='dark'] .mobile-sticky-cart-badge {
+    background: #082032;
+    color: #e2f7f3;
   }
 }
 
