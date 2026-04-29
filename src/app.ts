@@ -7,12 +7,32 @@ import { sanitizeServerError } from './utils/errors.js'
 
 const PUBLIC_EVENTS_CACHE_TTL_SECONDS = 60
 const PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS = 60
+const CART_HOLD_MINUTES = 15
 const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
   setting_key TEXT PRIMARY KEY,
   setting_value TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   updated_by TEXT
 )`
+const CART_HOLDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cart_holds (
+  id TEXT PRIMARY KEY,
+  hold_token TEXT NOT NULL,
+  ticket_type_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  event_location_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (ticket_type_id) REFERENCES ticket_types(id),
+  FOREIGN KEY (event_id) REFERENCES events(id),
+  FOREIGN KEY (event_location_id) REFERENCES event_locations(id)
+)`
+const CART_HOLDS_INDEX_SQL = [
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_cart_holds_token_ticket_type ON cart_holds(hold_token, ticket_type_id)',
+  'CREATE INDEX IF NOT EXISTS idx_cart_holds_ticket_type_expires ON cart_holds(ticket_type_id, expires_at)',
+  'CREATE INDEX IF NOT EXISTS idx_cart_holds_hold_token ON cart_holds(hold_token)'
+]
 const DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS = 9
 const MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS = 3
 const MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS = 30
@@ -184,20 +204,29 @@ app.get('/api/public/events/:id/ticket-types', async (c) => {
     return c.json({ data: [] })
   }
 
-  const cache = createCache(c.env)
   const eventId = c.req.param('id')
-  const ticketTypesVersion = await cache.getResourceVersion('ticket_types')
-  const cacheKey = `cache:public:event:${eventId}:ticket-types:v${ticketTypesVersion}`
-  const cached = await cache.getJson<{ data: unknown[] }>(cacheKey)
-  if (cached) {
-    c.header('X-Cache', 'HIT')
-    return c.json(cached)
-  }
+  await ensureCartHoldsTable(c.env.DB)
+  await pruneExpiredCartHolds(c.env.DB)
 
   const ticketTypes = await c.env.DB.prepare(
-    `SELECT *
+    `SELECT
+      ticket_types.*,
+      COALESCE(active_holds.quantity_held, 0) AS quantity_held,
+      CASE
+        WHEN ticket_types.quantity_available IS NULL THEN NULL
+        ELSE MAX(
+          0,
+          ticket_types.quantity_available - ticket_types.quantity_sold - COALESCE(active_holds.quantity_held, 0)
+        )
+      END AS quantity_remaining
     FROM ticket_types
-    WHERE event_id = ?
+    LEFT JOIN (
+      SELECT ticket_type_id, SUM(quantity) AS quantity_held
+      FROM cart_holds
+      WHERE expires_at > ?
+      GROUP BY ticket_type_id
+    ) active_holds ON active_holds.ticket_type_id = ticket_types.id
+    WHERE ticket_types.event_id = ?
       AND is_active = 1
       AND EXISTS (
         SELECT 1
@@ -207,14 +236,147 @@ app.get('/api/public/events/:id/ticket-types', async (c) => {
       )
     ORDER BY price_paisa ASC`
   )
-    .bind(eventId)
+    .bind(new Date().toISOString(), eventId)
     .all()
 
   const payload = { data: ticketTypes.results }
-  await cache.setJson(cacheKey, payload, PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS)
-  c.header('X-Cache', 'MISS')
+  c.header('X-Cache', 'BYPASS')
 
   return c.json(payload)
+})
+
+app.post('/api/public/cart-holds', async (c) => {
+  if (!c.env.DB) {
+    return c.json({ error: 'Ticket holds are unavailable right now.' }, 503)
+  }
+
+  const payload = await readPublicJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const rawToken = String(payload.hold_token ?? '').trim()
+  const holdToken = rawToken && /^[a-zA-Z0-9._:-]{16,160}$/.test(rawToken) ? rawToken : crypto.randomUUID()
+  const rawItems = Array.isArray(payload.items) ? payload.items : []
+  const requestedByTicketType = new Map<string, number>()
+  for (const rawItem of rawItems) {
+    if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue
+    const item = rawItem as Record<string, unknown>
+    const ticketTypeId = String(item.ticket_type_id ?? '').trim()
+    const quantity = Math.floor(Number(item.quantity ?? 0))
+    if (!ticketTypeId || !Number.isFinite(quantity) || quantity <= 0) continue
+    requestedByTicketType.set(ticketTypeId, Math.min(99, (requestedByTicketType.get(ticketTypeId) ?? 0) + quantity))
+  }
+
+  await ensureCartHoldsTable(c.env.DB)
+  await pruneExpiredCartHolds(c.env.DB)
+
+  const now = new Date()
+  const nowIso = now.toISOString()
+  const expiresAt = new Date(now.getTime() + CART_HOLD_MINUTES * 60 * 1000).toISOString()
+
+  if (requestedByTicketType.size === 0) {
+    await c.env.DB.prepare('DELETE FROM cart_holds WHERE hold_token = ?').bind(holdToken).run()
+    return c.json({ data: { hold_token: holdToken, expires_at: expiresAt, items: [] } })
+  }
+
+  const heldItems: Array<Record<string, unknown>> = []
+  for (const [ticketTypeId, quantity] of requestedByTicketType.entries()) {
+    const ticketType = await c.env.DB
+      .prepare(
+        `SELECT
+          ticket_types.id,
+          ticket_types.event_id,
+          ticket_types.event_location_id,
+          ticket_types.quantity_available,
+          ticket_types.quantity_sold,
+          COALESCE(other_holds.quantity_held, 0) AS other_quantity_held
+        FROM ticket_types
+        LEFT JOIN (
+          SELECT ticket_type_id, SUM(quantity) AS quantity_held
+          FROM cart_holds
+          WHERE expires_at > ?
+            AND hold_token <> ?
+          GROUP BY ticket_type_id
+        ) other_holds ON other_holds.ticket_type_id = ticket_types.id
+        WHERE ticket_types.id = ?
+          AND ticket_types.is_active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = ticket_types.event_id
+              AND events.status = 'published'
+          )
+        LIMIT 1`
+      )
+      .bind(nowIso, holdToken, ticketTypeId)
+      .first<{
+        id: string
+        event_id: string
+        event_location_id: string
+        quantity_available: number | null
+        quantity_sold: number | null
+        other_quantity_held: number | null
+      }>()
+
+    if (!ticketType) {
+      return c.json({ error: 'One or more ticket types are no longer available.' }, 409)
+    }
+
+    const available =
+      ticketType.quantity_available === null || ticketType.quantity_available === undefined
+        ? quantity
+        : Math.max(
+            0,
+            Number(ticketType.quantity_available ?? 0) -
+              Number(ticketType.quantity_sold ?? 0) -
+              Number(ticketType.other_quantity_held ?? 0)
+          )
+    if (ticketType.quantity_available !== null && ticketType.quantity_available !== undefined && quantity > available) {
+      return c.json({ error: `Only ${available} ticket(s) are available for this selection.` }, 409)
+    }
+
+    heldItems.push({
+      ticket_type_id: ticketType.id,
+      event_id: ticketType.event_id,
+      event_location_id: ticketType.event_location_id,
+      quantity
+    })
+  }
+
+  const requestedIds = [...requestedByTicketType.keys()]
+  const placeholders = requestedIds.map(() => '?').join(', ')
+  await c.env.DB
+    .prepare(`DELETE FROM cart_holds WHERE hold_token = ? AND ticket_type_id NOT IN (${placeholders})`)
+    .bind(holdToken, ...requestedIds)
+    .run()
+
+  for (const item of heldItems) {
+    await c.env.DB
+      .prepare(
+        `INSERT INTO cart_holds (
+          id, hold_token, ticket_type_id, event_id, event_location_id, quantity, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hold_token, ticket_type_id) DO UPDATE SET
+          quantity = excluded.quantity,
+          expires_at = excluded.expires_at,
+          updated_at = excluded.updated_at`
+      )
+      .bind(
+        crypto.randomUUID(),
+        holdToken,
+        item.ticket_type_id,
+        item.event_id,
+        item.event_location_id,
+        item.quantity,
+        expiresAt,
+        nowIso,
+        nowIso
+      )
+      .run()
+  }
+
+  return c.json({ data: { hold_token: holdToken, expires_at: expiresAt, items: heldItems } })
 })
 
 app.get('/api/public/rails/settings', async (c) => {
@@ -498,6 +660,30 @@ app.notFound((c) => {
 function getFirstFormValue(value: FormDataEntryValue | FormDataEntryValue[] | undefined) {
   const entry = Array.isArray(value) ? value[0] : value
   return typeof entry === 'string' ? entry.trim() : ''
+}
+
+async function ensureCartHoldsTable(db: D1Database) {
+  await db.prepare(CART_HOLDS_TABLE_SQL).run()
+  for (const statement of CART_HOLDS_INDEX_SQL) {
+    await db.prepare(statement).run()
+  }
+}
+
+async function pruneExpiredCartHolds(db: D1Database) {
+  await db.prepare('DELETE FROM cart_holds WHERE expires_at <= ?').bind(new Date().toISOString()).run()
+}
+
+async function readPublicJsonBody(req: { json: () => Promise<unknown> }) {
+  try {
+    const body = await req.json()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return null
+    }
+
+    return body as Record<string, unknown>
+  } catch {
+    return null
+  }
 }
 
 function parseRailsAutoplayIntervalSeconds(raw: string | null) {

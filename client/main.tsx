@@ -356,6 +356,8 @@ type TicketType = ApiRecord & {
   currency?: string
   quantity_available?: number
   quantity_sold?: number
+  quantity_held?: number
+  quantity_remaining?: number | null
   max_per_order?: number
 }
 
@@ -666,6 +668,9 @@ const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
 const adminSidebarCollapsedStorageKey = 'waah_admin_sidebar_collapsed'
 const khaltiCheckoutDraftStorageKey = 'waah_khalti_checkout_draft'
 const esewaCheckoutDraftStorageKey = 'waah_esewa_checkout_draft'
+const cartStorageKey = 'waah_cart_items'
+const cartHoldStorageKey = 'waah_cart_hold'
+const cartHoldDurationMs = 15 * 60 * 1000
 const emptyColumnFilterState: Record<string, string> = {}
 const defaultMonthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
 const defaultAdminDashboardMetrics: AdminDashboardMetrics = {
@@ -935,6 +940,8 @@ function PublicApp({
   const [orderCouponCode, setOrderCouponCode] = useState('')
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
   const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
+  const [cartHoldToken, setCartHoldToken] = useState('')
+  const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
@@ -1039,7 +1046,9 @@ function PublicApp({
   )
   const cartGroups = useMemo(() => groupCartItemsByEvent(cartItems), [cartItems])
   const remainingTickets =
-    selectedTicketType?.quantity_available === undefined
+    selectedTicketType?.quantity_remaining !== undefined && selectedTicketType?.quantity_remaining !== null
+      ? Math.max(Number(selectedTicketType.quantity_remaining ?? 0), 0)
+      : selectedTicketType?.quantity_available === undefined
       ? null
       : Math.max(
           Number(selectedTicketType.quantity_available ?? 0) -
@@ -1059,6 +1068,68 @@ function PublicApp({
   const [verifiedTicketStatus, setVerifiedTicketStatus] = useState<'already_redeemed' | 'unredeemed' | 'not_found' | null>(null)
   const [verifiedTicketMessage, setVerifiedTicketMessage] = useState('')
   const verifyHandledTokenRef = useRef<string>('')
+  const isCartStorageReadyRef = useRef(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const holdRaw = window.localStorage.getItem(cartHoldStorageKey)
+      const hold = holdRaw ? (JSON.parse(holdRaw) as Record<string, unknown>) : null
+      const expiresAt = typeof hold?.expires_at === 'string' ? hold.expires_at : ''
+      const isActiveHold = expiresAt && new Date(expiresAt).getTime() > Date.now()
+      if (isActiveHold) {
+        const cartRaw = window.localStorage.getItem(cartStorageKey)
+        const cart = cartRaw ? (JSON.parse(cartRaw) as Record<string, unknown>) : null
+        const storedItems = Array.isArray(cart?.items) ? (cart.items as CartItem[]) : []
+        setCartItems(storedItems.filter(isCartItemLike))
+        setCartHoldToken(typeof hold?.hold_token === 'string' ? hold.hold_token : '')
+        setCartHoldExpiresAt(expiresAt)
+      } else {
+        window.localStorage.removeItem(cartStorageKey)
+        window.localStorage.removeItem(cartHoldStorageKey)
+      }
+    } catch {
+      window.localStorage.removeItem(cartStorageKey)
+      window.localStorage.removeItem(cartHoldStorageKey)
+    } finally {
+      isCartStorageReadyRef.current = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isCartStorageReadyRef.current) return
+    if (cartItems.length === 0) {
+      window.localStorage.removeItem(cartStorageKey)
+      return
+    }
+    window.localStorage.setItem(cartStorageKey, JSON.stringify({ items: cartItems }))
+  }, [cartItems])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isCartStorageReadyRef.current) return
+    if (!cartHoldToken || !cartHoldExpiresAt) {
+      window.localStorage.removeItem(cartHoldStorageKey)
+      return
+    }
+    window.localStorage.setItem(
+      cartHoldStorageKey,
+      JSON.stringify({ hold_token: cartHoldToken, expires_at: cartHoldExpiresAt })
+    )
+  }, [cartHoldToken, cartHoldExpiresAt])
+
+  useEffect(() => {
+    if (!cartHoldExpiresAt) return
+    const expiresIn = new Date(cartHoldExpiresAt).getTime() - Date.now()
+    if (expiresIn <= 0) {
+      clearExpiredCartHold()
+      return
+    }
+    const timer = window.setTimeout(() => {
+      clearExpiredCartHold()
+      setPublicStatus('Your 15-minute ticket hold expired. Add tickets to your cart again to reserve them.')
+    }, expiresIn)
+    return () => window.clearTimeout(timer)
+  }, [cartHoldExpiresAt])
 
   useEffect(() => {
     const eventIds = new Set(cartGroups.map((group) => group.event_id))
@@ -2001,7 +2072,7 @@ function PublicApp({
           onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
           onClose={() => setIsCheckoutOpen(false)}
           onReserve={() => {
-            addCurrentSelectionToCart()
+            void addCurrentSelectionToCart()
             setIsCheckoutOpen(false)
             setIsCartOpen(true)
           }}
@@ -2011,6 +2082,7 @@ function PublicApp({
       {isCartOpen ? (
         <CartModal
           cartGroups={cartGroups}
+          holdExpiresAt={cartHoldExpiresAt}
           totalPaisa={cartSubtotalPaisa}
           onClose={() => setIsCartOpen(false)}
           onCheckout={() => {
@@ -2086,7 +2158,7 @@ function PublicApp({
     </main>
   )
 
-  function addCurrentSelectionToCart() {
+  async function addCurrentSelectionToCart() {
     if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
@@ -2095,45 +2167,111 @@ function PublicApp({
 
     const unitPrice = selectedTicketType.price_paisa ?? 0
     const key = `${selectedEvent.id}::${selectedTicketType.id}`
-    setCartItems((current) => {
-      const existing = current.find((item) => item.id === key)
-      if (existing) {
-        return current.map((item) =>
-          item.id === key ? { ...item, quantity: Math.min(item.quantity + quantity, 99) } : item
-        )
-      }
-
-      return [
-        ...current,
-        {
-          id: key,
-          event_id: selectedEvent.id,
-          event_name: String(selectedEvent.name ?? 'Event'),
-          event_location_id: String(selectedEvent.location_id),
-          event_location_name: String(selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'),
-          ticket_type_id: selectedTicketType.id,
-          ticket_type_name: String(selectedTicketType.name ?? 'Ticket'),
-          quantity: Math.max(1, quantity),
-          unit_price_paisa: unitPrice,
-          currency: String(selectedTicketType.currency ?? 'NPR')
-        }
-      ]
+    const nextItems = upsertCartItem(cartItems, {
+      id: key,
+      event_id: selectedEvent.id,
+      event_name: String(selectedEvent.name ?? 'Event'),
+      event_location_id: String(selectedEvent.location_id),
+      event_location_name: String(selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'),
+      ticket_type_id: selectedTicketType.id,
+      ticket_type_name: String(selectedTicketType.name ?? 'Ticket'),
+      quantity: Math.max(1, quantity),
+      unit_price_paisa: unitPrice,
+      currency: String(selectedTicketType.currency ?? 'NPR')
     })
-    setPublicStatus(`${quantity} ticket(s) added to cart.`)
+    const reserved = await syncCartHold(nextItems)
+    if (!reserved) return
+    setCartItems(nextItems)
+    setPublicStatus(`${quantity} ticket(s) added to cart and held for 15 minutes.`)
   }
 
-  function updateCartItemQuantity(itemId: string, nextQuantity: number) {
+  function upsertCartItem(current: CartItem[], nextItem: CartItem) {
+    const existing = current.find((item) => item.id === nextItem.id)
+    if (existing) {
+      return current.map((item) =>
+        item.id === nextItem.id ? { ...item, quantity: Math.min(item.quantity + nextItem.quantity, 99) } : item
+      )
+    }
+
+    return [...current, nextItem]
+  }
+
+  async function updateCartItemQuantity(itemId: string, nextQuantity: number) {
     if (nextQuantity <= 0) {
-      removeCartItem(itemId)
+      await removeCartItem(itemId)
       return
     }
-    setCartItems((current) =>
-      current.map((item) => (item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item))
+    const nextItems = cartItems.map((item) =>
+      item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item
     )
+    const reserved = await syncCartHold(nextItems)
+    if (!reserved) return
+    setCartItems(nextItems)
   }
 
-  function removeCartItem(itemId: string) {
-    setCartItems((current) => current.filter((item) => item.id !== itemId))
+  async function removeCartItem(itemId: string) {
+    const nextItems = cartItems.filter((item) => item.id !== itemId)
+    const reserved = await syncCartHold(nextItems)
+    if (!reserved) return
+    setCartItems(nextItems)
+  }
+
+  function clearExpiredCartHold() {
+    setCartItems([])
+    setCartHoldToken('')
+    setCartHoldExpiresAt('')
+    setCartEventCoupons({})
+    setCartEventCouponMessages({})
+    setCartEventCouponDiscounts({})
+    setCartEventEmails({})
+    setOrderCouponCode('')
+    setOrderCouponDiscount(null)
+    setOrderCouponMessage('')
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(cartStorageKey)
+      window.localStorage.removeItem(cartHoldStorageKey)
+    }
+  }
+
+  async function syncCartHold(nextItems: CartItem[]) {
+    try {
+      const storedToken = getStoredCartHoldToken()
+      const holdToken = cartHoldToken || storedToken || crypto.randomUUID()
+      const { data } = await fetchJson<{
+        data: { hold_token: string; expires_at: string; items: Array<{ ticket_type_id: string; quantity: number }> }
+      }>('/api/public/cart-holds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hold_token: holdToken,
+          items: nextItems.map((item) => ({
+            ticket_type_id: item.ticket_type_id,
+            quantity: item.quantity
+          }))
+        }),
+        timeoutMs: 10000
+      })
+      setCartHoldToken(data.data.hold_token)
+      setCartHoldExpiresAt(nextItems.length > 0 ? data.data.expires_at : '')
+      if (nextItems.length === 0 && typeof window !== 'undefined') {
+        window.localStorage.removeItem(cartHoldStorageKey)
+      }
+      return true
+    } catch (error) {
+      setPublicStatus(getErrorMessage(error))
+      return false
+    }
+  }
+
+  function getStoredCartHoldToken() {
+    if (typeof window === 'undefined') return ''
+    try {
+      const raw = window.localStorage.getItem(cartHoldStorageKey)
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+      return typeof parsed?.hold_token === 'string' ? parsed.hold_token : ''
+    } catch {
+      return ''
+    }
   }
 
   function buildKhaltiCheckoutOrderGroups() {
@@ -2458,6 +2596,7 @@ function PublicApp({
       if (paymentContext?.provider === 'esewa' && typeof window !== 'undefined') {
         window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
       }
+      void syncCartHold([])
       return true
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
@@ -2743,6 +2882,7 @@ function CheckoutModal({
 
 function CartModal({
   cartGroups,
+  holdExpiresAt,
   totalPaisa,
   onClose,
   onCheckout,
@@ -2750,6 +2890,7 @@ function CartModal({
   onRemoveItem
 }: {
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
+  holdExpiresAt: string
   totalPaisa: number
   onClose: () => void
   onCheckout: () => void
@@ -2757,6 +2898,15 @@ function CartModal({
   onRemoveItem: (itemId: string) => void
 }) {
   const isEmpty = cartGroups.length === 0
+  const [now, setNow] = useState(() => Date.now())
+  const holdRemainingMs = holdExpiresAt ? Math.max(0, new Date(holdExpiresAt).getTime() - now) : 0
+  const holdCountdown = formatCountdown(holdRemainingMs)
+
+  useEffect(() => {
+    if (!holdExpiresAt || isEmpty) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [holdExpiresAt, isEmpty])
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -2803,6 +2953,12 @@ function CartModal({
             <div className="cart-summary-card">
               <p className="cart-summary-label">Subtotal</p>
               <p className="cart-summary-amount">{formatMoney(totalPaisa)}</p>
+              {!isEmpty ? (
+                <div className={`cart-hold-countdown ${holdRemainingMs <= 60000 ? 'is-urgent' : ''}`} aria-live="polite">
+                  <span>Hold expires in</span>
+                  <strong>{holdCountdown}</strong>
+                </div>
+              ) : null}
               <p className="checkout-hint">Coupons and discounts are applied on checkout.</p>
             </div>
             <button type="button" onClick={onClose}>Close</button>
@@ -7234,6 +7390,25 @@ function groupCartItemsByEvent(items: CartItem[]) {
   return [...grouped.values()]
 }
 
+function isCartItemLike(value: unknown): value is CartItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Partial<CartItem>
+  return (
+    typeof item.id === 'string' &&
+    typeof item.event_id === 'string' &&
+    typeof item.event_name === 'string' &&
+    typeof item.event_location_id === 'string' &&
+    typeof item.event_location_name === 'string' &&
+    typeof item.ticket_type_id === 'string' &&
+    typeof item.ticket_type_name === 'string' &&
+    typeof item.quantity === 'number' &&
+    typeof item.unit_price_paisa === 'number' &&
+    typeof item.currency === 'string' &&
+    Number.isFinite(item.quantity) &&
+    Number.isFinite(item.unit_price_paisa)
+  )
+}
+
 function allocateOrderDiscountShare(
   eventId: string,
   groups: Array<{ event_id: string; items: CartItem[] }>,
@@ -7587,6 +7762,13 @@ function formatMoney(paisa: number) {
     currency: 'NPR',
     maximumFractionDigits: 0
   }).format(paisa / 100)
+}
+
+function formatCountdown(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
 function getBarcodeDetectorConstructor() {
