@@ -12,7 +12,7 @@ type OrderEmailQueueMessage = {
   queuedAt: string
 }
 
-type AccountNotificationType = 'account_created' | 'account_deleted'
+type AccountNotificationType = 'account_created' | 'account_deleted' | 'guest_credentials'
 
 type AccountEmailQueueMessage = {
   notificationType: AccountNotificationType
@@ -22,6 +22,8 @@ type AccountEmailQueueMessage = {
   recipientEmail: string
   recipientName: string
   verifyUrl?: string
+  loginEmail?: string
+  temporaryPassword?: string
   queuedAt: string
 }
 
@@ -68,6 +70,7 @@ const ORDER_MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf'
 const ORDER_COPY_MESSAGE_TYPE = 'order_confirmation_receipt_ticket_pdf_copy'
 const ACCOUNT_CREATED_MESSAGE_TYPE = 'account_created'
 const ACCOUNT_DELETED_MESSAGE_TYPE = 'account_deleted'
+const GUEST_CREDENTIALS_MESSAGE_TYPE = 'guest_credentials'
 const MAX_RETRY_ATTEMPTS = 5
 const EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 const TICKET_FILE_TYPE = 'ticket_pdf'
@@ -200,16 +203,23 @@ async function enqueueOrderNotificationForRecipient(args: {
 
   const orderContext = await env.DB
     .prepare(
-      `SELECT orders.order_number, users.email AS customer_email
+      `SELECT orders.order_number,
+              users.email AS customer_email,
+              customers.email AS customer_contact_email
        FROM orders
        JOIN users ON users.id = orders.customer_id
+       LEFT JOIN customers ON customers.user_id = users.id
        WHERE orders.id = ?
        LIMIT 1`
     )
     .bind(args.orderId)
-    .first<{ order_number: string; customer_email: string | null }>()
+    .first<{ order_number: string; customer_email: string | null; customer_contact_email: string | null }>()
 
-  const targetEmail = args.recipientEmail?.trim() || orderContext?.customer_email?.trim() || ''
+  const targetEmail =
+    args.recipientEmail?.trim() ||
+    orderContext?.customer_contact_email?.trim() ||
+    orderContext?.customer_email?.trim() ||
+    ''
   if (!targetEmail) {
     console.warn('[notifications] enqueue skipped: customer email missing', { orderId: args.orderId })
     return
@@ -364,6 +374,28 @@ export async function enqueueAccountDeletedNotification(args: {
   })
 }
 
+export async function enqueueGuestCredentialsNotification(args: {
+  env: Bindings
+  userId: string
+  recipientEmail: string
+  recipientName: string
+  loginEmail: string
+  temporaryPassword: string
+}) {
+  await enqueueAccountNotification({
+    env: args.env,
+    userId: args.userId,
+    recipientEmail: args.recipientEmail,
+    recipientName: args.recipientName,
+    notificationType: 'guest_credentials',
+    messageType: GUEST_CREDENTIALS_MESSAGE_TYPE,
+    queuedSubject: `Guest checkout login details - ${args.recipientEmail}`,
+    queuedContent: 'Guest checkout login details are queued for delivery.',
+    loginEmail: args.loginEmail,
+    temporaryPassword: args.temporaryPassword
+  })
+}
+
 async function enqueueAccountNotification(args: {
   env: Bindings
   userId: string
@@ -374,6 +406,8 @@ async function enqueueAccountNotification(args: {
   messageType: string
   queuedSubject: string
   queuedContent: string
+  loginEmail?: string
+  temporaryPassword?: string
 }) {
   const { env } = args
   if (!args.recipientEmail.trim()) {
@@ -455,6 +489,8 @@ async function enqueueAccountNotification(args: {
       recipientEmail: args.recipientEmail,
       recipientName: args.recipientName,
       verifyUrl: args.verifyUrl,
+      loginEmail: args.loginEmail,
+      temporaryPassword: args.temporaryPassword,
       queuedAt: now
     }
     await emailQueue.send(payload)
@@ -575,7 +611,9 @@ async function processAccountQueueMessage(
       payload.notificationType,
       payload.recipientName,
       payload.recipientEmail,
-      payload.verifyUrl
+      payload.verifyUrl,
+      payload.loginEmail,
+      payload.temporaryPassword
     )
     const providerResult = await sendAccountEmail({
       env,
@@ -817,7 +855,7 @@ async function loadOrderSnapshot(db: D1Database, orderId: string): Promise<Order
         orders.total_amount_paisa,
         orders.currency,
         orders.order_datetime,
-        users.email AS customer_email,
+        COALESCE(customers.email, users.email) AS customer_email,
         users.first_name,
         users.last_name,
         events.name AS event_name,
@@ -826,6 +864,7 @@ async function loadOrderSnapshot(db: D1Database, orderId: string): Promise<Order
         event_locations.address AS location_address
       FROM orders
       JOIN users ON users.id = orders.customer_id
+      LEFT JOIN customers ON customers.user_id = users.id
       JOIN events ON events.id = orders.event_id
       JOIN event_locations ON event_locations.id = orders.event_location_id
       WHERE orders.id = ?
@@ -991,7 +1030,9 @@ function buildAccountEmail(
   notificationType: AccountNotificationType,
   recipientName: string,
   recipientEmail: string,
-  verifyUrl?: string
+  verifyUrl?: string,
+  loginEmail?: string,
+  temporaryPassword?: string
 ) {
   if (notificationType === 'account_deleted') {
     const subject = 'Your WaahTickets account has been deleted'
@@ -1008,6 +1049,40 @@ function buildAccountEmail(
       + `<p>This is a confirmation that your WaahTickets account has been deleted.</p>`
       + `<p><strong>Account email:</strong> ${escapeHtml(recipientEmail)}</p>`
       + `<p>If you did not request this action, contact support immediately.</p>`
+      + `</div>`
+
+    return { subject, text, html }
+  }
+
+  if (notificationType === 'guest_credentials') {
+    const guestLoginEmail = loginEmail?.trim()
+    const guestPassword = temporaryPassword?.trim()
+    if (!guestLoginEmail || !guestPassword) {
+      throw new Error('Guest credentials email is missing login details.')
+    }
+
+    const subject = 'Your WaahTickets guest checkout login details'
+    const text = [
+      `Hi ${recipientName},`,
+      '',
+      'There is already a WaahTickets account linked to the email you entered, so we created a separate guest checkout account for this purchase.',
+      '',
+      `Guest login email: ${guestLoginEmail}`,
+      `Temporary password: ${guestPassword}`,
+      '',
+      `Contact email for this order: ${recipientEmail}`,
+      '',
+      'You can use these guest credentials later if you want to sign in and review this guest purchase.',
+      'For security, please change the password after your first login.'
+    ].join('\n')
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111">`
+      + `<p>Hi ${escapeHtml(recipientName)},</p>`
+      + `<p>There is already a WaahTickets account linked to the email you entered, so we created a separate guest checkout account for this purchase.</p>`
+      + `<p><strong>Guest login email:</strong> ${escapeHtml(guestLoginEmail)}<br/>`
+      + `<strong>Temporary password:</strong> ${escapeHtml(guestPassword)}</p>`
+      + `<p><strong>Contact email for this order:</strong> ${escapeHtml(recipientEmail)}</p>`
+      + `<p>You can use these guest credentials later if you want to sign in and review this guest purchase.</p>`
+      + `<p>For security, please change the password after your first login.</p>`
       + `</div>`
 
     return { subject, text, html }

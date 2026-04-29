@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { authRoutes } from './api/auth.js'
-import { crudRoutes } from './api/crud.js'
+import { crudRoutes, storefrontRoutes } from './api/crud.js'
 import { createCache } from './cache/upstash.js'
 import type { Bindings } from './types/bindings.js'
 import { sanitizeServerError } from './utils/errors.js'
@@ -641,6 +641,7 @@ app.get('/api/cache/status', async (c) => {
 })
 
 app.route('/api/auth', authRoutes)
+app.route('/api/storefront', storefrontRoutes)
 app.route('/api', crudRoutes)
 
 app.notFound((c) => {

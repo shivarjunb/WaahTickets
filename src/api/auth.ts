@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { createGuestCheckoutSession, ensureGuestCheckoutSessionsTable } from '../auth/guest-checkout.js'
 import { hashPassword, hashToken, verifyPassword } from '../auth/password.js'
-import { enqueueAccountCreatedNotification } from '../notifications/service.js'
+import { enqueueAccountCreatedNotification, enqueueGuestCredentialsNotification } from '../notifications/service.js'
 import type { Bindings } from '../types/bindings.js'
 import { sanitizeServerError } from '../utils/errors.js'
 
@@ -50,52 +51,82 @@ authRoutes.post('/register', async (c) => {
       return c.json({ error: 'Email and password are required.' }, 400)
     }
 
-    const userId = crypto.randomUUID()
     const now = new Date().toISOString()
     const webrole = 'Customers'
     const passwordHash = await hashPassword(body.password)
-
-    await c.env.DB.prepare(
-      `INSERT INTO users (
-        id, first_name, last_name, email, phone_number, password_hash, webrole,
-        is_email_verified, auth_provider, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'password', ?, ?)`
+    const normalizedEmail = body.email.toLowerCase()
+    const existingGuestUser = await c.env.DB.prepare(
+      `SELECT id
+       FROM users
+       WHERE email = ?
+         AND auth_provider = 'guest'
+         AND (password_hash IS NULL OR password_hash = '')
+       LIMIT 1`
     )
-      .bind(
-        userId,
-        body.first_name ?? null,
-        body.last_name ?? null,
-        body.email.toLowerCase(),
-        body.phone_number ?? null,
-        passwordHash,
-        webrole,
-        now,
-        now
-      )
-      .run()
+      .bind(normalizedEmail)
+      .first<{ id: string }>()
 
-    if (webrole === 'Customers') {
+    const userId = existingGuestUser?.id ?? crypto.randomUUID()
+
+    if (existingGuestUser?.id) {
       await c.env.DB.prepare(
-        `INSERT INTO customers (id, user_id, display_name, email, phone_number, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `UPDATE users
+         SET first_name = ?,
+             last_name = ?,
+             email = ?,
+             phone_number = ?,
+             password_hash = ?,
+             webrole = ?,
+             auth_provider = 'password',
+             updated_at = ?
+         WHERE id = ?`
       )
         .bind(
-          crypto.randomUUID(),
-          userId,
-          `${body.first_name ?? ''} ${body.last_name ?? ''}`.trim() || body.email,
-          body.email.toLowerCase(),
+          body.first_name ?? null,
+          body.last_name ?? null,
+          normalizedEmail,
           body.phone_number ?? null,
+          passwordHash,
+          webrole,
+          now,
+          userId
+        )
+        .run()
+    } else {
+      await c.env.DB.prepare(
+        `INSERT INTO users (
+          id, first_name, last_name, email, phone_number, password_hash, webrole,
+          is_email_verified, auth_provider, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'password', ?, ?)`
+      )
+        .bind(
+          userId,
+          body.first_name ?? null,
+          body.last_name ?? null,
+          normalizedEmail,
+          body.phone_number ?? null,
+          passwordHash,
+          webrole,
           now,
           now
         )
         .run()
     }
 
+    await upsertCustomerRecord(c.env.DB, {
+      userId,
+      firstName: body.first_name ?? null,
+      lastName: body.last_name ?? null,
+      email: normalizedEmail,
+      phoneNumber: body.phone_number ?? null,
+      now
+    })
+
     await attachRole(c.env.DB, userId, webrole)
     await enqueueAccountCreatedNotification({
       env: c.env,
       userId,
-      recipientEmail: body.email.toLowerCase(),
+      recipientEmail: normalizedEmail,
       firstName: body.first_name ?? null,
       lastName: body.last_name ?? null
     })
@@ -109,6 +140,184 @@ authRoutes.post('/register', async (c) => {
   } catch (error) {
     console.error(error)
     const sanitized = sanitizeServerError(error, 'Registration failed.')
+    return c.json({ error: sanitized.error, message: sanitized.message }, sanitized.status)
+  }
+})
+
+authRoutes.post('/guest-checkout/prepare', async (c) => {
+  try {
+    const body = await c.req.json<{
+      first_name?: string
+      last_name?: string
+      email?: string
+      phone_number?: string
+      continue_as_guest?: boolean
+    }>()
+
+    const firstName = String(body.first_name ?? '').trim()
+    const lastName = String(body.last_name ?? '').trim()
+    const email = String(body.email ?? '').trim().toLowerCase()
+    const phoneNumber = String(body.phone_number ?? '').trim()
+    const continueAsGuest = body.continue_as_guest === true
+
+    if (!firstName || !lastName || !email) {
+      return c.json({ error: 'First name, last name, and email are required.' }, 400)
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ error: 'A valid email address is required.' }, 400)
+    }
+
+    await ensureGuestCheckoutSessionsTable(c.env.DB)
+
+    const existingUser = await c.env.DB.prepare(
+      `SELECT id, first_name, last_name, email, phone_number, password_hash, auth_provider, webrole
+       FROM users
+       WHERE email = ?
+       LIMIT 1`
+    )
+      .bind(email)
+      .first<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+        email: string
+        phone_number: string | null
+        password_hash: string | null
+        auth_provider: string | null
+        webrole: string | null
+      }>()
+
+    let userId = existingUser?.id ?? crypto.randomUUID()
+    let created = false
+    const now = new Date().toISOString()
+
+    if (existingUser?.id) {
+      const canReuseGuestIdentity =
+        String(existingUser.auth_provider ?? '').toLowerCase() === 'guest' &&
+        !(existingUser.password_hash ?? '').trim()
+
+      if (!canReuseGuestIdentity && !continueAsGuest) {
+        return c.json(
+          {
+            error: 'There is already an account with that email. Would you like to sign in or continue as guest?',
+            code: 'ACCOUNT_EXISTS_CHOOSE_SIGNIN_OR_GUEST'
+          },
+          409
+        )
+      }
+
+      if (canReuseGuestIdentity) {
+        await c.env.DB.prepare(
+          `UPDATE users
+           SET first_name = ?,
+               last_name = ?,
+               phone_number = ?,
+               updated_at = ?
+           WHERE id = ?`
+        )
+          .bind(firstName, lastName, phoneNumber || null, now, existingUser.id)
+          .run()
+      } else {
+        created = true
+        userId = crypto.randomUUID()
+        const loginEmail = buildGeneratedGuestLoginEmail(email)
+        const temporaryPassword = createTemporaryGuestPassword()
+        const passwordHash = await hashPassword(temporaryPassword)
+
+        await c.env.DB.prepare(
+          `INSERT INTO users (
+            id, first_name, last_name, email, phone_number, password_hash, webrole,
+            is_email_verified, auth_provider, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'Customers', 1, 'guest', ?, ?)`
+        )
+          .bind(userId, firstName, lastName, loginEmail, phoneNumber || null, passwordHash, now, now)
+          .run()
+        await attachRole(c.env.DB, userId, 'Customers')
+        await upsertCustomerRecord(c.env.DB, {
+          userId,
+          firstName,
+          lastName,
+          email,
+          phoneNumber: phoneNumber || null,
+          now
+        })
+
+        const session = await createGuestCheckoutSession(c.env.DB, userId, email)
+        await enqueueGuestCredentialsNotification({
+          env: c.env,
+          userId,
+          recipientEmail: email,
+          recipientName: `${firstName} ${lastName}`.trim() || email,
+          loginEmail,
+          temporaryPassword
+        })
+
+        return c.json({
+          data: {
+            token: session.token,
+            expires_at: session.expiresAt,
+            user: {
+              id: userId,
+              first_name: firstName,
+              last_name: lastName,
+              email,
+              phone_number: phoneNumber || null,
+              webrole: 'Customers',
+              login_email: loginEmail
+            }
+          }
+        })
+      }
+    } else {
+      created = true
+      await c.env.DB.prepare(
+        `INSERT INTO users (
+          id, first_name, last_name, email, phone_number, password_hash, webrole,
+          is_email_verified, auth_provider, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, 'Customers', 0, 'guest', ?, ?)`
+      )
+        .bind(userId, firstName, lastName, email, phoneNumber || null, now, now)
+        .run()
+      await attachRole(c.env.DB, userId, 'Customers')
+    }
+
+    await upsertCustomerRecord(c.env.DB, {
+      userId,
+      firstName,
+      lastName,
+      email,
+      phoneNumber: phoneNumber || null,
+      now
+    })
+
+    const session = await createGuestCheckoutSession(c.env.DB, userId, email)
+    if (created) {
+      await enqueueAccountCreatedNotification({
+        env: c.env,
+        userId,
+        recipientEmail: email,
+        firstName,
+        lastName
+      })
+    }
+
+    return c.json({
+      data: {
+        token: session.token,
+        expires_at: session.expiresAt,
+        user: {
+          id: userId,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone_number: phoneNumber || null,
+          webrole: 'Customers'
+        }
+      }
+    })
+  } catch (error) {
+    console.error(error)
+    const sanitized = sanitizeServerError(error, 'Guest checkout setup failed.')
     return c.json({ error: sanitized.error, message: sanitized.message }, sanitized.status)
   }
 })
@@ -412,6 +621,50 @@ async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {
   }
 }
 
+async function upsertCustomerRecord(
+  db: D1Database,
+  args: {
+    userId: string
+    firstName: string | null
+    lastName: string | null
+    email: string
+    phoneNumber: string | null
+    now: string
+  }
+) {
+  const existingCustomer = await db.prepare('SELECT id FROM customers WHERE user_id = ? LIMIT 1')
+    .bind(args.userId)
+    .first<{ id: string }>()
+
+  const displayName = `${args.firstName ?? ''} ${args.lastName ?? ''}`.trim() || args.email
+
+  if (existingCustomer?.id) {
+    await db.prepare(
+      `UPDATE customers
+       SET display_name = ?, email = ?, phone_number = ?, updated_at = ?
+       WHERE id = ?`
+    )
+      .bind(displayName, args.email, args.phoneNumber, args.now, existingCustomer.id)
+      .run()
+    return
+  }
+
+  await db.prepare(
+    `INSERT INTO customers (id, user_id, display_name, email, phone_number, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      crypto.randomUUID(),
+      args.userId,
+      displayName,
+      args.email,
+      args.phoneNumber,
+      args.now,
+      args.now
+    )
+    .run()
+}
+
 async function attachRole(db: D1Database, userId: string, roleName: string) {
   const role = await db.prepare('SELECT id FROM web_roles WHERE name = ? LIMIT 1')
     .bind(roleName)
@@ -522,6 +775,16 @@ function normalizeOrigin(origin: string) {
   const trimmedOrigin = origin.trim().replace(/\/+$/, '')
   const parsed = new URL(trimmedOrigin)
   return parsed.origin
+}
+
+function buildGeneratedGuestLoginEmail(originalEmail: string) {
+  const local = originalEmail.split('@')[0]?.replace(/[^a-zA-Z0-9]+/g, '').toLowerCase() || 'guest'
+  const suffix = crypto.randomUUID().slice(0, 8).toLowerCase()
+  return `${local}.guest.${suffix}@guest-login.waahtickets.local`
+}
+
+function createTemporaryGuestPassword() {
+  return `Waah-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
 }
 
 async function hashEmailVerificationToken(token: string) {

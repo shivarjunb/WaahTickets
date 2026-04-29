@@ -402,6 +402,29 @@ type CheckoutSubmissionSnapshot = {
   cartEventEmails: Record<string, string>
   cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
   orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+  order_groups?: KhaltiCheckoutOrderGroup[]
+  guest_checkout_identity?: GuestCheckoutIdentity | null
+}
+
+type GuestCheckoutContact = {
+  first_name: string
+  last_name: string
+  email: string
+  phone_number: string
+}
+
+type GuestCheckoutIdentity = {
+  token: string
+  expires_at: string
+  user: {
+    id: string
+    first_name: string
+    last_name: string
+    email: string
+    phone_number?: string | null
+    login_email?: string
+    webrole?: WebRoleName
+  }
 }
 
 type OrderCustomerOption = {
@@ -607,6 +630,7 @@ type AuthUser = {
   first_name?: string | null
   last_name?: string | null
   email?: string
+  phone_number?: string | null
   is_active?: boolean
   is_email_verified?: boolean
   webrole?: WebRoleName
@@ -668,6 +692,7 @@ const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
 const adminSidebarCollapsedStorageKey = 'waah_admin_sidebar_collapsed'
 const khaltiCheckoutDraftStorageKey = 'waah_khalti_checkout_draft'
 const esewaCheckoutDraftStorageKey = 'waah_esewa_checkout_draft'
+const guestCheckoutContactStorageKey = 'waah_guest_checkout_contact'
 const cartStorageKey = 'waah_cart_items'
 const cartHoldStorageKey = 'waah_cart_hold'
 const cartHoldDurationMs = 15 * 60 * 1000
@@ -940,12 +965,44 @@ function PublicApp({
   const [orderCouponCode, setOrderCouponCode] = useState('')
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
   const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
+  const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(() => {
+    if (typeof window === 'undefined') {
+      return { first_name: '', last_name: '', email: '', phone_number: '' }
+    }
+    try {
+      const raw = window.localStorage.getItem(guestCheckoutContactStorageKey)
+      if (!raw) {
+        return { first_name: '', last_name: '', email: '', phone_number: '' }
+      }
+      const parsed = JSON.parse(raw) as Partial<GuestCheckoutContact>
+      return {
+        first_name: String(parsed.first_name ?? ''),
+        last_name: String(parsed.last_name ?? ''),
+        email: String(parsed.email ?? ''),
+        phone_number: String(parsed.phone_number ?? '')
+      }
+    } catch {
+      return { first_name: '', last_name: '', email: '', phone_number: '' }
+    }
+  })
+  const [guestCheckoutIdentity, setGuestCheckoutIdentity] = useState<GuestCheckoutIdentity | null>(null)
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
   const processedPaymentCallbackRef = useRef('')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(guestCheckoutContactStorageKey, JSON.stringify(guestCheckoutContact))
+  }, [guestCheckoutContact])
+
+  useEffect(() => {
+    if (user?.id) {
+      setGuestCheckoutIdentity(null)
+    }
+  }, [user?.id])
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0],
@@ -1387,16 +1444,6 @@ function PublicApp({
           : 'Checking eSewa payment status...'
     )
     setProcessPaymentPhase('processing')
-    if (!user?.id) {
-      setPublicStatus(
-        provider === 'khalti'
-          ? 'Khalti return detected. Sign in with the same account to complete checkout.'
-          : 'eSewa return detected. Sign in with the same account to complete checkout.'
-      )
-      setProcessPaymentPhase('failure')
-      return
-    }
-
     const draftKey = provider === 'khalti' ? khaltiCheckoutDraftStorageKey : esewaCheckoutDraftStorageKey
     const draftRaw = window.localStorage.getItem(draftKey)
     if (!draftRaw) {
@@ -1424,6 +1471,7 @@ function PublicApp({
       esewa_transaction_uuid?: string
       esewa_total_amount?: string
       esewa_product_code?: string
+      guest_checkout_identity?: GuestCheckoutIdentity | null
     }
     try {
       restored = JSON.parse(draftRaw)
@@ -1444,6 +1492,15 @@ function PublicApp({
     setOrderCouponCode(restored.orderCouponCode ?? '')
     setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
     setOrderCouponMessage(restored.orderCouponMessage ?? '')
+    if (restored.guest_checkout_identity) {
+      setGuestCheckoutIdentity(restored.guest_checkout_identity)
+      setGuestCheckoutContact({
+        first_name: restored.guest_checkout_identity.user.first_name ?? '',
+        last_name: restored.guest_checkout_identity.user.last_name ?? '',
+        email: restored.guest_checkout_identity.user.email ?? '',
+        phone_number: String(restored.guest_checkout_identity.user.phone_number ?? '')
+      })
+    }
 
     if (provider === 'khalti' && normalizedCallbackStatus === 'user canceled') {
       setPublicStatus('Khalti payment was canceled.')
@@ -1452,18 +1509,30 @@ function PublicApp({
       return
     }
 
-    const callbackKey = `${provider}:${pidx || esewaData || `${restored.esewa_transaction_uuid ?? ''}:${restored.esewa_total_amount ?? ''}`}:${user.id}`
+    const actorKey = user?.id ?? restored.guest_checkout_identity?.user.id ?? restored.guest_checkout_identity?.token ?? ''
+    if (!actorKey) {
+      setPublicStatus(
+        provider === 'khalti'
+          ? 'Khalti return detected, but guest checkout details are missing. Please start checkout again.'
+          : 'eSewa return detected, but guest checkout details are missing. Please start checkout again.'
+      )
+      setProcessPaymentPhase('failure')
+      return
+    }
+
+    const callbackKey = `${provider}:${pidx || esewaData || `${restored.esewa_transaction_uuid ?? ''}:${restored.esewa_total_amount ?? ''}`}:${actorKey}`
     if (processedPaymentCallbackRef.current === callbackKey) return
     processedPaymentCallbackRef.current = callbackKey
 
     setIsSubmittingOrder(true)
     void (async () => {
       try {
+        const guestCheckoutToken = restored.guest_checkout_identity?.token
         if (provider === 'khalti') {
-          const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
+          const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/storefront/payments/khalti/lookup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pidx })
+            body: JSON.stringify({ pidx, guest_checkout_token: guestCheckoutToken })
           })
           const lookupStatus = String(data.data.status ?? '').trim()
           if (lookupStatus.toLowerCase() !== 'completed') {
@@ -1477,13 +1546,14 @@ function PublicApp({
             window.history.replaceState({}, '', window.location.pathname)
             return
           }
-          const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/payments/khalti/complete', {
+          const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/storefront/payments/khalti/complete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               pidx,
               transaction_id: data.data.transaction_id ?? '',
-              order_groups: restored.order_groups
+              order_groups: restored.order_groups,
+              guest_checkout_token: guestCheckoutToken
             })
           })
           setPublicStatus(
@@ -1491,19 +1561,24 @@ function PublicApp({
           )
         } else {
           const { data } = esewaData
-            ? await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/verify', {
+            ? await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/storefront/payments/esewa/verify', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: esewaData, mode: restored.mode ?? publicPaymentSettings.esewa_mode }),
+                body: JSON.stringify({
+                  data: esewaData,
+                  mode: restored.mode ?? publicPaymentSettings.esewa_mode,
+                  guest_checkout_token: guestCheckoutToken
+                }),
                 timeoutMs: 20000
               })
-            : await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/status', {
+            : await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/storefront/payments/esewa/status', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   transaction_uuid: restored.esewa_transaction_uuid ?? '',
                   total_amount: restored.esewa_total_amount ?? '',
-                  mode: restored.mode ?? publicPaymentSettings.esewa_mode
+                  mode: restored.mode ?? publicPaymentSettings.esewa_mode,
+                  guest_checkout_token: guestCheckoutToken
                 }),
                 timeoutMs: 20000
               })
@@ -1522,7 +1597,9 @@ function PublicApp({
               cartItems: restored.cartItems,
               cartEventEmails: restored.cartEventEmails ?? {},
               cartEventCouponDiscounts: restored.cartEventCouponDiscounts ?? {},
-              orderCouponDiscount: restored.orderCouponDiscount ?? null
+              orderCouponDiscount: restored.orderCouponDiscount ?? null,
+              order_groups: restored.order_groups,
+              guest_checkout_identity: restored.guest_checkout_identity ?? null
             }
           )
           if (!completed) {
@@ -2097,6 +2174,7 @@ function PublicApp({
 
       {isCartCheckoutOpen ? (
         <CartCheckoutModal
+          user={user}
           cartGroups={cartGroups}
           eventSubtotals={eventSubtotals}
           eventEmails={cartEventEmails}
@@ -2106,6 +2184,7 @@ function PublicApp({
           orderCouponCode={orderCouponCode}
           orderCouponDiscount={orderCouponDiscount}
           orderCouponMessage={orderCouponMessage}
+          guestCheckoutContact={guestCheckoutContact}
           subtotalPaisa={cartSubtotalPaisa}
           eventDiscountTotalPaisa={cartEventDiscountTotal}
           orderDiscountPaisa={cartOrderDiscount}
@@ -2121,6 +2200,7 @@ function PublicApp({
           onApplyEventCoupon={(eventId) => void applyEventCoupon(eventId)}
           onChangeOrderCoupon={setOrderCouponCode}
           onApplyOrderCoupon={() => void applyOrderCouponAcrossCart()}
+          onChangeGuestCheckoutField={updateGuestCheckoutContactField}
           onPlaceOrder={() => void submitCartCheckout()}
           onPayWithKhalti={() => void startKhaltiCheckout()}
           onPayWithEsewa={() => void startEsewaCheckout()}
@@ -2320,11 +2400,81 @@ function PublicApp({
     })
   }
 
-  async function startKhaltiCheckout() {
-    if (!user?.id) {
-      setPublicStatus('Sign in to checkout.')
-      return
+  function updateGuestCheckoutContactField(field: keyof GuestCheckoutContact, value: string) {
+    setGuestCheckoutContact((current) => {
+      const next = { ...current, [field]: value }
+      return next
+    })
+    setGuestCheckoutIdentity(null)
+  }
+
+  async function ensureGuestCheckoutIdentity() {
+    if (user?.id) return null
+
+    const firstName = guestCheckoutContact.first_name.trim()
+    const lastName = guestCheckoutContact.last_name.trim()
+    const email = guestCheckoutContact.email.trim().toLowerCase()
+    const phoneNumber = guestCheckoutContact.phone_number.trim()
+
+    if (!firstName || !lastName || !email) {
+      throw new Error('First name, last name, and email are required for guest checkout.')
     }
+
+    const currentIdentity = guestCheckoutIdentity
+    const canReuseIdentity =
+      currentIdentity &&
+      currentIdentity.user.email.trim().toLowerCase() === email &&
+      currentIdentity.user.first_name.trim() === firstName &&
+      currentIdentity.user.last_name.trim() === lastName &&
+      String(currentIdentity.user.phone_number ?? '').trim() === phoneNumber
+
+    if (canReuseIdentity) {
+      return currentIdentity
+    }
+
+    async function requestGuestIdentity(continueAsGuest: boolean) {
+      const response = await fetch('/api/auth/guest-checkout/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone_number: phoneNumber,
+          continue_as_guest: continueAsGuest
+        })
+      })
+
+      const payload = (await response.json()) as {
+        data?: GuestCheckoutIdentity
+        error?: string
+        message?: string
+        code?: string
+      }
+
+      if (response.ok && payload.data) {
+        return payload.data
+      }
+
+      if (response.status === 409 && payload.code === 'ACCOUNT_EXISTS_CHOOSE_SIGNIN_OR_GUEST') {
+        const continueWithGuest = window.confirm(
+          'There is already an account with that email. Press OK to continue as guest, or Cancel to sign in instead.'
+        )
+        if (continueWithGuest) {
+          return requestGuestIdentity(true)
+        }
+        throw new Error('Please sign in with that email to continue checkout.')
+      }
+
+      throw new Error(payload.message ?? payload.error ?? 'Guest checkout setup failed.')
+    }
+
+    const identity = await requestGuestIdentity(false)
+    setGuestCheckoutIdentity(identity)
+    return identity
+  }
+
+  async function startKhaltiCheckout() {
     if (cartItems.length === 0 || isSubmittingOrder) return
     if (!(publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate)) {
       setPublicStatus(publicPaymentSettings.khalti_runtime_note || 'Khalti is not configured right now.')
@@ -2333,6 +2483,8 @@ function PublicApp({
 
     setIsSubmittingOrder(true)
     try {
+      const guestIdentity = await ensureGuestCheckoutIdentity()
+      const checkoutUser = user ?? guestIdentity?.user ?? null
       const orderGroups = buildKhaltiCheckoutOrderGroups()
       const draft = {
         cartItems,
@@ -2343,25 +2495,27 @@ function PublicApp({
         orderCouponCode,
         orderCouponDiscount,
         orderCouponMessage,
-        order_groups: orderGroups
+        order_groups: orderGroups,
+        guest_checkout_identity: guestIdentity ?? null
       }
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(khaltiCheckoutDraftStorageKey, JSON.stringify(draft))
       }
 
       const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-      const purchaseOrderId = `khalti-${user.id}-${suffix}`
+      const purchaseOrderId = `khalti-${String(checkoutUser?.id ?? 'guest')}-${suffix}`
       const purchaseOrderName = `Waah Tickets (${cartGroups.length} event${cartGroups.length === 1 ? '' : 's'})`
       const payload = {
         amount_paisa: cartGrandTotalPaisa,
         purchase_order_id: purchaseOrderId,
         purchase_order_name: purchaseOrderName,
-        customer_name: `${String(user.first_name ?? '').trim()} ${String(user.last_name ?? '').trim()}`.trim(),
-        customer_email: String(user.email ?? '').trim(),
-        customer_phone: '',
-        order_groups: orderGroups
+        customer_name: `${String(checkoutUser?.first_name ?? '').trim()} ${String(checkoutUser?.last_name ?? '').trim()}`.trim(),
+        customer_email: String(checkoutUser?.email ?? '').trim(),
+        customer_phone: String((checkoutUser as GuestCheckoutIdentity['user'] | AuthUser)?.phone_number ?? guestCheckoutContact.phone_number ?? '').trim(),
+        order_groups: orderGroups,
+        guest_checkout_token: guestIdentity?.token
       }
-      const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/payments/khalti/initiate', {
+      const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/storefront/payments/khalti/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -2391,10 +2545,6 @@ function PublicApp({
   }
 
   async function startEsewaCheckout() {
-    if (!user?.id) {
-      setPublicStatus('Sign in to checkout.')
-      return
-    }
     if (cartItems.length === 0 || isSubmittingOrder) return
     if (!publicPaymentSettings.esewa_can_initiate) {
       setPublicStatus(publicPaymentSettings.esewa_runtime_note || 'eSewa is not configured right now.')
@@ -2403,6 +2553,7 @@ function PublicApp({
 
     setIsSubmittingOrder(true)
     try {
+      const guestIdentity = await ensureGuestCheckoutIdentity()
       const orderGroups = buildKhaltiCheckoutOrderGroups()
       const draft = {
         cartItems,
@@ -2414,7 +2565,8 @@ function PublicApp({
         orderCouponDiscount,
         orderCouponMessage,
         order_groups: orderGroups,
-        mode: publicPaymentSettings.esewa_mode
+        mode: publicPaymentSettings.esewa_mode,
+        guest_checkout_identity: guestIdentity ?? null
       }
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(esewaCheckoutDraftStorageKey, JSON.stringify(draft))
@@ -2422,12 +2574,13 @@ function PublicApp({
 
       const { data } = await fetchJson<{
         data: { form_action: string; fields: Record<string, string> }
-      }>('/api/payments/esewa/initiate', {
+      }>('/api/storefront/payments/esewa/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount_paisa: cartGrandTotalPaisa,
-          order_groups: orderGroups
+          order_groups: orderGroups,
+          guest_checkout_token: guestIdentity?.token
         })
       })
 
@@ -2469,119 +2622,27 @@ function PublicApp({
     snapshot?: CheckoutSubmissionSnapshot
   ) {
     const submissionCartItems = snapshot?.cartItems ?? cartItems
-    const submissionCartEventEmails = snapshot?.cartEventEmails ?? cartEventEmails
-    const submissionCartEventCouponDiscounts = snapshot?.cartEventCouponDiscounts ?? cartEventCouponDiscounts
-    const submissionOrderCouponDiscount = snapshot?.orderCouponDiscount ?? orderCouponDiscount
     if (submissionCartItems.length === 0 || (isSubmittingOrder && !snapshot)) return false
-    if (!user?.id) {
-      setPublicStatus('Sign in to checkout.')
-      return false
-    }
 
     setIsSubmittingOrder(true)
 
     try {
-      const eventGroups = groupCartItemsByEvent(submissionCartItems)
-      const now = new Date().toISOString()
-      let createdOrders = 0
+      const guestIdentity = snapshot?.guest_checkout_identity ?? (await ensureGuestCheckoutIdentity())
+      const orderGroups = snapshot?.order_groups ?? buildKhaltiCheckoutOrderGroups()
       const requestTimeoutMs = paymentContext?.provider ? 20000 : undefined
-
-      for (const group of eventGroups) {
-        const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-        const orderId = `order-${suffix}`
-        const subtotal = group.items.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
-        const eventDiscount = submissionCartEventCouponDiscounts[group.event_id]?.discount ?? 0
-        const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, submissionOrderCouponDiscount)
-        const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
-        const total = Math.max(0, subtotal - totalDiscount)
-        const currency = group.items[0]?.currency ?? 'NPR'
-
-        await fetchJson<ApiMutationResponse>('/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: orderId,
-            order_number: `WAH-${suffix.toUpperCase()}`,
-            customer_id: user.id,
-            event_id: group.event_id,
-            event_location_id: group.event_location_id,
-            status: 'paid',
-            subtotal_amount_paisa: subtotal,
-            discount_amount_paisa: totalDiscount,
-            total_amount_paisa: total,
-            currency,
-            order_datetime: now
-          }),
-          timeoutMs: requestTimeoutMs
-        })
-
-        for (const item of group.items) {
-          await fetchJson<ApiMutationResponse>('/api/order_items', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              order_id: orderId,
-              ticket_type_id: item.ticket_type_id,
-              quantity: item.quantity,
-              unit_price_paisa: item.unit_price_paisa,
-              subtotal_amount_paisa: item.unit_price_paisa * item.quantity,
-              total_amount_paisa: item.unit_price_paisa * item.quantity
-            }),
-            timeoutMs: requestTimeoutMs
-          })
-        }
-
-        const eventCoupon = submissionCartEventCouponDiscounts[group.event_id]
-        if (eventCoupon && eventCoupon.discount > 0) {
-          await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              coupon_id: eventCoupon.couponId,
-              order_id: orderId,
-              customer_id: user.id,
-              discount_amount_paisa: eventCoupon.discount,
-              redeemed_at: now
-            }),
-            timeoutMs: requestTimeoutMs
-          })
-        }
-
-        if (
-          submissionOrderCouponDiscount &&
-          submissionOrderCouponDiscount.discount > 0 &&
-          submissionOrderCouponDiscount.eventId === group.event_id &&
-          orderDiscountShare > 0
-        ) {
-          await fetchJson<ApiMutationResponse>('/api/coupon_redemptions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              coupon_id: submissionOrderCouponDiscount.couponId,
-              order_id: orderId,
-              customer_id: user.id,
-              discount_amount_paisa: orderDiscountShare,
-              redeemed_at: now
-            }),
-            timeoutMs: requestTimeoutMs
-          })
-        }
-
-        const extraEmail = submissionCartEventEmails[group.event_id]?.trim()
-        if (extraEmail) {
-          await fetchJson<ApiMutationResponse>(`/api/orders/${orderId}/email-copy`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: extraEmail }),
-            timeoutMs: requestTimeoutMs
-          })
-        }
-
-        createdOrders += 1
-      }
+      const { data } = await fetchJson<{ data: { completed_orders: number } }>('/api/storefront/checkout/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_groups: orderGroups,
+          payment: paymentContext ?? { provider: 'manual' },
+          guest_checkout_token: guestIdentity?.token
+        }),
+        timeoutMs: requestTimeoutMs
+      })
 
       const providerLabel = paymentContext?.provider === 'khalti' ? ' via Khalti' : paymentContext?.provider === 'esewa' ? ' via eSewa' : ''
-      setPublicStatus(`Checkout complete${providerLabel}. ${createdOrders} event order(s) created.`)
+      setPublicStatus(`Checkout complete${providerLabel}. ${Number(data.data?.completed_orders ?? orderGroups.length)} event order(s) created.`)
       setCartItems([])
       setCartEventCoupons({})
       setCartEventCouponMessages({})
@@ -2714,7 +2775,6 @@ function PublicApp({
   }
 
   function getReserveBlockedMessage() {
-    if (!user?.id) return 'Sign in to reserve tickets.'
     if (isSubmittingOrder) return 'Order is being created. Please wait.'
     if (!selectedEvent?.id) return 'Select an event first.'
     if (!selectedEvent.location_id) return 'Add a location for this event in admin before reservations.'
@@ -2975,6 +3035,7 @@ function CartModal({
 }
 
 function CartCheckoutModal({
+  user,
   cartGroups,
   eventSubtotals,
   eventEmails,
@@ -2984,6 +3045,7 @@ function CartCheckoutModal({
   orderCouponCode,
   orderCouponDiscount,
   orderCouponMessage,
+  guestCheckoutContact,
   subtotalPaisa,
   eventDiscountTotalPaisa,
   orderDiscountPaisa,
@@ -2995,6 +3057,7 @@ function CartCheckoutModal({
   onApplyEventCoupon,
   onChangeOrderCoupon,
   onApplyOrderCoupon,
+  onChangeGuestCheckoutField,
   onPlaceOrder,
   onPayWithKhalti,
   onPayWithEsewa,
@@ -3005,6 +3068,7 @@ function CartCheckoutModal({
   esewaMode,
   esewaNote
 }: {
+  user: AuthUser
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
   eventSubtotals: Record<string, number>
   eventEmails: Record<string, string>
@@ -3014,6 +3078,7 @@ function CartCheckoutModal({
   orderCouponCode: string
   orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
   orderCouponMessage: string
+  guestCheckoutContact: GuestCheckoutContact
   subtotalPaisa: number
   eventDiscountTotalPaisa: number
   orderDiscountPaisa: number
@@ -3025,6 +3090,7 @@ function CartCheckoutModal({
   onApplyEventCoupon: (eventId: string) => void
   onChangeOrderCoupon: (value: string) => void
   onApplyOrderCoupon: () => void
+  onChangeGuestCheckoutField: (field: keyof GuestCheckoutContact, value: string) => void
   onPlaceOrder: () => void
   onPayWithKhalti: () => void
   onPayWithEsewa: () => void
@@ -3049,6 +3115,52 @@ function CartCheckoutModal({
         </header>
         <div className="cart-checkout-layout">
           <div className="checkout-stack cart-checkout-main">
+            {!user?.id ? (
+              <fieldset className="cart-checkout-group">
+                <legend>Guest details</legend>
+                <p className="checkout-hint">Enter your details to receive tickets by email without signing in.</p>
+                <div className="guest-checkout-grid">
+                  <label className="public-select-label">
+                    <span>First name</span>
+                    <input
+                      placeholder="First name"
+                      type="text"
+                      value={guestCheckoutContact.first_name}
+                      onChange={(event) => onChangeGuestCheckoutField('first_name', event.target.value)}
+                    />
+                  </label>
+                  <label className="public-select-label">
+                    <span>Last name</span>
+                    <input
+                      placeholder="Last name"
+                      type="text"
+                      value={guestCheckoutContact.last_name}
+                      onChange={(event) => onChangeGuestCheckoutField('last_name', event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="guest-checkout-grid">
+                  <label className="public-select-label">
+                    <span>Email</span>
+                    <input
+                      placeholder="name@example.com"
+                      type="email"
+                      value={guestCheckoutContact.email}
+                      onChange={(event) => onChangeGuestCheckoutField('email', event.target.value)}
+                    />
+                  </label>
+                  <label className="public-select-label">
+                    <span>Phone number (optional)</span>
+                    <input
+                      placeholder="98XXXXXXXX"
+                      type="tel"
+                      value={guestCheckoutContact.phone_number}
+                      onChange={(event) => onChangeGuestCheckoutField('phone_number', event.target.value)}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+            ) : null}
             {cartGroups.map((group) => (
               <fieldset className="cart-checkout-group" key={group.event_id}>
                 <legend>{group.event_name}</legend>
