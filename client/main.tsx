@@ -3108,53 +3108,53 @@ function CartCheckoutModal({
                   <span>Order-level discount</span>
                   <strong>-{formatMoney(orderCouponDiscount.discount)}</strong>
                 </div>
-              ) : null}
+                ) : null}
             </fieldset>
           </div>
+          <aside className="cart-checkout-summary">
+            <div className="cart-summary-card">
+              <div className="checkout-total">
+                <span>Subtotal</span>
+                <strong>{formatMoney(subtotalPaisa)}</strong>
+              </div>
+              <div className="checkout-line">
+                <span>Event discounts</span>
+                <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
+              </div>
+              <div className="checkout-line">
+                <span>Order discount</span>
+                <strong>-{formatMoney(orderDiscountPaisa)}</strong>
+              </div>
+              <div className="checkout-total grand">
+                <span>Total</span>
+                <strong>{formatMoney(totalPaisa)}</strong>
+              </div>
+            </div>
+            <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
+            <button
+              className="khalti-pay-button"
+              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+              type="button"
+              onClick={onPayWithKhalti}
+            >
+              <CreditCard size={17} />
+              {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
+            </button>
+            <button
+              className="esewa-pay-button"
+              disabled={isSubmitting || cartGroups.length === 0 || !esewaReady}
+              type="button"
+              onClick={onPayWithEsewa}
+            >
+              <CreditCard size={17} />
+              {isSubmitting ? 'Processing...' : `Pay with eSewa (${esewaMode})`}
+            </button>
+            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
+              {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+              {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
+            </button>
+          </aside>
         </div>
-        <aside className="cart-checkout-summary">
-          <div className="cart-summary-card">
-            <div className="checkout-total">
-              <span>Subtotal</span>
-              <strong>{formatMoney(subtotalPaisa)}</strong>
-            </div>
-            <div className="checkout-line">
-              <span>Event discounts</span>
-              <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
-            </div>
-            <div className="checkout-line">
-              <span>Order discount</span>
-              <strong>-{formatMoney(orderDiscountPaisa)}</strong>
-            </div>
-            <div className="checkout-total grand">
-              <span>Total</span>
-              <strong>{formatMoney(totalPaisa)}</strong>
-            </div>
-          </div>
-          <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
-          <button
-            className="khalti-pay-button"
-            disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
-            type="button"
-            onClick={onPayWithKhalti}
-          >
-            <CreditCard size={17} />
-            {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
-          </button>
-          <button
-            className="esewa-pay-button"
-            disabled={isSubmitting || cartGroups.length === 0 || !esewaReady}
-            type="button"
-            onClick={onPayWithEsewa}
-          >
-            <CreditCard size={17} />
-            {isSubmitting ? 'Processing...' : `Pay with eSewa (${esewaMode})`}
-          </button>
-          <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
-            {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-            {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
-          </button>
-        </aside>
         <div className="cart-checkout-note">
           <p className="checkout-hint">{khaltiNote}</p>
           <p className="checkout-hint">{esewaNote}</p>
