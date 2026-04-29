@@ -154,7 +154,10 @@ const defaultPublicPaymentSettings: PublicPaymentSettingsData = {
   khalti_enabled: false,
   khalti_mode: 'test',
   khalti_can_initiate: false,
-  khalti_runtime_note: 'Khalti is not configured.'
+  khalti_runtime_note: 'Khalti is not configured.',
+  esewa_mode: 'test',
+  esewa_can_initiate: true,
+  esewa_runtime_note: 'eSewa is not configured.'
 }
 const defaultAdminPaymentSettings: AdminPaymentSettingsData = {
   khalti_enabled: false,
@@ -566,6 +569,9 @@ type PublicPaymentSettingsData = {
   khalti_public_key?: string
   khalti_can_initiate: boolean
   khalti_runtime_note: string
+  esewa_mode: 'test' | 'live'
+  esewa_can_initiate: boolean
+  esewa_runtime_note: string
 }
 
 type AdminPaymentSettingsData = {
@@ -652,6 +658,7 @@ const maxSubgridRowsPerPage = 100
 const adminGridRowsStorageKey = 'waah_admin_subgrid_rows_per_page'
 const adminSidebarCollapsedStorageKey = 'waah_admin_sidebar_collapsed'
 const khaltiCheckoutDraftStorageKey = 'waah_khalti_checkout_draft'
+const esewaCheckoutDraftStorageKey = 'waah_esewa_checkout_draft'
 const emptyColumnFilterState: Record<string, string> = {}
 const defaultMonthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
 const defaultAdminDashboardMetrics: AdminDashboardMetrics = {
@@ -1259,26 +1266,41 @@ function PublicApp({
     if (!isProcessPaymentRoute) return
     const params = new URLSearchParams(window.location.search)
     const pidx = params.get('pidx')?.trim() ?? ''
+    const esewaData = params.get('data')?.trim() ?? ''
     const callbackStatus = params.get('status')?.trim() ?? ''
-    if (!pidx) return
-    setPublicStatus('Processing Khalti return...')
+    if (!pidx && !esewaData) return
+    const provider: 'khalti' | 'esewa' = pidx ? 'khalti' : 'esewa'
+    setPublicStatus(provider === 'khalti' ? 'Processing Khalti return...' : 'Processing eSewa return...')
     setProcessPaymentPhase('processing')
     const host = window.location.hostname.toLowerCase()
     const isLocalKhaltiTestHost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
     if (!user?.id) {
-      setPublicStatus('Khalti return detected. Sign in with the same account to complete checkout.')
+      setPublicStatus(
+        provider === 'khalti'
+          ? 'Khalti return detected. Sign in with the same account to complete checkout.'
+          : 'eSewa return detected. Sign in with the same account to complete checkout.'
+      )
       setProcessPaymentPhase('failure')
       return
     }
     if (!(user.webrole === 'Customers' || isLocalKhaltiTestHost)) {
-      setPublicStatus('Khalti return detected, but this role cannot complete checkout in this environment.')
+      setPublicStatus(
+        provider === 'khalti'
+          ? 'Khalti return detected, but this role cannot complete checkout in this environment.'
+          : 'eSewa return detected, but this role cannot complete checkout in this environment.'
+      )
       setProcessPaymentPhase('failure')
       return
     }
 
-    const draftRaw = window.localStorage.getItem(khaltiCheckoutDraftStorageKey)
+    const draftKey = provider === 'khalti' ? khaltiCheckoutDraftStorageKey : esewaCheckoutDraftStorageKey
+    const draftRaw = window.localStorage.getItem(draftKey)
     if (!draftRaw) {
-      setPublicStatus('Khalti return detected, but checkout draft is missing on this browser.')
+      setPublicStatus(
+        provider === 'khalti'
+          ? 'Khalti return detected, but checkout draft is missing on this browser.'
+          : 'eSewa return detected, but checkout draft is missing on this browser.'
+      )
       setProcessPaymentPhase('failure')
       return
     }
@@ -1294,6 +1316,7 @@ function PublicApp({
       orderCouponMessage: string
       order_groups: KhaltiCheckoutOrderGroup[]
       pidx?: string
+      mode?: 'test' | 'live'
     }
     try {
       restored = JSON.parse(draftRaw)
@@ -1301,7 +1324,7 @@ function PublicApp({
       restored = null
     }
     if (!restored || !Array.isArray(restored.cartItems) || !Array.isArray(restored.order_groups)) {
-      setPublicStatus('Khalti return detected, but checkout draft is invalid.')
+      setPublicStatus(`${provider === 'khalti' ? 'Khalti' : 'eSewa'} return detected, but checkout draft is invalid.`)
       setProcessPaymentPhase('failure')
       return
     }
@@ -1315,7 +1338,7 @@ function PublicApp({
     setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
     setOrderCouponMessage(restored.orderCouponMessage ?? '')
 
-    if (callbackStatus.toLowerCase() === 'user canceled') {
+    if (provider === 'khalti' && callbackStatus.toLowerCase() === 'user canceled') {
       setPublicStatus('Khalti payment was canceled.')
       setProcessPaymentPhase('failure')
       window.history.replaceState({}, '', window.location.pathname)
@@ -1325,35 +1348,58 @@ function PublicApp({
     setIsSubmittingOrder(true)
     void (async () => {
       try {
-        const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pidx })
-        })
-        const lookupStatus = String(data.data.status ?? '').trim()
-        if (lookupStatus.toLowerCase() !== 'completed') {
-          setPublicStatus(
-            lookupStatus
-              ? `Khalti payment status: ${lookupStatus}. Payment was not completed. You can retry payment.`
-              : 'Khalti payment status is unknown. You can retry payment.'
-          )
-          setProcessPaymentPhase('failure')
-          setIsSubmittingOrder(false)
-          window.history.replaceState({}, '', window.location.pathname)
-          return
-        }
-        const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/payments/khalti/complete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pidx,
-            transaction_id: data.data.transaction_id ?? '',
-            order_groups: restored.order_groups
+        if (provider === 'khalti') {
+          const { data } = await fetchJson<{ data: { status: string; transaction_id?: string } }>('/api/payments/khalti/lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pidx })
           })
-        })
-        setPublicStatus(
-          `Checkout complete via Khalti. ${Number(completion.data?.completed_orders ?? restored.order_groups.length)} event order(s) processed.`
-        )
+          const lookupStatus = String(data.data.status ?? '').trim()
+          if (lookupStatus.toLowerCase() !== 'completed') {
+            setPublicStatus(
+              lookupStatus
+                ? `Khalti payment status: ${lookupStatus}. Payment was not completed. You can retry payment.`
+                : 'Khalti payment status is unknown. You can retry payment.'
+            )
+            setProcessPaymentPhase('failure')
+            setIsSubmittingOrder(false)
+            window.history.replaceState({}, '', window.location.pathname)
+            return
+          }
+          const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/payments/khalti/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pidx,
+              transaction_id: data.data.transaction_id ?? '',
+              order_groups: restored.order_groups
+            })
+          })
+          setPublicStatus(
+            `Checkout complete via Khalti. ${Number(completion.data?.completed_orders ?? restored.order_groups.length)} event order(s) processed.`
+          )
+        } else {
+          const { data } = await fetchJson<{ data: { status: string; transaction_code?: string } }>('/api/payments/esewa/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: esewaData, mode: restored.mode ?? publicPaymentSettings.esewa_mode })
+          })
+          const status = String(data.data.status ?? '').trim().toUpperCase()
+          if (status !== 'COMPLETE') {
+            setPublicStatus(`eSewa payment status: ${status || 'UNKNOWN'}. Payment was not completed.`)
+            setProcessPaymentPhase('failure')
+            setIsSubmittingOrder(false)
+            window.history.replaceState({}, '', window.location.pathname)
+            return
+          }
+          setIsSubmittingOrder(false)
+          const completed = await submitCartCheckout({ provider: 'esewa', reference: data.data.transaction_code ?? '' })
+          if (!completed) {
+            setProcessPaymentPhase('failure')
+            window.history.replaceState({}, '', window.location.pathname)
+            return
+          }
+        }
         setProcessPaymentPhase('success')
         setCartItems([])
         setCartEventCoupons({})
@@ -1366,7 +1412,7 @@ function PublicApp({
         setIsCartCheckoutOpen(false)
         setIsSubmittingOrder(false)
         if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+          window.localStorage.removeItem(draftKey)
         }
         window.history.replaceState({}, '', window.location.pathname)
       } catch (error) {
@@ -1380,9 +1426,11 @@ function PublicApp({
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (!isProcessPaymentRoute) return
-    const hasPidx = new URLSearchParams(window.location.search).has('pidx')
-    if (!hasPidx) {
-      setPublicStatus('No Khalti callback was found. Start payment from checkout and return here.')
+    const params = new URLSearchParams(window.location.search)
+    const hasKhalti = params.has('pidx')
+    const hasEsewa = params.has('data')
+    if (!hasKhalti && !hasEsewa) {
+      setPublicStatus('No payment callback was found. Start payment from checkout and return here.')
       setProcessPaymentPhase('idle')
     }
   }, [isProcessPaymentRoute])
@@ -1913,9 +1961,13 @@ function PublicApp({
           onApplyOrderCoupon={() => void applyOrderCouponAcrossCart()}
           onPlaceOrder={() => void submitCartCheckout()}
           onPayWithKhalti={() => void startKhaltiCheckout()}
+          onPayWithEsewa={() => void startEsewaCheckout()}
           khaltiReady={publicPaymentSettings.khalti_enabled && publicPaymentSettings.khalti_can_initiate}
           khaltiMode={publicPaymentSettings.khalti_mode}
           khaltiNote={publicPaymentSettings.khalti_runtime_note}
+          esewaReady={publicPaymentSettings.esewa_can_initiate}
+          esewaMode={publicPaymentSettings.esewa_mode}
+          esewaNote={publicPaymentSettings.esewa_runtime_note}
         />
       ) : null}
 
@@ -2110,11 +2162,76 @@ function PublicApp({
     }
   }
 
-  async function submitCartCheckout(paymentContext?: { provider?: 'manual' | 'khalti'; reference?: string }) {
-    if (cartItems.length === 0 || isSubmittingOrder) return
+  async function startEsewaCheckout() {
     if (!user?.id) {
       setPublicStatus('Sign in to checkout.')
       return
+    }
+    if (cartItems.length === 0 || isSubmittingOrder) return
+    if (!publicPaymentSettings.esewa_can_initiate) {
+      setPublicStatus(publicPaymentSettings.esewa_runtime_note || 'eSewa is not configured right now.')
+      return
+    }
+
+    setIsSubmittingOrder(true)
+    try {
+      const orderGroups = buildKhaltiCheckoutOrderGroups()
+      const draft = {
+        cartItems,
+        cartEventEmails,
+        cartEventCoupons,
+        cartEventCouponMessages,
+        cartEventCouponDiscounts,
+        orderCouponCode,
+        orderCouponDiscount,
+        orderCouponMessage,
+        order_groups: orderGroups,
+        mode: publicPaymentSettings.esewa_mode
+      }
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(esewaCheckoutDraftStorageKey, JSON.stringify(draft))
+      }
+
+      const { data } = await fetchJson<{
+        data: { form_action: string; fields: Record<string, string> }
+      }>('/api/payments/esewa/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount_paisa: cartGrandTotalPaisa,
+          order_groups: orderGroups
+        })
+      })
+
+      if (!data.data?.form_action || !data.data?.fields) {
+        throw new Error('eSewa initiate did not return form payload.')
+      }
+
+      if (typeof window !== 'undefined') {
+        const form = document.createElement('form')
+        form.method = 'POST'
+        form.action = data.data.form_action
+        for (const [key, value] of Object.entries(data.data.fields)) {
+          const input = document.createElement('input')
+          input.type = 'hidden'
+          input.name = key
+          input.value = String(value)
+          form.appendChild(input)
+        }
+        document.body.appendChild(form)
+        form.submit()
+      }
+    } catch (error) {
+      setPublicStatus(getErrorMessage(error))
+      setIsSubmittingOrder(false)
+    }
+  }
+
+  async function submitCartCheckout(paymentContext?: { provider?: 'manual' | 'khalti' | 'esewa'; reference?: string }) {
+    if (cartItems.length === 0 || isSubmittingOrder) return false
+    if (!user?.id) {
+      setPublicStatus('Sign in to checkout.')
+      return false
     }
 
     setIsSubmittingOrder(true)
@@ -2213,7 +2330,7 @@ function PublicApp({
         createdOrders += 1
       }
 
-      const providerLabel = paymentContext?.provider === 'khalti' ? ' via Khalti' : ''
+      const providerLabel = paymentContext?.provider === 'khalti' ? ' via Khalti' : paymentContext?.provider === 'esewa' ? ' via eSewa' : ''
       setPublicStatus(`Checkout complete${providerLabel}. ${createdOrders} event order(s) created.`)
       setCartItems([])
       setCartEventCoupons({})
@@ -2227,8 +2344,13 @@ function PublicApp({
       if (paymentContext?.provider === 'khalti' && typeof window !== 'undefined') {
         window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
       }
+      if (paymentContext?.provider === 'esewa' && typeof window !== 'undefined') {
+        window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
+      }
+      return true
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
+      return false
     } finally {
       setIsSubmittingOrder(false)
     }
@@ -2607,9 +2729,13 @@ function CartCheckoutModal({
   onApplyOrderCoupon,
   onPlaceOrder,
   onPayWithKhalti,
+  onPayWithEsewa,
   khaltiReady,
   khaltiMode,
-  khaltiNote
+  khaltiNote,
+  esewaReady,
+  esewaMode,
+  esewaNote
 }: {
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
   eventSubtotals: Record<string, number>
@@ -2633,9 +2759,13 @@ function CartCheckoutModal({
   onApplyOrderCoupon: () => void
   onPlaceOrder: () => void
   onPayWithKhalti: () => void
+  onPayWithEsewa: () => void
   khaltiReady: boolean
   khaltiMode: 'test' | 'live'
   khaltiNote: string
+  esewaReady: boolean
+  esewaMode: 'test' | 'live'
+  esewaNote: string
 }) {
   return (
     <div className="modal-backdrop" role="presentation">
@@ -2745,12 +2875,12 @@ function CartCheckoutModal({
           </button>
           <button
             className="esewa-pay-button"
-            disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+            disabled={isSubmitting || cartGroups.length === 0 || !esewaReady}
             type="button"
-            onClick={onPayWithKhalti}
+            onClick={onPayWithEsewa}
           >
             <CreditCard size={17} />
-            {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
+            {isSubmitting ? 'Processing...' : `Pay with eSewa (${esewaMode})`}
           </button>
           <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
             {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
@@ -2759,6 +2889,7 @@ function CartCheckoutModal({
         </aside>
         <div className="cart-checkout-note">
           <p className="checkout-hint">{khaltiNote}</p>
+          <p className="checkout-hint">{esewaNote}</p>
         </div>
       </section>
     </div>

@@ -14,4 +14,8 @@ export type Bindings = {
   UPSTASH_REDIS_REST_TOKEN?: string
   KHALTI_TEST_SECRET_KEY?: string
   KHALTI_LIVE_SECRET_KEY?: string
+  ESEWA_TEST_SECRET_KEY?: string
+  ESEWA_LIVE_SECRET_KEY?: string
+  ESEWA_TEST_PRODUCT_CODE?: string
+  ESEWA_LIVE_PRODUCT_CODE?: string
 }

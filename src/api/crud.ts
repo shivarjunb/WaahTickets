@@ -80,6 +80,7 @@ type RailsConfigItem = {
   header_decor_image_url: string
 }
 type KhaltiMode = 'test' | 'live'
+type EsewaMode = 'test' | 'live'
 type PaymentSettingsData = {
   khalti_enabled: boolean
   khalti_mode: KhaltiMode
@@ -115,6 +116,15 @@ type KhaltiOrderGroupDraft = {
   order_coupon_id?: string
   order_coupon_discount_paisa?: number
   extra_email?: string
+}
+type EsewaSuccessPayload = {
+  transaction_code?: string
+  status?: string
+  total_amount?: string | number
+  transaction_uuid?: string
+  product_code?: string
+  signed_field_names?: string
+  signature?: string
 }
 
 export const crudRoutes = new Hono<{ Bindings: Bindings; Variables: { authScope: AuthScope } }>()
@@ -784,6 +794,198 @@ crudRoutes.post('/payments/khalti/initiate', async (c) => {
       payment_url: String(parsed.payment_url ?? ''),
       expires_at: String(parsed.expires_at ?? ''),
       expires_in: Number(parsed.expires_in ?? 0)
+    }
+  })
+})
+
+crudRoutes.post('/payments/esewa/initiate', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const amountPaisa = Number(payload.amount_paisa ?? 0)
+  if (!Number.isFinite(amountPaisa) || amountPaisa <= 0) {
+    return c.json({ error: 'amount_paisa must be a positive number.' }, 400)
+  }
+  const orderGroups = parseKhaltiOrderGroupsPayload(payload.order_groups)
+  if (!orderGroups.ok) {
+    return c.json({ error: orderGroups.error }, 400)
+  }
+  if (orderGroups.value.length === 0) {
+    return c.json({ error: 'order_groups is required.' }, 400)
+  }
+  const computedAmount = orderGroups.value.reduce((sum, group) => sum + group.total_amount_paisa, 0)
+  if (computedAmount !== Math.floor(amountPaisa)) {
+    return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
+  const settings = buildPaymentSettingsFromStored(stored, c.env, c.req.url)
+  const mode: EsewaMode = settings.khalti_mode === 'live' ? 'live' : 'test'
+  const productCode =
+    mode === 'live'
+      ? String(c.env.ESEWA_LIVE_PRODUCT_CODE ?? '').trim()
+      : String(c.env.ESEWA_TEST_PRODUCT_CODE ?? '').trim() || 'EPAYTEST'
+  const secretKey =
+    mode === 'live'
+      ? String(c.env.ESEWA_LIVE_SECRET_KEY ?? '').trim()
+      : String(c.env.ESEWA_TEST_SECRET_KEY ?? '').trim() || '8gBm/:&EnhH.1/q'
+  if (!productCode || !secretKey) {
+    return c.json({ error: `eSewa ${mode} credentials are not configured.` }, 409)
+  }
+
+  const totalAmount = (Math.floor(amountPaisa) / 100).toFixed(2)
+  const transactionUuid = `WAH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9-]/g, '-')
+  const signedFieldNames = 'total_amount,transaction_uuid,product_code'
+  const signature = await generateEsewaSignature(secretKey, signedFieldNames, {
+    total_amount: totalAmount,
+    transaction_uuid: transactionUuid,
+    product_code: productCode
+  })
+  const publicOrigin = buildPublicOrigin(new URL(c.req.url).origin)
+  const callbackBase = `${publicOrigin}/processpayment`
+  const formAction =
+    mode === 'live'
+      ? 'https://epay.esewa.com.np/api/epay/main/v2/form'
+      : 'https://rc-epay.esewa.com.np/api/epay/main/v2/form'
+
+  return c.json({
+    data: {
+      mode,
+      form_action: formAction,
+      fields: {
+        amount: totalAmount,
+        tax_amount: '0',
+        total_amount: totalAmount,
+        transaction_uuid: transactionUuid,
+        product_code: productCode,
+        product_service_charge: '0',
+        product_delivery_charge: '0',
+        success_url: callbackBase,
+        failure_url: callbackBase,
+        signed_field_names: signedFieldNames,
+        signature
+      }
+    }
+  })
+})
+
+crudRoutes.post('/payments/esewa/verify', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+  const scope = c.get('authScope')
+  if (!scope.userId) {
+    return c.json({ error: 'Authentication required.' }, 401)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+  const encodedData = String(payload.data ?? '').trim()
+  if (!encodedData) {
+    return c.json({ error: 'data is required.' }, 400)
+  }
+
+  let decoded: EsewaSuccessPayload
+  try {
+    decoded = JSON.parse(decodeBase64Utf8(encodedData)) as EsewaSuccessPayload
+  } catch {
+    return c.json({ error: 'Invalid eSewa callback payload.' }, 400)
+  }
+
+  const mode: EsewaMode = parseKhaltiMode(payload.mode) === 'live' ? 'live' : 'test'
+  const productCode =
+    mode === 'live'
+      ? String(c.env.ESEWA_LIVE_PRODUCT_CODE ?? '').trim()
+      : String(c.env.ESEWA_TEST_PRODUCT_CODE ?? '').trim() || 'EPAYTEST'
+  const secretKey =
+    mode === 'live'
+      ? String(c.env.ESEWA_LIVE_SECRET_KEY ?? '').trim()
+      : String(c.env.ESEWA_TEST_SECRET_KEY ?? '').trim() || '8gBm/:&EnhH.1/q'
+  if (!productCode || !secretKey) {
+    return c.json({ error: `eSewa ${mode} credentials are not configured.` }, 409)
+  }
+
+  const signedFieldNames = String(decoded.signed_field_names ?? '').trim()
+  const signature = String(decoded.signature ?? '').trim()
+  if (!signedFieldNames || !signature) {
+    return c.json({ error: 'Missing eSewa signature fields.' }, 400)
+  }
+  const signedData: Record<string, string> = {}
+  for (const field of signedFieldNames.split(',').map((entry) => entry.trim()).filter(Boolean)) {
+    const value = decoded[field as keyof EsewaSuccessPayload]
+    signedData[field] = String(value ?? '')
+  }
+  const generated = await generateEsewaSignature(secretKey, signedFieldNames, signedData)
+  if (generated !== signature) {
+    return c.json({ error: 'Invalid eSewa callback signature.' }, 409)
+  }
+
+  const transactionUuid = String(decoded.transaction_uuid ?? '').trim()
+  const totalAmountRaw = String(decoded.total_amount ?? '').trim()
+  const callbackStatus = String(decoded.status ?? '').trim().toUpperCase()
+  if (!transactionUuid || !totalAmountRaw) {
+    return c.json({ error: 'Missing transaction details in eSewa callback.' }, 400)
+  }
+  if (String(decoded.product_code ?? '').trim() !== productCode) {
+    return c.json({ error: 'eSewa product_code mismatch.' }, 409)
+  }
+
+  const statusUrlBase =
+    mode === 'live'
+      ? 'https://esewa.com.np/api/epay/transaction/status/'
+      : 'https://rc.esewa.com.np/api/epay/transaction/status/'
+  const statusUrl = new URL(statusUrlBase)
+  statusUrl.searchParams.set('product_code', productCode)
+  statusUrl.searchParams.set('total_amount', totalAmountRaw)
+  statusUrl.searchParams.set('transaction_uuid', transactionUuid)
+
+  const response = await fetch(statusUrl.toString(), { method: 'GET' })
+  const raw = await response.text()
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+  } catch {
+    parsed = {}
+  }
+  if (!response.ok) {
+    return c.json({ error: String(parsed.error_message ?? 'Unable to verify eSewa payment.') }, 502)
+  }
+
+  const verifiedStatus = String(parsed.status ?? '').trim().toUpperCase()
+  if (callbackStatus !== 'COMPLETE' || verifiedStatus !== 'COMPLETE') {
+    return c.json(
+      {
+        data: {
+          status: verifiedStatus || callbackStatus || 'UNKNOWN',
+          transaction_code: String(parsed.ref_id ?? decoded.transaction_code ?? '').trim()
+        }
+      },
+      409
+    )
+  }
+
+  return c.json({
+    data: {
+      status: 'COMPLETE',
+      transaction_uuid: transactionUuid,
+      transaction_code: String(parsed.ref_id ?? decoded.transaction_code ?? '').trim(),
+      total_amount: totalAmountRaw
     }
   })
 })
@@ -2257,6 +2459,43 @@ function buildPaymentSettingsFromStored(
     khalti_can_initiate: khaltiCanInitiate,
     khalti_runtime_note: runtimeNote
   }
+}
+
+async function generateEsewaSignature(
+  secretKey: string,
+  signedFieldNames: string,
+  values: Record<string, string>
+) {
+  const message = signedFieldNames
+    .split(',')
+    .map((field) => field.trim())
+    .filter(Boolean)
+    .map((field) => `${field}=${values[field] ?? ''}`)
+    .join(',')
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secretKey),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
+  return toBase64(new Uint8Array(signature))
+}
+
+function toBase64(bytes: Uint8Array) {
+  let binary = ''
+  for (let index = 0; index < bytes.byteLength; index += 1) {
+    binary += String.fromCharCode(bytes[index])
+  }
+  return btoa(binary)
+}
+
+function decodeBase64Utf8(value: string) {
+  const normalized = value.replace(/ /g, '+')
+  const binary = atob(normalized)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
 }
 
 function parseRailsAutoplayIntervalSeconds(raw: string | null) {

@@ -369,7 +369,10 @@ app.get('/api/public/payments/settings', async (c) => {
         khalti_mode: 'test',
         khalti_public_key: '',
         khalti_can_initiate: false,
-        khalti_runtime_note: 'Database binding is unavailable.'
+        khalti_runtime_note: 'Database binding is unavailable.',
+        esewa_mode: 'test',
+        esewa_can_initiate: false,
+        esewa_runtime_note: 'Database binding is unavailable.'
       }
     })
   }
@@ -393,6 +396,11 @@ app.get('/api/public/payments/settings', async (c) => {
   const testKeyConfigured = Boolean(c.env.KHALTI_TEST_SECRET_KEY?.trim())
   const liveKeyConfigured = Boolean(c.env.KHALTI_LIVE_SECRET_KEY?.trim())
   const canInitiate = khaltiEnabled && (mode === 'live' ? liveKeyConfigured : testKeyConfigured)
+  const esewaSecretConfigured =
+    mode === 'live' ? Boolean(c.env.ESEWA_LIVE_SECRET_KEY?.trim()) : Boolean(c.env.ESEWA_TEST_SECRET_KEY?.trim())
+  const esewaProductConfigured =
+    mode === 'live' ? Boolean(c.env.ESEWA_LIVE_PRODUCT_CODE?.trim()) : Boolean(c.env.ESEWA_TEST_PRODUCT_CODE?.trim())
+  const esewaCanInitiate = mode === 'test' ? true : esewaSecretConfigured && esewaProductConfigured
 
   return c.json({
     data: {
@@ -404,7 +412,15 @@ app.get('/api/public/payments/settings', async (c) => {
         ? 'Khalti is disabled by admin.'
         : !canInitiate
           ? `Khalti ${mode} key is not configured.`
-          : 'Khalti is ready.'
+          : 'Khalti is ready.',
+      esewa_mode: mode,
+      esewa_can_initiate: esewaCanInitiate,
+      esewa_runtime_note:
+        mode === 'test'
+          ? 'eSewa test mode is ready (defaults to EPAYTEST/test secret unless env overrides are set).'
+          : !esewaSecretConfigured || !esewaProductConfigured
+            ? 'eSewa live credentials are missing.'
+            : 'eSewa is ready.'
     }
   })
 })
