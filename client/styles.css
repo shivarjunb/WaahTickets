@@ -2730,6 +2730,38 @@ h1 {
   cursor: pointer;
 }
 
+.cart-hold-countdown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 118, 110, 0.24);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+}
+
+.cart-hold-countdown span {
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cart-hold-countdown strong {
+  font-family: var(--cart-heading-font);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.cart-hold-countdown.is-urgent {
+  border-color: rgba(185, 28, 28, 0.28);
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+}
+
 .cart-coupon-row {
   display: grid;
   grid-template-columns: 1fr auto;
