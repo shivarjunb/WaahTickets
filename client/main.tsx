@@ -172,6 +172,9 @@ const defaultAdminPaymentSettings: AdminPaymentSettingsData = {
   khalti_can_initiate: false,
   khalti_runtime_note: 'Khalti is not configured.'
 }
+const defaultCartSettingsData: CartSettingsData = {
+  allow_multiple_events: true
+}
 const eventImagePlaceholder = `data:image/svg+xml;utf8,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
     <defs>
@@ -620,6 +623,10 @@ type AdminPaymentSettingsData = {
   khalti_runtime_note: string
 }
 
+type CartSettingsData = {
+  allow_multiple_events: boolean
+}
+
 type GoogleAuthConfig = {
   configured: boolean
   redirect_uri: string | null
@@ -958,6 +965,9 @@ function PublicApp({
   const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [cartSettings, setCartSettings] = useState<CartSettingsData>(defaultCartSettingsData)
+  const [pendingSingleEventCartItem, setPendingSingleEventCartItem] = useState<CartItem | null>(null)
+  const [isSingleEventCartReplacing, setIsSingleEventCartReplacing] = useState(false)
   const [cartEventEmails, setCartEventEmails] = useState<Record<string, string>>({})
   const [cartEventCoupons, setCartEventCoupons] = useState<Record<string, string>>({})
   const [cartEventCouponMessages, setCartEventCouponMessages] = useState<Record<string, string>>({})
@@ -1203,10 +1213,11 @@ function PublicApp({
     async function loadPublicEvents() {
       setIsEventsLoading(true)
       try {
-        const [eventsResponse, railsResponse, paymentsResponse] = await Promise.all([
+        const [eventsResponse, railsResponse, paymentsResponse, cartSettingsResponse] = await Promise.all([
           fetchJson<ApiListResponse>('/api/public/events'),
           fetchJson<{ data?: PublicRailsSettingsData }>('/api/public/rails/settings').catch(() => null),
-          fetchJson<{ data?: PublicPaymentSettingsData }>('/api/public/payments/settings').catch(() => null)
+          fetchJson<{ data?: PublicPaymentSettingsData }>('/api/public/payments/settings').catch(() => null),
+          fetchJson<{ data?: CartSettingsData }>('/api/public/cart/settings').catch(() => null)
         ])
         const loadedEvents = ((eventsResponse.data.data ?? []) as PublicEvent[]).filter(
           (event) => event.status === 'published'
@@ -1220,6 +1231,9 @@ function PublicApp({
         }
         if (paymentsResponse?.data?.data) {
           setPublicPaymentSettings(paymentsResponse.data.data)
+        }
+        if (cartSettingsResponse?.data?.data) {
+          setCartSettings(normalizeCartSettings(cartSettingsResponse.data.data))
         }
         setSelectedEventId(defaultEvent?.id ?? null)
         // Preserve Khalti callback status messages when returning from payment.
@@ -2149,10 +2163,12 @@ function PublicApp({
           onChangeQuantity={(nextQuantity) => setQuantity(nextQuantity)}
           onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
           onClose={() => setIsCheckoutOpen(false)}
-          onReserve={() => {
-            void addCurrentSelectionToCart()
+          onReserve={async () => {
+            const added = await addCurrentSelectionToCart()
             setIsCheckoutOpen(false)
-            setIsCartOpen(true)
+            if (added) {
+              setIsCartOpen(true)
+            }
           }}
         />
       ) : null}
@@ -2169,6 +2185,16 @@ function PublicApp({
           }}
           onUpdateQuantity={(itemId, nextQty) => updateCartItemQuantity(itemId, nextQty)}
           onRemoveItem={(itemId) => removeCartItem(itemId)}
+        />
+      ) : null}
+
+      {pendingSingleEventCartItem ? (
+        <SingleEventCartConfirmModal
+          currentEventName={cartGroups[0]?.event_name ?? 'the current event'}
+          isReplacing={isSingleEventCartReplacing}
+          nextEventName={pendingSingleEventCartItem.event_name}
+          onCancel={() => setPendingSingleEventCartItem(null)}
+          onConfirm={() => void replaceCartWithPendingEvent()}
         />
       ) : null}
 
@@ -2240,15 +2266,15 @@ function PublicApp({
   )
 
   async function addCurrentSelectionToCart() {
-    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return
+    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return false
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
-      return
+      return false
     }
 
     const unitPrice = selectedTicketType.price_paisa ?? 0
     const key = `${selectedEvent.id}::${selectedTicketType.id}`
-    const nextItems = upsertCartItem(cartItems, {
+    const nextItem: CartItem = {
       id: key,
       event_id: selectedEvent.id,
       event_name: String(selectedEvent.name ?? 'Event'),
@@ -2259,11 +2285,49 @@ function PublicApp({
       quantity: Math.max(1, quantity),
       unit_price_paisa: unitPrice,
       currency: String(selectedTicketType.currency ?? 'NPR')
-    })
-    const reserved = await syncCartHold(nextItems)
-    if (!reserved) return
+    }
+    const nextItems = upsertCartItem(cartItems, nextItem)
+    if (!cartSettings.allow_multiple_events && cartHasDifferentEvent(cartItems, selectedEvent.id)) {
+      setPendingSingleEventCartItem(nextItem)
+      return false
+    }
+
+    return commitCartItems(nextItems, `${quantity} ticket(s) added to cart and held for 15 minutes.`)
+  }
+
+  async function commitCartItems(
+    nextItems: CartItem[],
+    successMessage?: string,
+    options: { preserveExpiresAt?: boolean } = {}
+  ) {
+    const reserved = await syncCartHold(nextItems, options)
+    if (!reserved) return false
     setCartItems(nextItems)
-    setPublicStatus(`${quantity} ticket(s) added to cart and held for 15 minutes.`)
+    if (successMessage) {
+      setPublicStatus(successMessage)
+    }
+    return true
+  }
+
+  async function replaceCartWithPendingEvent() {
+    if (!pendingSingleEventCartItem) return
+    setIsSingleEventCartReplacing(true)
+    try {
+      const nextItems = upsertCartItem([], pendingSingleEventCartItem)
+      const reserved = await commitCartItems(
+        nextItems,
+        `${pendingSingleEventCartItem.quantity} ticket(s) added to cart and held for 15 minutes.`
+      )
+      if (reserved) {
+        setPendingSingleEventCartItem(null)
+        setOrderCouponCode('')
+        setOrderCouponDiscount(null)
+        setOrderCouponMessage('')
+        setIsCartOpen(true)
+      }
+    } finally {
+      setIsSingleEventCartReplacing(false)
+    }
   }
 
   function upsertCartItem(current: CartItem[], nextItem: CartItem) {
@@ -2285,16 +2349,12 @@ function PublicApp({
     const nextItems = cartItems.map((item) =>
       item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item
     )
-    const reserved = await syncCartHold(nextItems)
-    if (!reserved) return
-    setCartItems(nextItems)
+    await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
   }
 
   async function removeCartItem(itemId: string) {
     const nextItems = cartItems.filter((item) => item.id !== itemId)
-    const reserved = await syncCartHold(nextItems)
-    if (!reserved) return
-    setCartItems(nextItems)
+    await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
   }
 
   function clearExpiredCartHold() {
@@ -2314,7 +2374,7 @@ function PublicApp({
     }
   }
 
-  async function syncCartHold(nextItems: CartItem[]) {
+  async function syncCartHold(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
     try {
       const storedToken = getStoredCartHoldToken()
       const holdToken = cartHoldToken || storedToken || crypto.randomUUID()
@@ -2325,6 +2385,7 @@ function PublicApp({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           hold_token: holdToken,
+          preserve_expires_at: Boolean(options.preserveExpiresAt),
           items: nextItems.map((item) => ({
             ticket_type_id: item.ticket_type_id,
             quantity: item.quantity
@@ -2839,6 +2900,50 @@ function EventDetailsModal({
   )
 }
 
+function SingleEventCartConfirmModal({
+  currentEventName,
+  nextEventName,
+  isReplacing,
+  onCancel,
+  onConfirm
+}: {
+  currentEventName: string
+  nextEventName: string
+  isReplacing: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal reservation-modal" role="dialog" aria-modal="true" aria-labelledby="single-event-cart-title">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Cart limit</p>
+            <h2 id="single-event-cart-title">Replace cart tickets?</h2>
+          </div>
+          <button aria-label="Close modal" disabled={isReplacing} type="button" onClick={onCancel}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-modal-body">
+          <p>
+            Your cart currently has tickets for {currentEventName}. To add tickets for {nextEventName}, tickets from
+            the other event need to be removed.
+          </p>
+        </div>
+        <footer className="record-modal-actions">
+          <button disabled={isReplacing} type="button" onClick={onCancel}>
+            Keep current cart
+          </button>
+          <button className="primary-admin-button" disabled={isReplacing} type="button" onClick={onConfirm}>
+            {isReplacing ? 'Replacing...' : 'Drop other tickets'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 function CheckoutModal({
   event,
   ticketTypes,
@@ -2866,7 +2971,7 @@ function CheckoutModal({
   onClose: () => void
   onChangeTicketType: (id: string) => void
   onChangeQuantity: (value: number) => void
-  onReserve: () => void
+  onReserve: () => void | Promise<void>
 }) {
   const canReserve = !reserveBlockedMessage
 
@@ -4161,7 +4266,7 @@ function AdminApp({
   const [isSettingsLoading, setIsSettingsLoading] = useState(false)
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
-  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'payments' | 'appearance' | 'grid'>('storage')
+  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'cart' | 'payments' | 'appearance' | 'grid'>('storage')
   const [railsSettingsData, setRailsSettingsData] = useState<AdminRailsSettingsData>(defaultRailsSettingsData)
   const [isRailsSettingsLoading, setIsRailsSettingsLoading] = useState(false)
   const [isRailsSettingsSaving, setIsRailsSettingsSaving] = useState(false)
@@ -4171,6 +4276,10 @@ function AdminApp({
   const [isPaymentSettingsLoading, setIsPaymentSettingsLoading] = useState(false)
   const [isPaymentSettingsSaving, setIsPaymentSettingsSaving] = useState(false)
   const [paymentSettingsError, setPaymentSettingsError] = useState('')
+  const [cartSettingsData, setCartSettingsData] = useState<CartSettingsData>(defaultCartSettingsData)
+  const [isCartSettingsLoading, setIsCartSettingsLoading] = useState(false)
+  const [isCartSettingsSaving, setIsCartSettingsSaving] = useState(false)
+  const [cartSettingsError, setCartSettingsError] = useState('')
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
@@ -4409,6 +4518,7 @@ function AdminApp({
     if (!(isSettingsView && isAdminUser && selectedWebRole === 'Admin')) return
     void loadR2Settings()
     void loadRailsSettings()
+    void loadCartSettings()
     void loadPaymentSettings()
   }, [isAdminUser, isSettingsView, selectedWebRole])
 
@@ -4583,6 +4693,44 @@ function AdminApp({
       setStatus(message)
     } finally {
       setIsRailsSettingsSaving(false)
+    }
+  }
+
+  async function loadCartSettings() {
+    setIsCartSettingsLoading(true)
+    setCartSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: CartSettingsData }>('/api/settings/cart')
+      setCartSettingsData(normalizeCartSettings(data.data))
+      setStatus('Loaded cart settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setCartSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsCartSettingsLoading(false)
+    }
+  }
+
+  async function saveCartSettings() {
+    setIsCartSettingsSaving(true)
+    setCartSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: CartSettingsData }>('/api/settings/cart', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allow_multiple_events: cartSettingsData.allow_multiple_events
+        })
+      })
+      setCartSettingsData(normalizeCartSettings(data.data))
+      setStatus('Cart settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setCartSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsCartSettingsSaving(false)
     }
   }
 
@@ -5619,6 +5767,13 @@ function AdminApp({
                   Rails
                 </button>
                 <button
+                  className={settingsSection === 'cart' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('cart')}
+                >
+                  Cart
+                </button>
+                <button
                   className={settingsSection === 'payments' ? 'active' : ''}
                   type="button"
                   onClick={() => setSettingsSection('payments')}
@@ -5973,6 +6128,56 @@ function AdminApp({
                 >
                   {isRailsSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
                   {isRailsSettingsSaving ? 'Saving...' : 'Save rails settings'}
+                </button>
+              </footer>
+            </section>
+            ) : null}
+
+            {settingsSection === 'cart' ? (
+            <section className="admin-card settings-card">
+              <div className="admin-card-header">
+                <div>
+                  <h2>Cart Settings</h2>
+                  <p>Control whether shoppers can mix tickets from multiple events in one cart.</p>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <label className="rail-autoplay-toggle">
+                  <span>Allow multiple events in cart</span>
+                  <input
+                    checked={cartSettingsData.allow_multiple_events}
+                    disabled={isCartSettingsLoading || isCartSettingsSaving}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setCartSettingsData((current) => ({
+                        ...current,
+                        allow_multiple_events: event.target.checked
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <p className="upload-hint">
+                When disabled, shoppers can keep tickets from one event only and will be asked before replacing their cart.
+              </p>
+              {cartSettingsError ? <p className="record-modal-error">{cartSettingsError}</p> : null}
+              <footer className="record-modal-actions">
+                <button
+                  disabled={isCartSettingsLoading || isCartSettingsSaving}
+                  type="button"
+                  onClick={() => void loadCartSettings()}
+                >
+                  <RefreshCw className={isCartSettingsLoading ? 'spinning-icon' : ''} size={17} />
+                  Reload cart
+                </button>
+                <button
+                  className="primary-admin-button"
+                  disabled={isCartSettingsLoading || isCartSettingsSaving}
+                  type="button"
+                  onClick={() => void saveCartSettings()}
+                >
+                  {isCartSettingsSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                  {isCartSettingsSaving ? 'Saving...' : 'Save cart settings'}
                 </button>
               </footer>
             </section>
@@ -7342,6 +7547,13 @@ function normalizeAdminPaymentSettings(value: unknown): AdminPaymentSettingsData
   }
 }
 
+function normalizeCartSettings(value: unknown): CartSettingsData {
+  const source = value && typeof value === 'object' ? (value as Partial<CartSettingsData>) : {}
+  return {
+    allow_multiple_events: typeof source.allow_multiple_events === 'boolean' ? source.allow_multiple_events : true
+  }
+}
+
 function buildConfiguredRails(events: PublicEvent[], configRails: RailConfigItem[]) {
   if (!Array.isArray(configRails) || configRails.length === 0) {
     return [] as Array<{
@@ -7501,6 +7713,10 @@ function groupCartItemsByEvent(items: CartItem[]) {
     })
   }
   return [...grouped.values()]
+}
+
+function cartHasDifferentEvent(items: CartItem[], eventId: string) {
+  return items.some((item) => item.event_id !== eventId)
 }
 
 function isCartItemLike(value: unknown): value is CartItem {

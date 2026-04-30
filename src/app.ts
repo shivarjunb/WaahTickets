@@ -48,6 +48,7 @@ const PAYMENT_SETTING_KEYS = [
   'payments_khalti_test_public_key',
   'payments_khalti_live_public_key'
 ] as const
+const CART_SETTING_KEYS = ['cart_allow_multiple_events'] as const
 
 export const app = new Hono<{ Bindings: Bindings }>()
 
@@ -258,6 +259,7 @@ app.post('/api/public/cart-holds', async (c) => {
   const rawToken = String(payload.hold_token ?? '').trim()
   const holdToken = rawToken && /^[a-zA-Z0-9._:-]{16,160}$/.test(rawToken) ? rawToken : crypto.randomUUID()
   const rawItems = Array.isArray(payload.items) ? payload.items : []
+  const preserveExpiresAt = payload.preserve_expires_at === true
   const requestedByTicketType = new Map<string, number>()
   for (const rawItem of rawItems) {
     if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue
@@ -273,7 +275,21 @@ app.post('/api/public/cart-holds', async (c) => {
 
   const now = new Date()
   const nowIso = now.toISOString()
-  const expiresAt = new Date(now.getTime() + CART_HOLD_MINUTES * 60 * 1000).toISOString()
+  const existingHold = preserveExpiresAt
+    ? await c.env.DB
+        .prepare(
+          `SELECT MIN(expires_at) AS expires_at
+           FROM cart_holds
+           WHERE hold_token = ?
+             AND expires_at > ?`
+        )
+        .bind(holdToken, nowIso)
+        .first<{ expires_at: string | null }>()
+    : null
+  const expiresAt =
+    typeof existingHold?.expires_at === 'string' && existingHold.expires_at
+      ? existingHold.expires_at
+      : new Date(now.getTime() + CART_HOLD_MINUTES * 60 * 1000).toISOString()
 
   if (requestedByTicketType.size === 0) {
     await c.env.DB.prepare('DELETE FROM cart_holds WHERE hold_token = ?').bind(holdToken).run()
@@ -415,6 +431,33 @@ app.get('/api/public/rails/settings', async (c) => {
       max_interval_seconds: MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS,
       filter_panel_eyebrow_text: filterPanelEyebrowText,
       rails
+    }
+  })
+})
+
+app.get('/api/public/cart/settings', async (c) => {
+  if (!c.env.DB) {
+    return c.json({
+      data: {
+        allow_multiple_events: true
+      }
+    })
+  }
+
+  await c.env.DB.prepare(APP_SETTINGS_TABLE_SQL).run()
+  const rows = await c.env.DB
+    .prepare(
+      `SELECT setting_key, setting_value
+       FROM app_settings
+       WHERE setting_key = ?`
+    )
+    .bind(...CART_SETTING_KEYS)
+    .all<{ setting_key: string; setting_value: string }>()
+  const settingsByKey = new Map(rows.results.map((row) => [row.setting_key, row.setting_value]))
+
+  return c.json({
+    data: {
+      allow_multiple_events: normalizeBoolean(settingsByKey.get('cart_allow_multiple_events') ?? null, true)
     }
   })
 })

@@ -52,6 +52,7 @@ const RAILS_SETTING_KEYS = [
   'rails_config_json',
   'rails_filter_panel_eyebrow_text'
 ] as const
+const CART_SETTING_KEYS = ['cart_allow_multiple_events'] as const
 const DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS = 9
 const MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS = 3
 const MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS = 30
@@ -71,6 +72,7 @@ const ORGANIZER_IMAGE_MIME_TYPES = new Set([
 type R2SettingKey = (typeof R2_SETTING_KEYS)[number]
 type PaymentSettingKey = (typeof PAYMENT_SETTING_KEYS)[number]
 type RailsSettingKey = (typeof RAILS_SETTING_KEYS)[number]
+type CartSettingKey = (typeof CART_SETTING_KEYS)[number]
 type RailsConfigItem = {
   id: string
   label: string
@@ -1541,6 +1543,70 @@ crudRoutes.get('/settings/payments', async (c) => {
   const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
   const settings = buildPaymentSettingsFromStored(stored, c.env, c.req.url)
   return c.json({ data: settings })
+})
+
+crudRoutes.get('/settings/cart', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, CART_SETTING_KEYS)
+  return c.json({
+    data: {
+      allow_multiple_events: normalizeBoolean(stored.cart_allow_multiple_events, true)
+    }
+  })
+})
+
+crudRoutes.put('/settings/cart', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Admin') {
+    return c.json({ error: 'Forbidden for this role.' }, 403)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  await ensureAppSettingsTable(db)
+  const now = new Date().toISOString()
+  const values: Record<CartSettingKey, string> = {
+    cart_allow_multiple_events: normalizeBoolean(payload.allow_multiple_events, true) ? '1' : '0'
+  }
+
+  for (const key of CART_SETTING_KEYS) {
+    await db
+      .prepare(
+        `INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(setting_key) DO UPDATE SET
+           setting_value = excluded.setting_value,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by`
+      )
+      .bind(key, values[key], now, scope.userId)
+      .run()
+  }
+
+  return c.json({
+    data: {
+      allow_multiple_events: normalizeBoolean(values.cart_allow_multiple_events, true),
+      updated_at: now
+    }
+  })
 })
 
 crudRoutes.put('/settings/payments', async (c) => {
