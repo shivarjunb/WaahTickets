@@ -131,6 +131,14 @@ type PurchasedTicketState = {
   lastLoadedAt: string
 }
 
+type EventTicketGroup = {
+  eventId: string
+  eventName: string
+  event: PublicEvent | null
+  eventStartAt: number | null
+  tickets: PurchasedTicket[]
+}
+
 type PendingKhaltiPayment = {
   pidx: string
   paymentUrl: string
@@ -227,6 +235,9 @@ export default function App() {
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
+  const [cartHoldRemainingMs, setCartHoldRemainingMs] = useState(0)
+  const [isUpdatingCartItemId, setIsUpdatingCartItemId] = useState('')
+  const [expandedTicketGroups, setExpandedTicketGroups] = useState<Record<string, boolean>>({})
   const [cartStatus, setCartStatus] = useState('')
   const [couponCodes, setCouponCodes] = useState<Record<string, string>>({})
   const [couponMessages, setCouponMessages] = useState<Record<string, string>>({})
@@ -702,15 +713,25 @@ export default function App() {
   }
 
   async function updateCartItemQuantity(itemId: string, nextQuantity: number) {
+    if (isUpdatingCartItemId) return
+    setIsUpdatingCartItemId(itemId)
     if (nextQuantity <= 0) {
-      await removeCartItem(itemId)
+      try {
+        await removeCartItem(itemId)
+      } finally {
+        setIsUpdatingCartItemId('')
+      }
       return
     }
 
     const nextItems = cartItems.map((item) =>
       item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item
     )
-    await commitCartItems(nextItems, { preserveExpiresAt: true })
+    try {
+      await commitCartItems(nextItems, { preserveExpiresAt: true })
+    } finally {
+      setIsUpdatingCartItemId('')
+    }
   }
 
   async function removeCartItem(itemId: string) {
@@ -1213,6 +1234,10 @@ export default function App() {
   const validatorAllowed = canUseValidator(session.user)
   const featuredDiscoveryEvents = (featuredEvents.length > 0 ? featuredEvents : events.items).slice(0, 6)
   const eventGroups = groupCartItemsByEvent(cartItems)
+  const groupedPurchasedTickets = useMemo(
+    () => groupTicketsByEvent(purchasedTickets.items, events.items),
+    [purchasedTickets.items, events.items]
+  )
   const cartSubtotalPaisa = cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
   const cartDiscountPaisa = Object.values(couponDiscounts).reduce((sum, item) => sum + item.discount, 0)
   const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartDiscountPaisa)
@@ -1228,6 +1253,22 @@ export default function App() {
     }, 5000)
     return () => clearInterval(timer)
   }, [rotatingFeaturedEvents.length])
+
+  useEffect(() => {
+    if (!cartHoldExpiresAt) {
+      setCartHoldRemainingMs(0)
+      return
+    }
+
+    const tick = () => {
+      const remaining = new Date(cartHoldExpiresAt).getTime() - Date.now()
+      setCartHoldRemainingMs(Math.max(0, remaining))
+    }
+
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [cartHoldExpiresAt])
 
   function navigateTo(view: MobileView) {
     if (view === 'tickets' && !session.user) {
@@ -1402,27 +1443,72 @@ export default function App() {
                 </View>
               ) : (
                 <View style={styles.stackSmall}>
-                  {purchasedTickets.items.map((ticket) => (
-                    <PurchasedTicketCard
-                      downloading={purchasedTickets.downloadingId === ticket.id}
-                      event={events.items.find((event) => event.id === ticket.event_id) ?? null}
-                      key={ticket.id}
-                      ticket={ticket}
-                      onDownload={() => void downloadTicketPdf(ticket)}
-                      onShowQr={() => {
-                        const qrValue = ticket.qr_code_value?.trim() ?? ''
-                        if (!qrValue) {
-                          setPurchasedTickets((current) => ({
-                            ...current,
-                            error: 'QR is not available for this ticket yet.'
-                          }))
-                          return
-                        }
-                        setActiveTicketQrValue(qrValue)
-                        setActiveTicketQrLabel(ticket.ticket_number?.trim() || ticket.id)
-                      }}
-                    />
-                  ))}
+                  {groupedPurchasedTickets.upcoming.length > 0 ? (
+                    <View style={styles.ticketSection}>
+                      <Text style={styles.ticketSectionTitle}>Upcoming events</Text>
+                      {groupedPurchasedTickets.upcoming.map((group, index) => (
+                        <EventTicketGroupCard
+                          apiBaseUrl={resolvedApiBaseUrl}
+                          key={`upcoming-${group.eventId || index}`}
+                          group={group}
+                          downloadingId={purchasedTickets.downloadingId}
+                          expanded={expandedTicketGroups[group.eventId] ?? true}
+                          onToggleExpand={() =>
+                            setExpandedTicketGroups((current) => ({
+                              ...current,
+                              [group.eventId]: !(current[group.eventId] ?? true)
+                            }))
+                          }
+                          onDownload={(ticket) => void downloadTicketPdf(ticket)}
+                          onShowQr={(ticket) => {
+                            const qrValue = ticket.qr_code_value?.trim() ?? ''
+                            if (!qrValue) {
+                              setPurchasedTickets((current) => ({
+                                ...current,
+                                error: 'QR is not available for this ticket yet.'
+                              }))
+                              return
+                            }
+                            setActiveTicketQrValue(qrValue)
+                            setActiveTicketQrLabel(ticket.ticket_number?.trim() || ticket.id)
+                          }}
+                        />
+                      ))}
+                    </View>
+                  ) : null}
+                  {groupedPurchasedTickets.past.length > 0 ? (
+                    <View style={styles.ticketSection}>
+                      <Text style={styles.ticketSectionTitle}>Past events</Text>
+                      {groupedPurchasedTickets.past.map((group, index) => (
+                        <EventTicketGroupCard
+                          apiBaseUrl={resolvedApiBaseUrl}
+                          key={`past-${group.eventId || index}`}
+                          group={group}
+                          downloadingId={purchasedTickets.downloadingId}
+                          expanded={expandedTicketGroups[group.eventId] ?? false}
+                          onToggleExpand={() =>
+                            setExpandedTicketGroups((current) => ({
+                              ...current,
+                              [group.eventId]: !(current[group.eventId] ?? false)
+                            }))
+                          }
+                          onDownload={(ticket) => void downloadTicketPdf(ticket)}
+                          onShowQr={(ticket) => {
+                            const qrValue = ticket.qr_code_value?.trim() ?? ''
+                            if (!qrValue) {
+                              setPurchasedTickets((current) => ({
+                                ...current,
+                                error: 'QR is not available for this ticket yet.'
+                              }))
+                              return
+                            }
+                            setActiveTicketQrValue(qrValue)
+                            setActiveTicketQrLabel(ticket.ticket_number?.trim() || ticket.id)
+                          }}
+                        />
+                      ))}
+                    </View>
+                  ) : null}
                   <View style={styles.inlineActions}>
                     <ActionButton label="Refresh tickets" secondary onPress={() => void loadPurchasedTickets()} />
                   </View>
@@ -1450,9 +1536,19 @@ export default function App() {
                             <Text style={styles.cartItemMeta}>{item.event_location_name}</Text>
                           </View>
                           <View style={styles.cartItemControls}>
-                            <MiniButton label="-" onPress={() => void updateCartItemQuantity(item.id, item.quantity - 1)} />
+                            <MiniButton
+                              label="-"
+                              disabled={Boolean(isUpdatingCartItemId)}
+                              loading={isUpdatingCartItemId === item.id}
+                              onPress={() => void updateCartItemQuantity(item.id, item.quantity - 1)}
+                            />
                             <Text style={styles.quantityValue}>{item.quantity}</Text>
-                            <MiniButton label="+" onPress={() => void updateCartItemQuantity(item.id, item.quantity + 1)} />
+                            <MiniButton
+                              label="+"
+                              disabled={Boolean(isUpdatingCartItemId)}
+                              loading={isUpdatingCartItemId === item.id}
+                              onPress={() => void updateCartItemQuantity(item.id, item.quantity + 1)}
+                            />
                           </View>
                           <Text style={styles.cartItemPrice}>{formatPrice(item.unit_price_paisa * item.quantity)}</Text>
                         </View>
@@ -1482,6 +1578,7 @@ export default function App() {
                   ))}
 
                   <View style={styles.summaryCard}>
+                    <LabelValue label="Hold time left" value={cartHoldRemainingMs > 0 ? formatCountdown(cartHoldRemainingMs) : 'Expired'} />
                     <LabelValue label="Hold expires" value={cartHoldExpiresAt ? formatEventDateFull(cartHoldExpiresAt) : 'Not reserved'} />
                     <LabelValue label="Subtotal" value={formatPrice(cartSubtotalPaisa)} />
                     <LabelValue label="Discounts" value={cartDiscountPaisa > 0 ? `-${formatPrice(cartDiscountPaisa)}` : 'NPR 0.00'} />
@@ -2152,6 +2249,62 @@ function PurchasedTicketCard({
   )
 }
 
+function EventTicketGroupCard({
+  apiBaseUrl,
+  group,
+  downloadingId,
+  expanded,
+  onToggleExpand,
+  onDownload,
+  onShowQr
+}: {
+  apiBaseUrl: string
+  group: EventTicketGroup
+  downloadingId: string
+  expanded: boolean
+  onToggleExpand: () => void
+  onDownload: (ticket: PurchasedTicket) => void
+  onShowQr: (ticket: PurchasedTicket) => void
+}) {
+  return (
+    <View style={styles.ticketEventGroupCard}>
+      <Pressable onPress={onToggleExpand} style={styles.ticketEventGroupHeader}>
+        <EventImage
+          apiBaseUrl={apiBaseUrl}
+          event={group.event}
+          fallbackIndex={0}
+          style={styles.ticketEventGroupImage}
+          showFallbackText={false}
+        />
+        <View style={styles.ticketEventGroupScrim} />
+        <View style={styles.ticketEventGroupCopy}>
+          <Text numberOfLines={2} style={styles.ticketEventGroupTitle}>{group.eventName}</Text>
+          <Text style={styles.ticketEventGroupMeta}>
+            {group.eventStartAt ? formatEventDateFull(new Date(group.eventStartAt).toISOString()) : 'Date to be announced'}
+          </Text>
+          <Text style={styles.ticketEventGroupMeta}>
+            {group.tickets.length} ticket{group.tickets.length === 1 ? '' : 's'} · {expanded ? 'Tap to collapse' : 'Tap to expand'}
+          </Text>
+        </View>
+      </Pressable>
+      {expanded ? (
+        <View style={styles.stackSmall}>
+          {group.tickets.map((ticket) => (
+            <PurchasedTicketCard
+              key={ticket.id}
+              downloading={downloadingId === ticket.id}
+              event={group.event}
+              ticket={ticket}
+              onDownload={() => onDownload(ticket)}
+              onShowQr={() => onShowQr(ticket)}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
 function TicketPickerModal({
   apiBaseUrl,
   cartCount,
@@ -2295,10 +2448,20 @@ function ActionButton({ label, onPress, secondary = false }: { label: string; on
   )
 }
 
-function MiniButton({ label, onPress }: { label: string; onPress: () => void }) {
+function MiniButton({
+  label,
+  onPress,
+  disabled = false,
+  loading = false
+}: {
+  label: string
+  onPress: () => void
+  disabled?: boolean
+  loading?: boolean
+}) {
   return (
-    <Pressable onPress={onPress} style={styles.miniButton}>
-      <Text style={styles.miniButtonLabel}>{label}</Text>
+    <Pressable disabled={disabled} onPress={onPress} style={[styles.miniButton, disabled ? styles.miniButtonDisabled : null]}>
+      {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.miniButtonLabel}>{label}</Text>}
     </Pressable>
   )
 }
@@ -2338,6 +2501,13 @@ function formatTimestamp(value: string) {
     month: 'short',
     day: 'numeric'
   }).format(new Date(value))
+}
+
+function formatCountdown(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
 function formatPrice(value?: number) {
@@ -2658,6 +2828,78 @@ function groupCartItemsByEvent(items: CartItem[]) {
   return [...groups.values()]
 }
 
+function groupTicketsByEvent(tickets: PurchasedTicket[], events: PublicEvent[]) {
+  const eventsById = new Map(events.map((event) => [event.id, event]))
+  const grouped = new Map<string, EventTicketGroup>()
+
+  for (const ticket of tickets) {
+    const eventId = (ticket.event_id ?? '').trim()
+    const mapKey = eventId || `eventless:${ticket.id}`
+    const existing = grouped.get(mapKey)
+    if (existing) {
+      existing.tickets.push(ticket)
+      continue
+    }
+
+    const event = eventId ? eventsById.get(eventId) ?? null : null
+    const eventName = ticket.event_name?.trim() || event?.name || 'Event'
+    const eventStartAt = resolveTicketEventTimestamp(ticket, event)
+    grouped.set(mapKey, {
+      eventId: eventId || mapKey,
+      eventName,
+      event,
+      eventStartAt,
+      tickets: [ticket]
+    })
+  }
+
+  const now = Date.now()
+  const upcoming: EventTicketGroup[] = []
+  const past: EventTicketGroup[] = []
+
+  for (const group of grouped.values()) {
+    if (group.eventStartAt !== null && group.eventStartAt >= now) {
+      upcoming.push(group)
+    } else {
+      past.push(group)
+    }
+  }
+
+  upcoming.sort((left, right) => {
+    const leftTime = left.eventStartAt ?? Number.POSITIVE_INFINITY
+    const rightTime = right.eventStartAt ?? Number.POSITIVE_INFINITY
+    return leftTime - rightTime
+  })
+
+  past.sort((left, right) => {
+    const leftTime = left.eventStartAt ?? 0
+    const rightTime = right.eventStartAt ?? 0
+    return rightTime - leftTime
+  })
+
+  for (const group of [...upcoming, ...past]) {
+    group.tickets.sort((left, right) => {
+      const leftTime = parseTimestamp(left.created_at) ?? 0
+      const rightTime = parseTimestamp(right.created_at) ?? 0
+      return rightTime - leftTime
+    })
+  }
+
+  return { upcoming, past }
+}
+
+function resolveTicketEventTimestamp(ticket: PurchasedTicket, event: PublicEvent | null) {
+  const direct = parseTimestamp(event?.start_datetime)
+  if (direct !== null) return direct
+  return parseTimestamp(ticket.created_at)
+}
+
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) return null
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : null
+}
+
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#0b1220' },
   root: { flex: 1 },
@@ -2814,6 +3056,7 @@ const styles = StyleSheet.create({
   actionButtonLabel: { color: '#fff7ed', fontSize: 14, fontWeight: '800' },
   actionButtonLabelSecondary: { color: '#9a3412' },
   miniButton: { minWidth: 32, minHeight: 32, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0f172a' },
+  miniButtonDisabled: { opacity: 0.6 },
   miniButtonLabel: { color: '#fff', fontSize: 16, fontWeight: '800' },
   cardHint: { color: '#64748b', fontSize: 13, lineHeight: 19 },
   mutedText: { color: '#64748b', fontSize: 14, lineHeight: 20 },
@@ -2877,6 +3120,15 @@ const styles = StyleSheet.create({
   purchasedTicketTitle: { color: '#0f172a', fontSize: 16, fontWeight: '800' },
   purchasedTicketMeta: { color: '#64748b', fontSize: 13, lineHeight: 18 },
   ticketStub: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffedd5' },
+  ticketSection: { gap: 10 },
+  ticketSectionTitle: { color: '#0f172a', fontSize: 16, fontWeight: '800' },
+  ticketEventGroupCard: { borderRadius: 18, padding: 12, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', gap: 12 },
+  ticketEventGroupHeader: { borderRadius: 14, overflow: 'hidden', minHeight: 168, justifyContent: 'flex-end', backgroundColor: '#17263d' },
+  ticketEventGroupImage: { position: 'absolute', width: '100%', height: '100%' },
+  ticketEventGroupScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.5)' },
+  ticketEventGroupCopy: { padding: 12, gap: 4 },
+  ticketEventGroupTitle: { color: '#ffffff', fontSize: 20, lineHeight: 25, fontWeight: '800' },
+  ticketEventGroupMeta: { color: '#e2e8f0', fontSize: 12, lineHeight: 17, fontWeight: '700' },
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(2,6,23,0.58)' },
   ticketModal: { maxHeight: '92%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 18, backgroundColor: '#fffaf5', gap: 14 },
   modalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
