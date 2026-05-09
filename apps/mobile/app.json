@@ -11,7 +11,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.waahtickets.mobile"
+      "bundleIdentifier": "com.waahtickets.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.waahtickets.mobile",

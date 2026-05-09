@@ -1259,7 +1259,7 @@ function PublicApp({
     const token = qrVerifyToken?.trim() ?? ''
     if (!token) return
     if (verifyHandledTokenRef.current === token) return
-    if (!user?.id || user.webrole !== 'Customers') {
+    if (!user?.id) {
       setPublicStatus('Sign in as the ticket owner to view this ticket.')
       return
     }
@@ -8081,8 +8081,7 @@ function hasAdminConsoleAccess(user: AuthUser) {
 }
 
 function hasCustomerTicketsAccess(user: AuthUser) {
-  const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
-  return ['customers', 'customer'].includes(role)
+  return Boolean(user?.id)
 }
 
 function formatMoney(paisa: number) {

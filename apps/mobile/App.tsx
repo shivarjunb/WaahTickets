@@ -192,6 +192,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<MobileView>('home')
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [isSessionRestored, setIsSessionRestored] = useState(false)
   const [session, setSession] = useState<MobileSessionState>(emptySession)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [events, setEvents] = useState<PublicEventState>(() => createInitialEventState())
@@ -249,6 +250,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!isSessionRestored) return
     void restorePendingKhaltiPayment()
     void handleIncomingUrl()
     const subscription = Linking.addEventListener('url', ({ url }) => {
@@ -257,7 +259,7 @@ export default function App() {
     return () => {
       subscription.remove()
     }
-  }, [])
+  }, [isSessionRestored, api])
 
   const api = useMemo(
     () =>
@@ -315,13 +317,16 @@ export default function App() {
   async function restoreSession() {
     try {
       const parsed = await readStoredMobileSession()
-      if (!parsed) return
-      setSession({
-        user: parsed.user ?? null,
-        tokens: parsed.tokens ?? null
-      })
+      if (parsed) {
+        setSession({
+          user: parsed.user ?? null,
+          tokens: parsed.tokens ?? null
+        })
+      }
     } catch {
       setSession(emptySession)
+    } finally {
+      setIsSessionRestored(true)
     }
   }
 

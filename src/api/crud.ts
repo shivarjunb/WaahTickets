@@ -2928,10 +2928,6 @@ crudRoutes.get('/mobile/tickets', async (c) => {
   }
 
   const scope = c.get('authScope')
-  if (scope.webrole !== 'Customers') {
-    return c.json({ error: 'Customer login is required.' }, 403)
-  }
-
   const limit = sanitizeInteger(c.req.query('limit'), 100, 1, 100)
   const offset = sanitizeInteger(c.req.query('offset'), 0, 0, 10000)
   const result = await db
