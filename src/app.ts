@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { publicAdsRoutes } from './api/ads.js'
 import { authRoutes, handleGoogleMobileStart } from './api/auth.js'
 import { crudRoutes, storefrontRoutes } from './api/crud.js'
 import { createCache } from './cache/upstash.js'
@@ -135,6 +136,8 @@ app.get('/api/mobile/khalti-return', (c) => {
 </html>`
   return c.html(html)
 })
+
+app.route('/api', publicAdsRoutes)
 
 app.get('/api/public/events', async (c) => {
   if (!c.env.DB) {

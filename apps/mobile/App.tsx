@@ -1392,6 +1392,10 @@ export default function App() {
                 <Text style={styles.mutedText}>No events match that search yet.</Text>
               ) : (
                 <View style={styles.railsStack}>
+                  {/* Ads integration note:
+                      Insert a future <InlineAdCard /> between these rails using
+                      GET /api/ads/placement/HOME_BETWEEN_RAILS?device=mobile&rail_index=N&ads_served=M.
+                      The backend selector already applies device rules, frequency, and page caps. */}
                   {eventRails.map((rail) => (
                     <View key={rail.id} style={styles.eventRail}>
                       <View style={styles.railHeader}>

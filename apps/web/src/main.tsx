@@ -48,6 +48,19 @@ import {
   X
 } from 'lucide-react'
 import jsQR from 'jsqr'
+import type { AdPlacement, AdRecord, AdSettings } from '@waahtickets/shared-types'
+import {
+  AdCampaignForm,
+  AdsSettingsForm,
+  AdsTable,
+  RailAd,
+  SidebarAd,
+  adDraftToPayload,
+  adPlacementOptions,
+  adRecordToDraft,
+  createEmptyAdDraft,
+  type AdDraft
+} from './ads-ui'
 import './styles.css'
 
 const fallbackResources = [
@@ -98,6 +111,7 @@ const adminResourceGroups = [
 
 const groupedAdminResources = new Set(adminResourceGroups.flatMap((group) => group.resources))
 const SETTINGS_VIEW = '__settings__'
+const ADS_VIEW = '__ads__'
 
 const featuredSlideImages = [
   'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
@@ -174,6 +188,18 @@ const defaultAdminPaymentSettings: AdminPaymentSettingsData = {
 }
 const defaultCartSettingsData: CartSettingsData = {
   allow_multiple_events: true
+}
+const defaultAdSettingsData: AdSettings = {
+  id: 'default',
+  ads_enabled: true,
+  web_ads_enabled: true,
+  mobile_ads_enabled: true,
+  default_ad_frequency: 3,
+  max_ads_per_page: 3,
+  fallback_ad_id: null,
+  created_at: '',
+  updated_at: '',
+  updated_by: null
 }
 const eventImagePlaceholder = `data:image/svg+xml;utf8,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
@@ -1983,6 +2009,9 @@ function PublicApp({
         ) : (
           <div className="events-sections" id="events">
             <div className="events-layout">
+              <div className="events-sidebar-column">
+                <SidebarAd adsServed={0} placement="WEB_LEFT_SIDEBAR" />
+              </div>
               <aside className="panel events-panel event-filter-panel">
                 <div className="section-heading">
                   <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
@@ -2027,6 +2056,11 @@ function PublicApp({
               </aside>
 
               <div className="events-rails-column">
+                {/* Additional placement hook notes:
+                    - EVENT_LIST_BETWEEN_RAILS maps to this storefront rail stack once list/detail pages are split.
+                    - EVENT_DETAIL_BETWEEN_RAILS should be inserted inside the event detail modal/content shell.
+                    - CHECKOUT_BETWEEN_RAILS should be inserted inside the checkout/cart modal flow.
+                    - ORGANIZER_PAGE_BETWEEN_RAILS should be inserted once the organizer page is extracted from the shared storefront shell. */}
                 {eventRails.length === 0 ? (
                   <section className="panel events-panel">
                     <div className="public-empty">
@@ -2034,8 +2068,9 @@ function PublicApp({
                     </div>
                   </section>
                 ) : (
-                  eventRails.map((rail) => (
-                    <section className="panel events-panel event-row-section" key={rail.id}>
+                  eventRails.map((rail, railIndex) => (
+                    <div className="event-rail-slot" key={rail.id}>
+                    <section className="panel events-panel event-row-section">
                   <header
                     className="event-rail-header section-heading"
                     style={{ ['--rail-accent-color' as string]: rail.accent_color }}
@@ -2159,8 +2194,18 @@ function PublicApp({
                     ))}
                   </div>
                     </section>
+                    <RailAd
+                      adsServed={railIndex}
+                      className="waah-rail-ad"
+                      placement="HOME_BETWEEN_RAILS"
+                      railIndex={railIndex + 1}
+                    />
+                    </div>
                   ))
                 )}
+              </div>
+              <div className="events-sidebar-column">
+                <SidebarAd adsServed={1} placement="WEB_RIGHT_SIDEBAR" />
               </div>
             </div>
           </div>
@@ -4289,7 +4334,7 @@ function AdminApp({
   const [isSettingsLoading, setIsSettingsLoading] = useState(false)
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
-  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'cart' | 'payments' | 'appearance' | 'grid'>('storage')
+  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'cart' | 'payments' | 'appearance' | 'grid' | 'ads'>('storage')
   const [railsSettingsData, setRailsSettingsData] = useState<AdminRailsSettingsData>(defaultRailsSettingsData)
   const [isRailsSettingsLoading, setIsRailsSettingsLoading] = useState(false)
   const [isRailsSettingsSaving, setIsRailsSettingsSaving] = useState(false)
@@ -4303,9 +4348,24 @@ function AdminApp({
   const [isCartSettingsLoading, setIsCartSettingsLoading] = useState(false)
   const [isCartSettingsSaving, setIsCartSettingsSaving] = useState(false)
   const [cartSettingsError, setCartSettingsError] = useState('')
+  const [adSettingsData, setAdSettingsData] = useState<AdSettings>(defaultAdSettingsData)
+  const [isAdSettingsLoading, setIsAdSettingsLoading] = useState(false)
+  const [isAdSettingsSaving, setIsAdSettingsSaving] = useState(false)
+  const [adSettingsError, setAdSettingsError] = useState('')
+  const [adsData, setAdsData] = useState<AdRecord[]>([])
+  const [isAdsLoading, setIsAdsLoading] = useState(false)
+  const [adsError, setAdsError] = useState('')
+  const [adSearch, setAdSearch] = useState('')
+  const [adPlacementFilter, setAdPlacementFilter] = useState('')
+  const [adStatusFilter, setAdStatusFilter] = useState('')
+  const [adDeviceFilter, setAdDeviceFilter] = useState('')
+  const [activeAdDraft, setActiveAdDraft] = useState<AdDraft | null>(null)
+  const [isAdSaving, setIsAdSaving] = useState(false)
+  const [adFormError, setAdFormError] = useState('')
   const [ticketQrModalValue, setTicketQrModalValue] = useState('')
   const [ticketQrModalLabel, setTicketQrModalLabel] = useState('')
   const isSettingsView = selectedResource === SETTINGS_VIEW
+  const isAdsView = selectedResource === ADS_VIEW
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
 
@@ -4433,9 +4493,16 @@ function AdminApp({
       setStatus('R2 settings')
       return
     }
+    if (isAdsView) {
+      setRecords([])
+      void loadAds()
+      setStatus('Ads management')
+      return
+    }
     void loadRecords(selectedResource, currentTablePage)
   }, [
     isSettingsView,
+    isAdsView,
     selectedResource,
     currentTablePage,
     tableRowsPerPage,
@@ -4443,7 +4510,11 @@ function AdminApp({
     filter,
     activeSort?.column,
     activeSort?.direction,
-    activeColumnFilterQueryKey
+    activeColumnFilterQueryKey,
+    adSearch,
+    adPlacementFilter,
+    adStatusFilter,
+    adDeviceFilter
   ])
 
   useEffect(() => {
@@ -4461,7 +4532,7 @@ function AdminApp({
   }, [records, selectedResource])
 
   useEffect(() => {
-    if (selectedResource === SETTINGS_VIEW) {
+    if (selectedResource === SETTINGS_VIEW || selectedResource === ADS_VIEW) {
       if (isAdminUser && selectedWebRole === 'Admin') {
         return
       }
@@ -4509,7 +4580,7 @@ function AdminApp({
   }, [subgridPage.menuItems, totalMenuSubgridPages])
 
   useEffect(() => {
-    if (isSettingsView) return
+    if (isSettingsView || isAdsView) return
     if (!isAdminUser || selectedWebRole !== 'Admin') return
     if (availableColumns.length === 0) return
     if (selectedColumnsByResource[selectedResource]?.length) return
@@ -4523,6 +4594,7 @@ function AdminApp({
     availableColumns,
     isAdminUser,
     isSettingsView,
+    isAdsView,
     selectedColumnsByResource,
     selectedResource,
     selectedWebRole
@@ -4545,6 +4617,8 @@ function AdminApp({
     void loadRailsSettings()
     void loadCartSettings()
     void loadPaymentSettings()
+    void loadAdSettings()
+    void loadAds()
   }, [isAdminUser, isSettingsView, selectedWebRole])
 
   async function loadR2Settings() {
@@ -4822,6 +4896,187 @@ function AdminApp({
       setStatus(message)
     } finally {
       setIsPaymentSettingsSaving(false)
+    }
+  }
+
+  async function loadAdSettings() {
+    setIsAdSettingsLoading(true)
+    setAdSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: AdSettings }>('/api/admin/ad-settings')
+      setAdSettingsData(data.data ?? defaultAdSettingsData)
+      setStatus('Loaded ad settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsAdSettingsLoading(false)
+    }
+  }
+
+  async function saveAdSettings() {
+    setIsAdSettingsSaving(true)
+    setAdSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: AdSettings }>('/api/admin/ad-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ads_enabled: adSettingsData.ads_enabled,
+          web_ads_enabled: adSettingsData.web_ads_enabled,
+          mobile_ads_enabled: adSettingsData.mobile_ads_enabled,
+          default_ad_frequency: adSettingsData.default_ad_frequency,
+          max_ads_per_page: adSettingsData.max_ads_per_page,
+          fallback_ad_id: adSettingsData.fallback_ad_id
+        })
+      })
+      setAdSettingsData(data.data ?? defaultAdSettingsData)
+      setStatus('Ads settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsAdSettingsSaving(false)
+    }
+  }
+
+  async function loadAds() {
+    if (!(isAdminUser && selectedWebRole === 'Admin')) return
+    setIsAdsLoading(true)
+    setAdsError('')
+    try {
+      const params = new URLSearchParams()
+      if (adSearch.trim()) params.set('q', adSearch.trim())
+      if (adPlacementFilter) params.set('placement', adPlacementFilter)
+      if (adStatusFilter) params.set('status', adStatusFilter)
+      if (adDeviceFilter) params.set('device_target', adDeviceFilter)
+      params.set('limit', '100')
+      const { data } = await fetchJson<{ data?: AdRecord[] }>(
+        `/api/admin/ads${params.toString() ? `?${params.toString()}` : ''}`
+      )
+      setAdsData(Array.isArray(data.data) ? data.data : [])
+      setStatus('Loaded ads')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdsError(message)
+      setStatus(message)
+    } finally {
+      setIsAdsLoading(false)
+    }
+  }
+
+  function openCreateAdForm() {
+    setAdFormError('')
+    setActiveAdDraft(createEmptyAdDraft())
+  }
+
+  function openEditAdForm(ad: AdRecord) {
+    setAdFormError('')
+    setActiveAdDraft(adRecordToDraft(ad))
+  }
+
+  async function saveAdCampaign() {
+    if (!activeAdDraft) return
+    const payload = adDraftToPayload(activeAdDraft)
+
+    if (!payload.name) {
+      const message = 'Ad name is required.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+    if (!payload.advertiser_name) {
+      const message = 'Advertiser name is required.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+    if (!payload.image_url || !isValidHttpUrl(payload.image_url)) {
+      const message = 'Image URL must be a valid http or https URL.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+    if (!payload.destination_url || !isValidHttpUrl(payload.destination_url)) {
+      const message = 'Destination URL must be a valid http or https URL.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+    if (!payload.start_date) {
+      const message = 'Start date is required.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+    if (payload.end_date && new Date(payload.end_date).getTime() < new Date(payload.start_date).getTime()) {
+      const message = 'End date must be after the start date.'
+      setAdFormError(message)
+      setStatus(message)
+      return
+    }
+
+    setIsAdSaving(true)
+    setAdFormError('')
+    try {
+      const url = activeAdDraft.id ? `/api/admin/ads/${activeAdDraft.id}` : '/api/admin/ads'
+      const method = activeAdDraft.id ? 'PUT' : 'POST'
+      await fetchJson<{ data: AdRecord }>(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      setActiveAdDraft(null)
+      setStatus(activeAdDraft.id ? 'Ad campaign updated' : 'Ad campaign created')
+      await loadAds()
+      await loadAdSettings()
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdFormError(message)
+      setStatus(message)
+    } finally {
+      setIsAdSaving(false)
+    }
+  }
+
+  async function updateAdStatus(ad: AdRecord, nextStatus: AdRecord['status']) {
+    setAdsError('')
+    try {
+      await fetchJson<{ data: AdRecord }>(`/api/admin/ads/${ad.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...ad,
+          status: nextStatus
+        })
+      })
+      setStatus(`Ad ${nextStatus === 'active' ? 'activated' : 'paused'}`)
+      await loadAds()
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdsError(message)
+      setStatus(message)
+    }
+  }
+
+  async function deleteAdCampaign(ad: AdRecord) {
+    setAdsError('')
+    try {
+      await fetchJson<{ data: AdRecord }>(`/api/admin/ads/${ad.id}`, {
+        method: 'DELETE'
+      })
+      setStatus('Ad deleted')
+      if (activeAdDraft?.id === ad.id) {
+        setActiveAdDraft(null)
+      }
+      await loadAds()
+      await loadAdSettings()
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdsError(message)
+      setStatus(message)
     }
   }
 
@@ -5734,7 +5989,7 @@ function AdminApp({
   }
 
   let adminMenuItemIndex = 0
-  const viewLabel = isSettingsView ? 'Settings' : formatResourceName(selectedResource)
+  const viewLabel = isSettingsView ? 'Settings' : isAdsView ? 'Ads' : formatResourceName(selectedResource)
 
   return (
     <div className={isSidebarCollapsed ? 'admin-app sidebar-collapsed' : 'admin-app'}>
@@ -5817,7 +6072,16 @@ function AdminApp({
           ))}
           {isAdminUser && selectedWebRole === 'Admin' ? (
             <section className="admin-menu-section" aria-label="Settings">
-              <div className="admin-menu-items" style={{ maxHeight: '46px' }}>
+              <div className="admin-menu-items" style={{ maxHeight: '92px' }}>
+                <button
+                  className={isAdsView ? 'active' : ''}
+                  data-label="Ads"
+                  type="button"
+                  onClick={() => setSelectedResource(ADS_VIEW)}
+                >
+                  <LayoutDashboard size={17} />
+                  <span>Ads</span>
+                </button>
                 <button
                   className={isSettingsView ? 'active' : ''}
                   data-label="Settings"
@@ -5916,6 +6180,13 @@ function AdminApp({
                   onClick={() => setSettingsSection('grid')}
                 >
                   Grid
+                </button>
+                <button
+                  className={settingsSection === 'ads' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('ads')}
+                >
+                  Ads
                 </button>
               </div>
             </section>
@@ -6567,7 +6838,71 @@ function AdminApp({
               </footer>
             </section>
             ) : null}
+
+            {settingsSection === 'ads' ? (
+            <AdsSettingsForm
+              ads={adsData}
+              error={adSettingsError}
+              isLoading={isAdSettingsLoading}
+              isSaving={isAdSettingsSaving}
+              settings={adSettingsData}
+              onChange={(patch) =>
+                setAdSettingsData((current) => ({
+                  ...current,
+                  ...patch
+                }))
+              }
+              onReload={() => {
+                void loadAdSettings()
+                void loadAds()
+              }}
+              onSave={() => void saveAdSettings()}
+            />
+            ) : null}
           </>
+        ) : isAdsView ? (
+          <div className="tw-grid tw-gap-6">
+            <AdsTable
+              ads={adsData}
+              deviceFilter={adDeviceFilter}
+              error={adsError}
+              isLoading={isAdsLoading}
+              placementFilter={adPlacementFilter}
+              search={adSearch}
+              statusFilter={adStatusFilter}
+              onActivate={(ad) => void updateAdStatus(ad, 'active')}
+              onCreate={openCreateAdForm}
+              onDelete={(ad) => void deleteAdCampaign(ad)}
+              onDeviceFilterChange={setAdDeviceFilter}
+              onEdit={openEditAdForm}
+              onPause={(ad) => void updateAdStatus(ad, 'paused')}
+              onPlacementFilterChange={setAdPlacementFilter}
+              onSearchChange={setAdSearch}
+              onStatusFilterChange={setAdStatusFilter}
+            />
+            {activeAdDraft ? (
+              <AdCampaignForm
+                error={adFormError}
+                isSaving={isAdSaving}
+                value={activeAdDraft}
+                onCancel={() => {
+                  setActiveAdDraft(null)
+                  setAdFormError('')
+                }}
+                onChange={(patch) =>
+                  setActiveAdDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          ...patch
+                        }
+                      : current
+                  )
+                }
+                onSubmit={() => void saveAdCampaign()}
+              />
+            ) : null}
+          </div>
         ) : (
           <>
             {!isCustomerRoleView ? (

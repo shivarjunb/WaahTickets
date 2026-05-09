@@ -1,4 +1,8 @@
 import type {
+  AdRecord,
+  AdSelectionResult,
+  AdSettings,
+  AdTrackingPayload,
   ApiEnvelope,
   ApiListEnvelope,
   AuthSessionPayload,
@@ -118,6 +122,69 @@ export function createApiClient(options: ApiClientOptions) {
     },
     getPublicRailsSettings() {
       return request<PublicRailsSettings>('/api/public/rails/settings')
+    },
+    getAdminAdSettings() {
+      return request<AdSettings>('/api/admin/ad-settings')
+    },
+    updateAdminAdSettings(body: Partial<AdSettings>) {
+      return request<AdSettings>('/api/admin/ad-settings', withJsonBody(body as JsonBody, { method: 'PUT' }))
+    },
+    listAdminAds(query?: {
+      q?: string
+      placement?: string
+      status?: string
+      device_target?: string
+      limit?: number
+      offset?: number
+    }) {
+      const params = new URLSearchParams()
+      if (query?.q) params.set('q', query.q)
+      if (query?.placement) params.set('placement', query.placement)
+      if (query?.status) params.set('status', query.status)
+      if (query?.device_target) params.set('device_target', query.device_target)
+      if (typeof query?.limit === 'number') params.set('limit', String(query.limit))
+      if (typeof query?.offset === 'number') params.set('offset', String(query.offset))
+      const suffix = params.toString()
+      return fetchJson<ApiListEnvelope<AdRecord>>(`/api/admin/ads${suffix ? `?${suffix}` : ''}`)
+    },
+    createAdminAd(body: Partial<AdRecord>) {
+      return request<AdRecord>('/api/admin/ads', withJsonBody(body as JsonBody, { method: 'POST' }))
+    },
+    getAdminAd(id: string) {
+      return request<AdRecord>(`/api/admin/ads/${encodeURIComponent(id)}`)
+    },
+    updateAdminAd(id: string, body: Partial<AdRecord>) {
+      return request<AdRecord>(`/api/admin/ads/${encodeURIComponent(id)}`, withJsonBody(body as JsonBody, { method: 'PUT' }))
+    },
+    deleteAdminAd(id: string) {
+      return request<AdRecord>(`/api/admin/ads/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+    getPlacementAd(query: {
+      placement: string
+      device: 'web' | 'mobile'
+      page_url?: string
+      rail_index?: number
+      ads_served?: number
+    }) {
+      const params = new URLSearchParams({ device: query.device })
+      if (query.page_url) params.set('page_url', query.page_url)
+      if (typeof query.rail_index === 'number') params.set('rail_index', String(query.rail_index))
+      if (typeof query.ads_served === 'number') params.set('ads_served', String(query.ads_served))
+      return request<AdSelectionResult>(
+        `/api/ads/placement/${encodeURIComponent(query.placement)}?${params.toString()}`
+      )
+    },
+    trackAdImpression(id: string, body: AdTrackingPayload) {
+      return request<Record<string, unknown>>(
+        `/api/ads/${encodeURIComponent(id)}/impression`,
+        withJsonBody(body as JsonBody, { method: 'POST' })
+      )
+    },
+    trackAdClick(id: string, body: AdTrackingPayload) {
+      return request<Record<string, unknown>>(
+        `/api/ads/${encodeURIComponent(id)}/click`,
+        withJsonBody(body as JsonBody, { method: 'POST' })
+      )
     },
     listMyTickets() {
       return fetchJson<ApiListEnvelope<Record<string, unknown>>>('/api/mobile/tickets?limit=100')

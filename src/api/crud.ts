@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { adminAdsRoutes } from './ads.js'
 import { getGuestCheckoutSession } from '../auth/guest-checkout.js'
 import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
@@ -1212,6 +1213,8 @@ crudRoutes.use('*', async (c, next) => {
 
   await next()
 })
+
+crudRoutes.route('/admin', adminAdsRoutes)
 
 crudRoutes.post('/tickets/redeem', async (c) => {
   const db = getDatabase(c.env)
