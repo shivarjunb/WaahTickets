@@ -5,3 +5,4 @@ dist
 .wrangler/
 secrets.toml
 .DS_Store
+apps/mobile/.expo/*

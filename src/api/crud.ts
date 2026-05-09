@@ -3133,7 +3133,8 @@ crudRoutes.get('/:resource', async (c) => {
     return missingDatabaseResponse(c)
   }
   const scope = c.get('authScope')
-  const accessPolicy = buildAccessPolicy(table.table, scope)
+  const accessScope = getRequestAccessScope(c, scope)
+  const accessPolicy = buildAccessPolicy(table.table, accessScope)
   if (!accessPolicy.allowed) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
@@ -3142,7 +3143,7 @@ crudRoutes.get('/:resource', async (c) => {
   const queryEntries = Object.entries(c.req.query()).sort(([left], [right]) => left.localeCompare(right))
   const queryString = new URLSearchParams(queryEntries).toString()
   const resourceVersion = await cache.getResourceVersion(table.table)
-  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(scope)}:list:${queryString}`
+  const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(accessScope)}:list:${queryString}`
   const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number; has_more: boolean } }>(
     cacheKey
   )
@@ -3342,7 +3343,8 @@ crudRoutes.get('/:resource/:id', async (c) => {
     return missingDatabaseResponse(c)
   }
   const scope = c.get('authScope')
-  const accessPolicy = buildAccessPolicy(table.table, scope)
+  const accessScope = getRequestAccessScope(c, scope)
+  const accessPolicy = buildAccessPolicy(table.table, accessScope)
   if (!accessPolicy.allowed) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
@@ -3384,11 +3386,12 @@ crudRoutes.patch('/:resource/:id', async (c) => {
     return missingDatabaseResponse(c)
   }
   const scope = c.get('authScope')
-  const accessPolicy = buildAccessPolicy(table.table, scope)
+  const accessScope = getRequestAccessScope(c, scope)
+  const accessPolicy = buildAccessPolicy(table.table, accessScope)
   if (!accessPolicy.allowed) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
-  if (!canMutateResource(scope, table.table, 'patch')) {
+  if (!canMutateResource(accessScope, table.table, 'patch')) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
 
@@ -3452,11 +3455,12 @@ crudRoutes.delete('/:resource/:id', async (c) => {
     return missingDatabaseResponse(c)
   }
   const scope = c.get('authScope')
-  const accessPolicy = buildAccessPolicy(table.table, scope)
+  const accessScope = getRequestAccessScope(c, scope)
+  const accessPolicy = buildAccessPolicy(table.table, accessScope)
   if (!accessPolicy.allowed) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
-  if (!canMutateResource(scope, table.table, 'delete')) {
+  if (!canMutateResource(accessScope, table.table, 'delete')) {
     return c.json({ error: 'Forbidden for this role.' }, 403)
   }
 
@@ -4578,6 +4582,14 @@ function getScopeCacheKey(scope: AuthScope) {
 
 function isTableVisibleForScope(tableName: string, scope: AuthScope) {
   return buildAccessPolicy(tableName, scope).allowed
+}
+
+function getRequestAccessScope(c: AppContext, scope: AuthScope): AuthScope {
+  if (scope.webrole === 'TicketValidator' && c.req.query('view_as') === 'Customers') {
+    return { ...scope, webrole: 'Customers', organizationIds: [], organizationAdminIds: [] }
+  }
+
+  return scope
 }
 
 function canMutateResource(scope: AuthScope, tableName: string, action: 'patch' | 'delete') {

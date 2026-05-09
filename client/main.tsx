@@ -779,7 +779,7 @@ function App() {
 
           user.is_active === false || !user.is_email_verified ? (
             <AccountAccessBlocked user={user} onLogout={logout} />
-          ) : user.webrole === 'TicketValidator' || (isValidatorRoute && canAccessValidator) ? (
+          ) : isValidatorRoute && canAccessValidator ? (
             <TicketValidatorApp
               initialQrToken={null}
               user={user}
@@ -4183,7 +4183,7 @@ function AdminApp({
   const [resources, setResources] = useState(fallbackResources)
   const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
   const isAdminUser = user?.webrole === 'Admin'
-  const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(user?.webrole ?? 'Customers')
+  const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(getDefaultWebRoleView(user))
   const [selectedResource, setSelectedResource] = useState('events')
   const [records, setRecords] = useState<ApiRecord[]>([])
   const [webRoleUsers, setWebRoleUsers] = useState<ApiRecord[]>([])
@@ -4283,6 +4283,8 @@ function AdminApp({
   const tableRowsPerPage = subgridRowsPerPage
   const currentTablePage = Math.max(1, tablePageByResource[selectedResource] ?? 1)
   const currentTableHasMore = tableHasMoreByResource[selectedResource] ?? false
+  const isCustomerRoleOverride = user?.webrole === 'TicketValidator' && selectedWebRole === 'Customers'
+  const canOpenTicketValidation = hasTicketValidationAccess(user)
   const webRoleUsersForSelectedRole = useMemo(
     () => webRoleUsers.filter((item) => String(item.web_role_id ?? '') === selectedWebRoleId),
     [selectedWebRoleId, webRoleUsers]
@@ -4385,7 +4387,8 @@ function AdminApp({
     filter,
     activeSort?.column,
     activeSort?.direction,
-    activeColumnFilterQueryKey
+    activeColumnFilterQueryKey,
+    isCustomerRoleOverride
   ])
 
   useEffect(() => {
@@ -4472,7 +4475,7 @@ function AdminApp({
 
   useEffect(() => {
     if (user?.webrole && !isAdminUser) {
-      setSelectedWebRole(user.webrole)
+      setSelectedWebRole(getDefaultWebRoleView(user))
     }
   }, [isAdminUser, user?.webrole])
 
@@ -4908,6 +4911,9 @@ function AdminApp({
       const query = new URLSearchParams()
       query.set('limit', String(tableRowsPerPage))
       query.set('offset', String(Math.max(0, (page - 1) * tableRowsPerPage)))
+      if (isCustomerRoleOverride) {
+        query.set('view_as', 'Customers')
+      }
 
       const sortState = tableSortByResource[resource]
       if (sortState?.column) {
@@ -5399,10 +5405,11 @@ function AdminApp({
     if (selectedResource === 'events') {
       delete body.location_template_id
     }
-    const url =
+    const baseUrl =
       modalMode === 'edit' && selectedRecord?.id
         ? `/api/${selectedResource}/${selectedRecord.id}`
         : `/api/${selectedResource}`
+    const url = isCustomerRoleOverride ? `${baseUrl}?view_as=Customers` : baseUrl
     const method = modalMode === 'edit' ? 'PATCH' : 'POST'
 
     setRecordError('')
@@ -5792,7 +5799,7 @@ function AdminApp({
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
-            {selectedWebRole !== 'Customers' ? (
+            {canOpenTicketValidation ? (
               <a className="admin-link-button" href="/admin/validator">
                 <ScanLine size={17} />
                 Ticket validation
@@ -8355,6 +8362,15 @@ function formatEventRailLabel(value: Date) {
 function hasAdminConsoleAccess(user: AuthUser) {
   const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
   return ['admin', 'organizations', 'organizer', 'organisation', 'organisations', 'ticketvalidator', 'ticket_validator'].includes(role)
+}
+
+function hasTicketValidationAccess(user: AuthUser) {
+  const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
+  return ['admin', 'organizations', 'organizer', 'organisation', 'organisations', 'ticketvalidator', 'ticket_validator'].includes(role)
+}
+
+function getDefaultWebRoleView(user: AuthUser): WebRoleName {
+  return user?.webrole === 'TicketValidator' ? 'Customers' : user?.webrole ?? 'Customers'
 }
 
 function hasCustomerTicketsAccess(user: AuthUser) {
