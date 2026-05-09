@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { authRoutes } from './api/auth.js'
+import { authRoutes, handleGoogleMobileStart } from './api/auth.js'
 import { crudRoutes, storefrontRoutes } from './api/crud.js'
 import { createCache } from './cache/upstash.js'
 import type { Bindings } from './types/bindings.js'
@@ -95,6 +95,45 @@ app.post('/processpayment', async (c) => {
 
   const suffix = query.toString()
   return c.redirect(`/processpayment${suffix ? `?${suffix}` : ''}`, 303)
+})
+
+app.get('/api/mobile/khalti-return', (c) => {
+  const currentUrl = new URL(c.req.url)
+  const redirectUri = currentUrl.searchParams.get('redirect_uri')?.trim() ?? ''
+  if (!redirectUri) {
+    return c.text('Missing redirect_uri.', 400)
+  }
+
+  let target: URL
+  try {
+    target = new URL(redirectUri)
+  } catch {
+    return c.text('Invalid redirect_uri.', 400)
+  }
+
+  for (const [key, value] of currentUrl.searchParams.entries()) {
+    if (key === 'redirect_uri') continue
+    target.searchParams.set(key, value)
+  }
+
+  const targetUrl = target.toString()
+  const escapedTargetUrl = targetUrl.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Returning to WaahTickets</title>
+  </head>
+  <body style="font-family: sans-serif; padding: 24px;">
+    <p>Returning to WaahTickets...</p>
+    <p><a href="${escapedTargetUrl}">Open the app</a></p>
+    <script>
+      window.location.replace(${JSON.stringify(targetUrl)});
+    </script>
+  </body>
+</html>`
+  return c.html(html)
 })
 
 app.get('/api/public/events', async (c) => {
@@ -683,6 +722,7 @@ app.get('/api/cache/status', async (c) => {
   })
 })
 
+app.get('/api/auth/google/mobile/start', handleGoogleMobileStart)
 app.route('/api/auth', authRoutes)
 app.route('/api/storefront', storefrontRoutes)
 app.route('/api', crudRoutes)

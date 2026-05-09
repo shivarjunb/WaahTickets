@@ -1,4 +1,124 @@
-import '../apps/web/src/main'
+import { StrictMode, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { createRoot } from 'react-dom/client'
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Download,
+  BarChart3,
+  Bell,
+  Building2,
+  CalendarDays,
+  Camera,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CreditCard,
+  Database,
+  Edit3,
+  Eye,
+  FileText,
+  FilterX,
+  Home,
+  LayoutDashboard,
+  LogIn,
+  LogOut,
+  Mail,
+  Moon,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  ScanLine,
+  Settings2,
+  ShieldCheck,
+  ShoppingCart,
+  SquareMinus,
+  SquarePlus,
+  Sun,
+  Star,
+  Ticket,
+  Trash2,
+  Upload,
+  AlertTriangle,
+  UserCog,
+  Users,
+  X
+} from 'lucide-react'
+import jsQR from 'jsqr'
+import './styles.css'
+
+const fallbackResources = [
+  'users',
+  'customers',
+  'web_roles',
+  'user_web_roles',
+  'web_role_menu_items',
+  'organizations',
+  'organization_users',
+  'files',
+  'events',
+  'event_locations',
+  'ticket_types',
+  'orders',
+  'order_items',
+  'payments',
+  'tickets',
+  'messages',
+  'notification_queue',
+  'ticket_scans',
+  'coupons',
+  'coupon_redemptions'
+]
+
+const adminResourceGroups = [
+  {
+    label: 'People & access',
+    resources: ['users', 'customers', 'web_roles', 'user_web_roles', 'web_role_menu_items']
+  },
+  {
+    label: 'Organizations',
+    resources: ['organizations', 'organization_users']
+  },
+  {
+    label: 'Event setup',
+    resources: ['events', 'event_locations', 'ticket_types', 'tickets', 'ticket_scans']
+  },
+  {
+    label: 'Sales',
+    resources: ['orders', 'order_items', 'payments', 'coupons', 'coupon_redemptions']
+  },
+  {
+    label: 'Content & messaging',
+    resources: ['files', 'messages', 'notification_queue']
+  }
+]
+
+const groupedAdminResources = new Set(adminResourceGroups.flatMap((group) => group.resources))
+const SETTINGS_VIEW = '__settings__'
+
+const featuredSlideImages = [
+  'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
+  'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=1600&q=80',
+  'https://images.unsplash.com/photo-1429962714451-bb934ecdc4ec?auto=format&fit=crop&w=1600&q=80'
+]
+
+type ButtonColorPreset = {
+  id: string
+  name: string
+  primary: string
+  secondary: string
+  text: string
+}
+
+type ButtonColorTheme = {
+  presetId: string
+  primary: string
+  secondary: string
+  text: string
+}
 
 const buttonColorPresets: ButtonColorPreset[] = [
   { id: 'terracotta-sage', name: 'Terracotta Sage', primary: '#b56d4a', secondary: '#8a4930', text: '#fff7ef' },
@@ -284,15 +404,9 @@ type CheckoutSubmissionSnapshot = {
   cartItems: CartItem[]
   cartEventEmails: Record<string, string>
   cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
-  orderCouponDiscount: OrderCouponDiscount | null
+  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
   order_groups?: KhaltiCheckoutOrderGroup[]
   guest_checkout_identity?: GuestCheckoutIdentity | null
-}
-
-type OrderCouponDiscount = {
-  code: string
-  totalDiscount: number
-  perEvent: Record<string, { couponId: string; discount: number }>
 }
 
 type GuestCheckoutContact = {
@@ -860,7 +974,7 @@ function PublicApp({
   const [cartEventCouponDiscounts, setCartEventCouponDiscounts] = useState<Record<string, { couponId: string; discount: number }>>({})
   const [orderCouponCode, setOrderCouponCode] = useState('')
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
-  const [orderCouponDiscount, setOrderCouponDiscount] = useState<OrderCouponDiscount | null>(null)
+  const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
   const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(() => {
     if (typeof window === 'undefined') {
       return { first_name: '', last_name: '', email: '', phone_number: '' }
@@ -991,7 +1105,7 @@ function PublicApp({
     () => Object.values(cartEventCouponDiscounts).reduce((sum, item) => sum + item.discount, 0),
     [cartEventCouponDiscounts]
   )
-  const cartOrderDiscount = orderCouponDiscount?.totalDiscount ?? 0
+  const cartOrderDiscount = orderCouponDiscount?.discount ?? 0
   const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartEventDiscountTotal - cartOrderDiscount)
   const cartItemCount = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.quantity, 0),
@@ -1363,7 +1477,7 @@ function PublicApp({
       cartEventCouponMessages: Record<string, string>
       cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
       orderCouponCode: string
-      orderCouponDiscount: OrderCouponDiscount | null
+      orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
       orderCouponMessage: string
       order_groups: KhaltiCheckoutOrderGroup[]
       pidx?: string
@@ -2311,7 +2425,6 @@ function PublicApp({
       const eventCoupon = cartEventCouponDiscounts[group.event_id]
       const eventDiscount = eventCoupon?.discount ?? 0
       const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, orderCouponDiscount)
-      const orderCouponForEvent = orderCouponDiscount?.perEvent[group.event_id]
       const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
       const total = Math.max(0, subtotal - totalDiscount)
       const currency = group.items[0]?.currency ?? 'NPR'
@@ -2334,8 +2447,14 @@ function PublicApp({
         })),
         event_coupon_id: eventCoupon?.couponId,
         event_coupon_discount_paisa: eventDiscount,
-        order_coupon_id: orderCouponForEvent && orderDiscountShare > 0 ? orderCouponForEvent.couponId : undefined,
-        order_coupon_discount_paisa: orderCouponForEvent && orderDiscountShare > 0 ? orderDiscountShare : 0,
+        order_coupon_id:
+          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
+            ? orderCouponDiscount.couponId
+            : undefined,
+        order_coupon_discount_paisa:
+          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
+            ? orderDiscountShare
+            : 0,
         extra_email: (cartEventEmails[group.event_id] ?? '').trim() || undefined
       }
       return draft
@@ -2677,8 +2796,7 @@ function PublicApp({
       return
     }
 
-    const perEvent: Record<string, { couponId: string; discount: number }> = {}
-    let totalDiscount = 0
+    let best: { couponId: string; eventId: string; discount: number } | null = null
     const failures: string[] = []
 
     for (const group of cartGroups) {
@@ -2695,35 +2813,26 @@ function PublicApp({
           })
         })
         if (!data.valid || !data.data) continue
-        perEvent[group.event_id] = {
-          couponId: data.data.coupon_id,
-          discount: data.data.discount_amount_paisa
+        if (!best || data.data.discount_amount_paisa > best.discount) {
+          best = {
+            couponId: data.data.coupon_id,
+            eventId: group.event_id,
+            discount: data.data.discount_amount_paisa
+          }
         }
-        totalDiscount += data.data.discount_amount_paisa
       } catch (error) {
         failures.push(getErrorMessage(error))
       }
     }
 
-    const eligibleGroupCount = cartGroups.reduce(
-      (count, group) => count + ((eventSubtotals[group.event_id] ?? 0) > 0 ? 1 : 0),
-      0
-    )
-
-    if (Object.keys(perEvent).length !== eligibleGroupCount || totalDiscount <= 0) {
+    if (!best) {
       setOrderCouponDiscount(null)
-      setOrderCouponMessage(
-        failures[0] ?? 'Order-level coupon must be a global code valid for every event in your cart.'
-      )
+      setOrderCouponMessage(failures[0] ?? 'Order-level coupon is invalid for the events in your cart.')
       return
     }
 
-    setOrderCouponDiscount({
-      code,
-      totalDiscount,
-      perEvent
-    })
-    setOrderCouponMessage(`Order coupon applied: -${formatMoney(totalDiscount)}`)
+    setOrderCouponDiscount(best)
+    setOrderCouponMessage(`Order coupon applied: -${formatMoney(best.discount)}`)
   }
 
   function getReserveBlockedMessage() {
@@ -3072,7 +3181,7 @@ function CartCheckoutModal({
   eventCouponMessages: Record<string, string>
   eventCouponDiscounts: Record<string, { couponId: string; discount: number }>
   orderCouponCode: string
-  orderCouponDiscount: OrderCouponDiscount | null
+  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
   orderCouponMessage: string
   guestCheckoutContact: GuestCheckoutContact
   subtotalPaisa: number
@@ -3214,7 +3323,7 @@ function CartCheckoutModal({
               {orderCouponDiscount ? (
                 <div className="checkout-line">
                   <span>Order-level discount</span>
-                  <strong>-{formatMoney(orderCouponDiscount.totalDiscount)}</strong>
+                  <strong>-{formatMoney(orderCouponDiscount.discount)}</strong>
                 </div>
                 ) : null}
             </fieldset>
@@ -7632,10 +7741,10 @@ function isCartItemLike(value: unknown): value is CartItem {
 function allocateOrderDiscountShare(
   eventId: string,
   groups: Array<{ event_id: string; items: CartItem[] }>,
-  orderDiscount: OrderCouponDiscount | null
+  orderDiscount: { couponId: string; eventId: string; discount: number } | null
 ) {
-  if (!orderDiscount || orderDiscount.totalDiscount <= 0) return 0
-  return orderDiscount.perEvent[eventId]?.discount ?? 0
+  if (!orderDiscount || orderDiscount.discount <= 0) return 0
+  return orderDiscount.eventId === eventId ? orderDiscount.discount : 0
 }
 
 function getFileDownloadUrl(record: ApiRecord) {

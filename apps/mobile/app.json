@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "WaahTickets",
+    "slug": "waahtickets",
+    "scheme": "waahtickets",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.waahtickets.mobile"
+    },
+    "android": {
+      "package": "com.waahtickets.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4e217854-7efe-4ba3-979d-57d7bdad2580"
+      }
+    },
+    "owner": "shivarjun1"
+  }
+}

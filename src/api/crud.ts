@@ -409,10 +409,14 @@ storefrontRoutes.post('/payments/khalti/initiate', async (c) => {
   const customerName = String(payload.customer_name ?? '').trim()
   const customerEmail = String(payload.customer_email ?? '').trim()
   const customerPhone = String(payload.customer_phone ?? '').trim()
+  const customReturnUrl = String(payload.return_url ?? '').trim()
+  const customWebsiteUrl = String(payload.website_url ?? '').trim()
+  const returnUrl = customReturnUrl && isValidAppOrWebUrl(customReturnUrl) ? customReturnUrl : settings.khalti_return_url
+  const websiteUrl = customWebsiteUrl && isValidUrl(customWebsiteUrl) ? customWebsiteUrl : settings.khalti_website_url
 
   const requestBody = {
-    return_url: settings.khalti_return_url,
-    website_url: settings.khalti_website_url,
+    return_url: returnUrl,
+    website_url: websiteUrl,
     amount: Math.floor(amountPaisa),
     purchase_order_id: purchaseOrderId,
     purchase_order_name: purchaseOrderName,
@@ -1153,7 +1157,7 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
 })
 
 crudRoutes.use('*', async (c, next) => {
-  const token = getCookie(c.req.header('Cookie'), 'waah_session')
+  const token = getSessionToken(c.req.header('Authorization'), c.req.header('Cookie'))
   if (!token) {
     return c.json({ error: 'Authentication required.' }, 401)
   }
@@ -1724,10 +1728,14 @@ crudRoutes.post('/payments/khalti/initiate', async (c) => {
   const customerName = String(payload.customer_name ?? '').trim()
   const customerEmail = String(payload.customer_email ?? '').trim()
   const customerPhone = String(payload.customer_phone ?? '').trim()
+  const customReturnUrl = String(payload.return_url ?? '').trim()
+  const customWebsiteUrl = String(payload.website_url ?? '').trim()
+  const returnUrl = customReturnUrl && isValidAppOrWebUrl(customReturnUrl) ? customReturnUrl : settings.khalti_return_url
+  const websiteUrl = customWebsiteUrl && isValidUrl(customWebsiteUrl) ? customWebsiteUrl : settings.khalti_website_url
 
   const requestBody = {
-    return_url: settings.khalti_return_url,
-    website_url: settings.khalti_website_url,
+    return_url: returnUrl,
+    website_url: websiteUrl,
     amount: Math.floor(amountPaisa),
     purchase_order_id: purchaseOrderId,
     purchase_order_name: purchaseOrderName,
@@ -2913,6 +2921,57 @@ crudRoutes.post('/orders/:id/email-copy', async (c) => {
   return c.json({ ok: true })
 })
 
+crudRoutes.get('/mobile/tickets', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  if (scope.webrole !== 'Customers') {
+    return c.json({ error: 'Customer login is required.' }, 403)
+  }
+
+  const limit = sanitizeInteger(c.req.query('limit'), 100, 1, 100)
+  const offset = sanitizeInteger(c.req.query('offset'), 0, 0, 10000)
+  const result = await db
+    .prepare(
+      `SELECT tickets.id,
+              tickets.ticket_number,
+              tickets.order_id,
+              tickets.event_id,
+              tickets.event_location_id,
+              tickets.ticket_type_id,
+              tickets.status,
+              tickets.is_paid,
+              tickets.redeemed_at,
+              tickets.pdf_file_id,
+              tickets.created_at,
+              events.name AS event_name,
+              event_locations.name AS event_location_name,
+              ticket_types.name AS ticket_type_name
+       FROM tickets
+       JOIN events ON events.id = tickets.event_id
+       LEFT JOIN event_locations ON event_locations.id = tickets.event_location_id
+       LEFT JOIN ticket_types ON ticket_types.id = tickets.ticket_type_id
+       WHERE tickets.customer_id = ?
+       ORDER BY tickets.created_at DESC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(scope.userId, limit + 1, offset)
+    .all()
+
+  const rows = result.results.length > limit ? result.results.slice(0, limit) : result.results
+  return c.json({
+    data: rows,
+    pagination: {
+      limit,
+      offset,
+      has_more: result.results.length > limit
+    }
+  })
+})
+
 crudRoutes.get('/:resource', async (c) => {
   const table = resolveTable(c.req.param('resource'))
   if (!table) {
@@ -3954,7 +4013,7 @@ async function resolveStorefrontCheckoutActor(c: StorefrontContext, payload: Rec
 }
 
 async function getAuthenticatedStorefrontActor(c: StorefrontContext) {
-  const token = getCookie(c.req.header('Cookie'), 'waah_session')
+  const token = getSessionToken(c.req.header('Authorization'), c.req.header('Cookie'))
   if (!token) {
     return null
   }
@@ -3998,6 +4057,15 @@ async function getAuthenticatedStorefrontActor(c: StorefrontContext) {
 function canScopeAccessOrganization(scope: AuthScope, organizationId: string) {
   if (scope.webrole === 'Admin') return true
   return scope.organizationIds.includes(organizationId)
+}
+
+function getSessionToken(authorizationHeader?: string, cookieHeader?: string) {
+  const bearerToken = authorizationHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (bearerToken) {
+    return bearerToken
+  }
+
+  return getCookie(cookieHeader, 'waah_session')
 }
 
 async function createTicketScanRecord(
@@ -4831,6 +4899,18 @@ function isValidUrl(value: string) {
   try {
     const parsed = new URL(value)
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.host)
+  } catch {
+    return false
+  }
+}
+
+function isValidAppOrWebUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host) {
+      return true
+    }
+    return parsed.protocol.length > 1 && Boolean(parsed.hostname || parsed.host)
   } catch {
     return false
   }

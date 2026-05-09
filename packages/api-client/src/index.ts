@@ -1,0 +1,190 @@
+import type {
+  ApiEnvelope,
+  ApiListEnvelope,
+  AuthSessionPayload,
+  AuthUser,
+  CartHoldResponse,
+  CouponValidationResponse,
+  PublicEvent,
+  PublicPaymentSettings,
+  PublicRailsSettings,
+  StorefrontOrderGroup,
+  TicketValidationResponse,
+  TicketType
+} from '@waahtickets/shared-types'
+
+export type ApiClientOptions = {
+  baseUrl: string
+  getAccessToken?: () => Promise<string | null> | string | null
+}
+
+type AuthRequestBody = {
+  email: string
+  password: string
+  first_name?: string
+  last_name?: string
+  phone_number?: string
+}
+
+type StorefrontCheckoutPayload = {
+  order_groups: StorefrontOrderGroup[]
+  payment?: { provider?: 'manual' | 'khalti' | 'esewa'; reference?: string }
+  guest_checkout_token?: string
+}
+
+type JsonBody = Record<string, unknown> | Array<unknown>
+type ErrorLikeEnvelope = {
+  error?: string
+  message?: string
+}
+
+export function createApiClient(options: ApiClientOptions) {
+  async function fetchJson<T>(path: string, init?: RequestInit) {
+    const token = await options.getAccessToken?.()
+    const headers = new Headers(init?.headers)
+    const requestUrl = new URL(path, options.baseUrl)
+
+    if (!headers.has('Content-Type') && init?.body) {
+      headers.set('Content-Type', 'application/json')
+    }
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+
+    try {
+      const response = await fetch(requestUrl, {
+        ...init,
+        headers
+      })
+      const json = (await response.json()) as T & ErrorLikeEnvelope
+
+      if (!response.ok) {
+        throw new Error(json.message ?? json.error ?? 'Request failed.')
+      }
+
+      return json
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Network request failed.'
+      throw new Error(`${message}${message.includes(requestUrl.toString()) ? '' : ` (${requestUrl.toString()})`}`)
+    }
+  }
+
+  async function request<T>(path: string, init?: RequestInit) {
+    return fetchJson<ApiEnvelope<T>>(path, init)
+  }
+
+  async function authRequest(path: string, body: AuthRequestBody) {
+    return fetchJson<AuthSessionPayload>(path, withJsonBody(body, {
+      method: 'POST',
+      headers: {
+        'X-Waah-Client': 'mobile'
+      }
+    }))
+  }
+
+  function withJsonBody(body: JsonBody, init?: RequestInit): RequestInit {
+    return {
+      ...init,
+      body: JSON.stringify(body),
+      headers: {
+        'Content-Type': 'application/json',
+        ...init?.headers
+      }
+    }
+  }
+
+  return {
+    request,
+    getAuthMe() {
+      return fetchJson<{ user: AuthUser | null }>('/api/auth/me')
+    },
+    login(body: AuthRequestBody) {
+      return authRequest('/api/auth/login', body)
+    },
+    register(body: AuthRequestBody) {
+      return authRequest('/api/auth/register', body)
+    },
+    logout() {
+      return request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
+    },
+    listPublicEvents() {
+      return request<PublicEvent[]>('/api/public/events') as Promise<ApiListEnvelope<PublicEvent>>
+    },
+    getPublicEventTicketTypes(eventId: string) {
+      return request<TicketType[]>(`/api/public/events/${encodeURIComponent(eventId)}/ticket-types`)
+    },
+    getPublicPaymentSettings() {
+      return request<PublicPaymentSettings>('/api/public/payments/settings')
+    },
+    getPublicRailsSettings() {
+      return request<PublicRailsSettings>('/api/public/rails/settings')
+    },
+    listMyTickets() {
+      return fetchJson<ApiListEnvelope<Record<string, unknown>>>('/api/mobile/tickets?limit=100')
+    },
+    inspectTicket(body: { qr_code_value?: string; token?: string }) {
+      return request<TicketValidationResponse>('/api/tickets/inspect', withJsonBody(body, { method: 'POST' }))
+    },
+    redeemTicket(body: { qr_code_value: string }) {
+      return request<TicketValidationResponse>('/api/tickets/redeem', withJsonBody(body, { method: 'POST' }))
+    },
+    createCartHolds(body: {
+      hold_token?: string
+      preserve_expires_at?: boolean
+      items: Array<{ ticket_type_id: string; quantity: number }>
+    }) {
+      return request<CartHoldResponse>('/api/public/cart-holds', withJsonBody(body, { method: 'POST' }))
+    },
+    validateCoupon(body: {
+      code: string
+      event_id: string
+      subtotal_amount_paisa: number
+    }) {
+      return fetchJson<CouponValidationResponse>('/api/public/coupons/validate', withJsonBody(body, { method: 'POST' }))
+    },
+    completeStorefrontCheckout(body: StorefrontCheckoutPayload) {
+      return request<{ completed_orders: number }>('/api/storefront/checkout/complete', withJsonBody(body, { method: 'POST' }))
+    },
+    initiateStorefrontKhaltiPayment(body: {
+      amount_paisa: number
+      purchase_order_id: string
+      purchase_order_name: string
+      customer_name?: string
+      customer_email?: string
+      customer_phone?: string
+      return_url?: string
+      website_url?: string
+      order_groups: StorefrontOrderGroup[]
+      guest_checkout_token?: string
+    }) {
+      return request<{ pidx: string; payment_url: string; expires_at?: string; expires_in?: number }>(
+        '/api/storefront/payments/khalti/initiate',
+        withJsonBody(body, { method: 'POST' })
+      )
+    },
+    lookupStorefrontKhaltiPayment(body: { pidx: string; guest_checkout_token?: string }) {
+      return request<{
+        pidx: string
+        status: string
+        total_amount: number
+        transaction_id: string
+        fee: number
+        refunded: boolean
+      }>('/api/storefront/payments/khalti/lookup', withJsonBody(body, { method: 'POST' }))
+    },
+    completeStorefrontKhaltiPayment(body: {
+      pidx: string
+      transaction_id?: string
+      order_groups: StorefrontOrderGroup[]
+      guest_checkout_token?: string
+    }) {
+      return request<{ pidx: string; completed_orders: number }>(
+        '/api/storefront/payments/khalti/complete',
+        withJsonBody(body, { method: 'POST' })
+      )
+    },
+    postJson<T>(path: string, body: JsonBody, init?: RequestInit) {
+      return request<T>(path, withJsonBody(body, { ...init, method: init?.method ?? 'POST' }))
+    }
+  }
+}

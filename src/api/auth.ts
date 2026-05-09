@@ -132,10 +132,10 @@ authRoutes.post('/register', async (c) => {
     })
     const session = await createSession(c.env.DB, userId, 'password')
 
-    return withSessionCookie(
+    return withSession(
       c,
       { user: sanitizeUser({ ...body, id: userId, webrole, is_active: 1, is_email_verified: 0 }) },
-      session.token
+      session
     )
   } catch (error) {
     console.error(error)
@@ -343,7 +343,7 @@ authRoutes.post('/login', async (c) => {
       .run()
 
     const session = await createSession(c.env.DB, user.id, 'password')
-    return withSessionCookie(c, { user: sanitizeUser(user) }, session.token)
+    return withSession(c, { user: sanitizeUser(user) }, session)
   } catch (error) {
     console.error(error)
     const sanitized = sanitizeServerError(error, 'Login failed.')
@@ -374,7 +374,7 @@ authRoutes.post('/forgot-password', async (c) => {
 })
 
 authRoutes.post('/logout', async (c) => {
-  const token = getCookie(c.req.header('Cookie'), 'waah_session')
+  const token = getSessionToken(c.req.header('Authorization'), c.req.header('Cookie'))
   if (token) {
     await c.env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?')
       .bind(await hashToken(token))
@@ -386,7 +386,7 @@ authRoutes.post('/logout', async (c) => {
 })
 
 authRoutes.get('/me', async (c) => {
-  const token = getCookie(c.req.header('Cookie'), 'waah_session')
+  const token = getSessionToken(c.req.header('Authorization'), c.req.header('Cookie'))
   if (!token) {
     return c.json({ user: null })
   }
@@ -477,6 +477,37 @@ authRoutes.get('/google/start', (c) => {
   return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`)
 })
 
+export async function handleGoogleMobileStart(c: AppContext) {
+  const origin = new URL(c.req.url).origin
+  const config = getGoogleConfig(c.env, origin)
+  if (!config) {
+    return c.json({ error: 'Google SSO is not configured.' }, 501)
+  }
+
+  const mobileRedirectUri = c.req.query('redirect_uri')?.trim() ?? ''
+  let redirectTarget: URL
+  try {
+    redirectTarget = new URL(mobileRedirectUri)
+  } catch {
+    return c.json({ error: 'A valid mobile redirect_uri is required.' }, 400)
+  }
+
+  const state = await createMobileGoogleState(c.env, redirectTarget.toString())
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: 'code',
+    scope: 'openid profile email',
+    access_type: 'online',
+    include_granted_scopes: 'true',
+    state
+  })
+
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`)
+}
+
+authRoutes.get('/google/mobile/start', handleGoogleMobileStart)
+
 authRoutes.get('/google/callback', async (c) => {
   const origin = new URL(c.req.url).origin
   const config = getGoogleConfig(c.env, origin)
@@ -487,9 +518,10 @@ authRoutes.get('/google/callback', async (c) => {
   const url = new URL(c.req.url)
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
+  const mobileState = state ? await verifyMobileGoogleState(c.env, state) : null
   const expectedState = getCookie(c.req.header('Cookie'), 'waah_oauth_state')
 
-  if (!code || !state || state !== expectedState) {
+  if (!code || !state || (!mobileState && state !== expectedState)) {
     return c.json({ error: 'Invalid Google OAuth callback state.' }, 400)
   }
 
@@ -536,6 +568,14 @@ authRoutes.get('/google/callback', async (c) => {
     })
   }
   const session = await createSession(c.env.DB, user.id, 'google')
+
+  if (mobileState) {
+    const redirectTarget = new URL(mobileState.redirectUri)
+    redirectTarget.searchParams.set('access_token', session.token)
+    redirectTarget.searchParams.set('expires_at', session.expiresAt)
+    redirectTarget.searchParams.set('user', encodeMobileAuthUser(sanitizeUser(user)))
+    return c.redirect(redirectTarget.toString())
+  }
 
   const isSecure = isSecureOrigin(origin)
   c.header('Set-Cookie', sessionCookie(session.token, isSecure))
@@ -701,6 +741,7 @@ function sanitizeUser(user: Partial<UserRow> & { id?: string; webrole?: string }
     first_name: user.first_name ?? null,
     last_name: user.last_name ?? null,
     email: user.email,
+    phone_number: 'phone_number' in user ? (user as { phone_number?: string | null }).phone_number ?? null : null,
     is_active: user.is_active === undefined || user.is_active === null ? true : Boolean(user.is_active),
     is_email_verified:
       user.is_email_verified === undefined || user.is_email_verified === null
@@ -710,13 +751,25 @@ function sanitizeUser(user: Partial<UserRow> & { id?: string; webrole?: string }
   }
 }
 
-function withSessionCookie(
+function withSession(
   c: AppContext,
   body: Record<string, unknown>,
-  token: string
+  session: { token: string; expiresAt: string }
 ) {
-  c.header('Set-Cookie', sessionCookie(token, isSecureOrigin(new URL(c.req.url).origin)))
-  return c.json(body)
+  c.header('Set-Cookie', sessionCookie(session.token, isSecureOrigin(new URL(c.req.url).origin)))
+
+  if (!wantsTokenAuth(c)) {
+    return c.json(body)
+  }
+
+  return c.json({
+    ...body,
+    tokens: {
+      accessToken: session.token,
+      refreshToken: null
+    },
+    expires_at: session.expiresAt
+  })
 }
 
 function sessionCookie(token: string, secure = false) {
@@ -749,6 +802,19 @@ function getCookie(cookieHeader: string | undefined, name: string) {
     ?.slice(name.length + 1)
 }
 
+function getSessionToken(authorizationHeader?: string, cookieHeader?: string) {
+  const bearerToken = authorizationHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (bearerToken) {
+    return bearerToken
+  }
+
+  return getCookie(cookieHeader, 'waah_session')
+}
+
+function wantsTokenAuth(c: AppContext) {
+  return c.req.header('X-Waah-Client')?.toLowerCase() === 'mobile'
+}
+
 function getGoogleConfig(env: Bindings, origin: string) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
     return null
@@ -761,6 +827,89 @@ function getGoogleConfig(env: Bindings, origin: string) {
     clientSecret: env.GOOGLE_CLIENT_SECRET,
     redirectUri: new URL('/api/auth/google/callback', baseOrigin).toString()
   }
+}
+
+type MobileGoogleStatePayload = {
+  redirectUri: string
+  nonce: string
+  createdAt: number
+}
+
+async function createMobileGoogleState(env: Bindings, redirectUri: string) {
+  const payload: MobileGoogleStatePayload = {
+    redirectUri,
+    nonce: crypto.randomUUID(),
+    createdAt: Date.now()
+  }
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload))
+  const signature = await signMobileGoogleState(env, encodedPayload)
+  return `${encodedPayload}.${signature}`
+}
+
+async function verifyMobileGoogleState(env: Bindings, state: string): Promise<MobileGoogleStatePayload | null> {
+  const [encodedPayload, signature] = state.split('.')
+  if (!encodedPayload || !signature) return null
+
+  const expectedSignature = await signMobileGoogleState(env, encodedPayload)
+  if (!constantTimeEqual(signature, expectedSignature)) return null
+
+  try {
+    const parsed = JSON.parse(base64UrlDecode(encodedPayload)) as MobileGoogleStatePayload
+    if (!parsed.redirectUri || !parsed.nonce || !Number.isFinite(parsed.createdAt)) return null
+    if (Date.now() - parsed.createdAt > 1000 * 60 * 10) return null
+    new URL(parsed.redirectUri)
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function signMobileGoogleState(env: Bindings, encodedPayload: string) {
+  const secret = env.GOOGLE_CLIENT_SECRET || 'waah-mobile-google-state'
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(encodedPayload))
+  return base64UrlEncodeBytes(new Uint8Array(signature))
+}
+
+function encodeMobileAuthUser(user: ReturnType<typeof sanitizeUser>) {
+  return base64UrlEncode(JSON.stringify(user))
+}
+
+function base64UrlEncode(value: string) {
+  return base64UrlEncodeBytes(new TextEncoder().encode(value))
+}
+
+function base64UrlEncodeBytes(bytes: Uint8Array) {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function base64UrlDecode(value: string) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
+  const binary = atob(padded)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+function constantTimeEqual(left: string, right: string) {
+  if (left.length !== right.length) return false
+  let result = 0
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  }
+  return result === 0
 }
 
 function isSecureOrigin(origin: string) {
