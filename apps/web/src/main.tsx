@@ -377,6 +377,13 @@ type CartItem = {
   currency: string
 }
 
+type UserCartSnapshot = {
+  items: CartItem[]
+  hold_token?: string
+  hold_expires_at?: string
+  cart_expired?: boolean
+}
+
 type KhaltiCheckoutOrderGroup = {
   order_id: string
   order_number: string
@@ -1016,6 +1023,7 @@ function PublicApp({
   const [guestCheckoutIdentity, setGuestCheckoutIdentity] = useState<GuestCheckoutIdentity | null>(null)
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
+  const [isCartExpiredNoticeOpen, setIsCartExpiredNoticeOpen] = useState(false)
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
@@ -1156,51 +1164,49 @@ function PublicApp({
   const isCartStorageReadyRef = useRef(false)
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const holdRaw = window.localStorage.getItem(cartHoldStorageKey)
-      const hold = holdRaw ? (JSON.parse(holdRaw) as Record<string, unknown>) : null
-      const expiresAt = typeof hold?.expires_at === 'string' ? hold.expires_at : ''
-      const isActiveHold = expiresAt && new Date(expiresAt).getTime() > Date.now()
-      if (isActiveHold) {
-        const cartRaw = window.localStorage.getItem(cartStorageKey)
-        const cart = cartRaw ? (JSON.parse(cartRaw) as Record<string, unknown>) : null
-        const storedItems = Array.isArray(cart?.items) ? (cart.items as CartItem[]) : []
-        setCartItems(storedItems.filter(isCartItemLike))
-        setCartHoldToken(typeof hold?.hold_token === 'string' ? hold.hold_token : '')
-        setCartHoldExpiresAt(expiresAt)
-      } else {
-        window.localStorage.removeItem(cartStorageKey)
-        window.localStorage.removeItem(cartHoldStorageKey)
-      }
-    } catch {
+    if (isAuthLoading) return
+
+    if (typeof window !== 'undefined') {
       window.localStorage.removeItem(cartStorageKey)
       window.localStorage.removeItem(cartHoldStorageKey)
-    } finally {
+    }
+
+    if (!user?.id) {
+      setCartItems([])
+      setCartHoldToken('')
+      setCartHoldExpiresAt('')
       isCartStorageReadyRef.current = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !isCartStorageReadyRef.current) return
-    if (cartItems.length === 0) {
-      window.localStorage.removeItem(cartStorageKey)
       return
     }
-    window.localStorage.setItem(cartStorageKey, JSON.stringify({ items: cartItems }))
-  }, [cartItems])
+
+    isCartStorageReadyRef.current = false
+    void (async () => {
+      try {
+        const { data } = await fetchJson<{ data: UserCartSnapshot }>('/api/cart')
+        const snapshot = data.data
+        const storedItems = Array.isArray(snapshot?.items) ? snapshot.items : []
+        setCartItems(storedItems.filter(isCartItemLike))
+        setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
+        setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
+        if (snapshot?.cart_expired) {
+          setIsCartExpiredNoticeOpen(true)
+        }
+      } catch (error) {
+        setCartItems([])
+        setCartHoldToken('')
+        setCartHoldExpiresAt('')
+        setPublicStatus(getErrorMessage(error))
+      } finally {
+        isCartStorageReadyRef.current = true
+      }
+    })()
+  }, [isAuthLoading, user?.id])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !isCartStorageReadyRef.current) return
-    if (!cartHoldToken || !cartHoldExpiresAt) {
-      window.localStorage.removeItem(cartHoldStorageKey)
-      return
+    if (!isAuthLoading && !user?.id && cartItems.length > 0) {
+      setCartItems([])
     }
-    window.localStorage.setItem(
-      cartHoldStorageKey,
-      JSON.stringify({ hold_token: cartHoldToken, expires_at: cartHoldExpiresAt })
-    )
-  }, [cartHoldToken, cartHoldExpiresAt])
+  }, [cartItems.length, isAuthLoading, user?.id])
 
   useEffect(() => {
     if (!cartHoldExpiresAt) return
@@ -2280,11 +2286,19 @@ function PublicApp({
           onClose={() => setVerifiedTicket(null)}
         />
       ) : null}
+      {isCartExpiredNoticeOpen ? (
+        <CartExpiredNoticeModal onClose={() => setIsCartExpiredNoticeOpen(false)} />
+      ) : null}
     </main>
   )
 
   async function addCurrentSelectionToCart() {
     if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return false
+    if (!user?.id) {
+      setPublicStatus('Please sign in to add tickets to your cart.')
+      setIsAuthOpen(true)
+      return false
+    }
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
       return false
@@ -2318,6 +2332,11 @@ function PublicApp({
     successMessage?: string,
     options: { preserveExpiresAt?: boolean } = {}
   ) {
+    if (!user?.id) {
+      setPublicStatus('Please sign in to update your cart.')
+      setIsAuthOpen(true)
+      return false
+    }
     const reserved = await syncCartHold(nextItems, options)
     if (!reserved) return false
     setCartItems(nextItems)
@@ -2390,12 +2409,12 @@ function PublicApp({
       window.localStorage.removeItem(cartStorageKey)
       window.localStorage.removeItem(cartHoldStorageKey)
     }
+    void saveUserCart([], '', '')
   }
 
   async function syncCartHold(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
     try {
-      const storedToken = getStoredCartHoldToken()
-      const holdToken = cartHoldToken || storedToken || crypto.randomUUID()
+      const holdToken = cartHoldToken || crypto.randomUUID()
       const { data } = await fetchJson<{
         data: { hold_token: string; expires_at: string; items: Array<{ ticket_type_id: string; quantity: number }> }
       }>('/api/public/cart-holds', {
@@ -2412,25 +2431,31 @@ function PublicApp({
         timeoutMs: 10000
       })
       setCartHoldToken(data.data.hold_token)
-      setCartHoldExpiresAt(nextItems.length > 0 ? data.data.expires_at : '')
-      if (nextItems.length === 0 && typeof window !== 'undefined') {
-        window.localStorage.removeItem(cartHoldStorageKey)
-      }
-      return true
+      const holdExpiresAt = nextItems.length > 0 ? data.data.expires_at : ''
+      setCartHoldExpiresAt(holdExpiresAt)
+      return saveUserCart(nextItems, data.data.hold_token, holdExpiresAt)
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
       return false
     }
   }
 
-  function getStoredCartHoldToken() {
-    if (typeof window === 'undefined') return ''
+  async function saveUserCart(nextItems: CartItem[], holdToken: string, holdExpiresAt: string) {
+    if (!user?.id) return false
     try {
-      const raw = window.localStorage.getItem(cartHoldStorageKey)
-      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
-      return typeof parsed?.hold_token === 'string' ? parsed.hold_token : ''
-    } catch {
-      return ''
+      await fetchJson<{ data: UserCartSnapshot }>('/api/cart', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: nextItems,
+          hold_token: holdToken,
+          hold_expires_at: holdExpiresAt
+        })
+      })
+      return true
+    } catch (error) {
+      setPublicStatus(getErrorMessage(error))
+      return false
     }
   }
 
@@ -2955,6 +2980,32 @@ function SingleEventCartConfirmModal({
           </button>
           <button className="primary-admin-button" disabled={isReplacing} type="button" onClick={onConfirm}>
             {isReplacing ? 'Replacing...' : 'Drop other tickets'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function CartExpiredNoticeModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="record-modal reservation-modal" role="dialog" aria-modal="true" aria-labelledby="cart-expired-title">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Cart</p>
+            <h2 id="cart-expired-title">Cart expired</h2>
+          </div>
+          <button aria-label="Close cart expired notice" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-modal-body">
+          <p className="checkout-hint">Your previous cart hold expired while you were signed out.</p>
+        </div>
+        <footer className="record-modal-actions">
+          <button className="primary-admin-button" type="button" onClick={onClose}>
+            Browse tickets
           </button>
         </footer>
       </section>

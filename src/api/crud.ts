@@ -38,6 +38,33 @@ const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TEXT NOT NULL,
   updated_by TEXT
 )`
+const USER_CART_ITEMS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS user_cart_items (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  event_location_id TEXT NOT NULL,
+  event_location_name TEXT NOT NULL,
+  ticket_type_id TEXT NOT NULL,
+  ticket_type_name TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  unit_price_paisa INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'NPR',
+  hold_token TEXT,
+  hold_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (event_id) REFERENCES events(id),
+  FOREIGN KEY (event_location_id) REFERENCES event_locations(id),
+  FOREIGN KEY (ticket_type_id) REFERENCES ticket_types(id),
+  UNIQUE (user_id, item_key)
+)`
+const USER_CART_ITEMS_INDEX_SQL = [
+  'CREATE INDEX IF NOT EXISTS idx_user_cart_items_user_id ON user_cart_items(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_user_cart_items_hold_expires ON user_cart_items(hold_expires_at)'
+]
 const R2_SETTING_KEYS = ['r2_public_base_url', 'ticket_qr_base_url'] as const
 const PAYMENT_SETTING_KEYS = [
   'payments_khalti_enabled',
@@ -1211,6 +1238,132 @@ crudRoutes.use('*', async (c, next) => {
   })
 
   await next()
+})
+
+crudRoutes.get('/cart', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  await ensureUserCartItemsTable(db)
+  const cartExpired = await hasExpiredUserCart(db, scope.userId)
+  await pruneExpiredUserCart(db, scope.userId)
+
+  const rows = await db
+    .prepare(
+      `SELECT item_key, event_id, event_name, event_location_id, event_location_name,
+              ticket_type_id, ticket_type_name, quantity, unit_price_paisa, currency,
+              hold_token, hold_expires_at
+       FROM user_cart_items
+       WHERE user_id = ?
+       ORDER BY created_at ASC`
+    )
+    .bind(scope.userId)
+    .all<{
+      item_key: string
+      event_id: string
+      event_name: string
+      event_location_id: string
+      event_location_name: string
+      ticket_type_id: string
+      ticket_type_name: string
+      quantity: number
+      unit_price_paisa: number
+      currency: string
+      hold_token: string | null
+      hold_expires_at: string | null
+    }>()
+
+  const items = rows.results.map((row) => ({
+    id: row.item_key,
+    event_id: row.event_id,
+    event_name: row.event_name,
+    event_location_id: row.event_location_id,
+    event_location_name: row.event_location_name,
+    ticket_type_id: row.ticket_type_id,
+    ticket_type_name: row.ticket_type_name,
+    quantity: Number(row.quantity),
+    unit_price_paisa: Number(row.unit_price_paisa),
+    currency: row.currency
+  }))
+  const first = rows.results[0]
+
+  return c.json({
+    data: {
+      items,
+      hold_token: first?.hold_token ?? '',
+      hold_expires_at: first?.hold_expires_at ?? '',
+      cart_expired: cartExpired
+    }
+  })
+})
+
+crudRoutes.put('/cart', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const scope = c.get('authScope')
+  const items = sanitizeCartPayloadItems(Array.isArray(payload.items) ? payload.items : [])
+  const holdToken = typeof payload.hold_token === 'string' ? payload.hold_token.trim() : ''
+  const holdExpiresAt = typeof payload.hold_expires_at === 'string' ? payload.hold_expires_at.trim() : ''
+  const now = new Date().toISOString()
+
+  await ensureUserCartItemsTable(db)
+  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(scope.userId).run()
+
+  for (const item of items) {
+    await db
+      .prepare(
+        `INSERT INTO user_cart_items (
+          id, user_id, item_key, event_id, event_name, event_location_id, event_location_name,
+          ticket_type_id, ticket_type_name, quantity, unit_price_paisa, currency,
+          hold_token, hold_expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        scope.userId,
+        item.id,
+        item.event_id,
+        item.event_name,
+        item.event_location_id,
+        item.event_location_name,
+        item.ticket_type_id,
+        item.ticket_type_name,
+        item.quantity,
+        item.unit_price_paisa,
+        item.currency,
+        holdToken || null,
+        holdExpiresAt || null,
+        now,
+        now
+      )
+      .run()
+  }
+
+  return c.json({ data: { items, hold_token: holdToken, hold_expires_at: holdExpiresAt } })
+})
+
+crudRoutes.delete('/cart', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const scope = c.get('authScope')
+  await ensureUserCartItemsTable(db)
+  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(scope.userId).run()
+
+  return c.json({ data: { items: [], hold_token: '', hold_expires_at: '' } })
 })
 
 crudRoutes.post('/tickets/redeem', async (c) => {
@@ -3951,6 +4104,90 @@ async function executeMutation<T>(
 
     throw error
   }
+}
+
+async function ensureUserCartItemsTable(db: D1Database) {
+  await db.prepare(USER_CART_ITEMS_TABLE_SQL).run()
+  for (const statement of USER_CART_ITEMS_INDEX_SQL) {
+    await db.prepare(statement).run()
+  }
+}
+
+async function hasExpiredUserCart(db: D1Database, userId: string) {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS ok
+       FROM user_cart_items
+       WHERE user_id = ?
+         AND hold_expires_at IS NOT NULL
+         AND hold_expires_at <= ?
+       LIMIT 1`
+    )
+    .bind(userId, new Date().toISOString())
+    .first<{ ok: number }>()
+
+  return Boolean(row?.ok)
+}
+
+async function pruneExpiredUserCart(db: D1Database, userId: string) {
+  await db
+    .prepare(
+      `DELETE FROM user_cart_items
+       WHERE user_id = ?
+         AND hold_expires_at IS NOT NULL
+         AND hold_expires_at <= ?`
+    )
+    .bind(userId, new Date().toISOString())
+    .run()
+}
+
+function sanitizeCartPayloadItems(rawItems: unknown[]) {
+  const items: Array<{
+    id: string
+    event_id: string
+    event_name: string
+    event_location_id: string
+    event_location_name: string
+    ticket_type_id: string
+    ticket_type_name: string
+    quantity: number
+    unit_price_paisa: number
+    currency: string
+  }> = []
+
+  for (const rawItem of rawItems) {
+    if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue
+    const item = rawItem as Record<string, unknown>
+    const id = String(item.id ?? '').trim()
+    const eventId = String(item.event_id ?? '').trim()
+    const eventName = String(item.event_name ?? '').trim()
+    const eventLocationId = String(item.event_location_id ?? '').trim()
+    const eventLocationName = String(item.event_location_name ?? '').trim()
+    const ticketTypeId = String(item.ticket_type_id ?? '').trim()
+    const ticketTypeName = String(item.ticket_type_name ?? '').trim()
+    const rawQuantity = Math.floor(Number(item.quantity ?? 0))
+    const rawUnitPricePaisa = Math.floor(Number(item.unit_price_paisa ?? 0))
+    const quantity = Number.isFinite(rawQuantity) ? Math.min(99, Math.max(1, rawQuantity)) : 0
+    const unitPricePaisa = Number.isFinite(rawUnitPricePaisa) ? Math.max(0, rawUnitPricePaisa) : 0
+    const currency = String(item.currency ?? 'NPR').trim() || 'NPR'
+
+    if (!id || !eventId || !eventLocationId || !ticketTypeId || quantity <= 0) continue
+
+    items.push({
+      id,
+      event_id: eventId,
+      event_name: eventName || 'Event',
+      event_location_id: eventLocationId,
+      event_location_name: eventLocationName || 'Venue pending',
+      ticket_type_id: ticketTypeId,
+      ticket_type_name: ticketTypeName || 'Ticket',
+      quantity,
+      unit_price_paisa: unitPricePaisa,
+      currency
+    })
+  }
+
+  return items
 }
 
 async function safeMaybeEnqueue(c: AppContext, operation: () => Promise<void>) {
