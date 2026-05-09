@@ -1,5 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   color: #0f172a;
   background: #f4f7ff;
@@ -5322,7 +5326,20 @@ body[data-theme='dark'] .cart-checkout-modern .checkout-total.grand strong {
   gap: 16px;
 }
 
+.events-sidebar-column {
+  display: none;
+}
+
+.events-sidebar-column:empty {
+  display: none;
+}
+
 .events-rails-column {
+  display: grid;
+  gap: 16px;
+}
+
+.event-rail-slot {
   display: grid;
   gap: 16px;
 }
@@ -5387,6 +5404,16 @@ body[data-theme='dark'] .cart-checkout-modern .checkout-total.grand strong {
   object-position: center;
 }
 
+@media (min-width: 1440px) {
+  .events-layout {
+    grid-template-columns: minmax(230px, 280px) minmax(0, 1fr);
+  }
+
+  .events-sidebar-column {
+    display: none;
+  }
+}
+
 body[data-theme='light'] .topbar-search {
   border-color: rgba(71, 85, 105, 0.22);
   color: #64748b;
@@ -5435,6 +5462,10 @@ body[data-theme='dark'] .topbar-search input::placeholder {
 @media (max-width: 960px) {
   .events-layout {
     grid-template-columns: 1fr;
+  }
+
+  .events-sidebar-column {
+    display: none;
   }
 
   .event-filter-panel {

@@ -81,6 +81,72 @@ export type PublicRailsSettings = {
   rails: PublicRailConfigItem[]
 }
 
+export type AdPlacement =
+  | 'HOME_BETWEEN_RAILS'
+  | 'EVENT_LIST_BETWEEN_RAILS'
+  | 'EVENT_DETAIL_BETWEEN_RAILS'
+  | 'WEB_RIGHT_SIDEBAR'
+  | 'WEB_LEFT_SIDEBAR'
+  | 'CHECKOUT_BETWEEN_RAILS'
+  | 'ORGANIZER_PAGE_BETWEEN_RAILS'
+
+export type AdDeviceTarget = 'web' | 'mobile' | 'both'
+
+export type AdStatus = 'draft' | 'active' | 'paused' | 'expired'
+
+export type AdRecord = {
+  id: ApiId
+  name: string
+  advertiser_name: string
+  placement: AdPlacement
+  device_target: AdDeviceTarget
+  image_url: string
+  destination_url: string
+  start_date: string
+  end_date?: string | null
+  status: AdStatus
+  priority: number
+  display_frequency?: number | null
+  max_impressions?: number | null
+  max_clicks?: number | null
+  open_in_new_tab: boolean
+  created_at: string
+  updated_at: string
+  created_by?: string | null
+  updated_by?: string | null
+  impression_count?: number
+  click_count?: number
+}
+
+export type AdSettings = {
+  id: string
+  ads_enabled: boolean
+  web_ads_enabled: boolean
+  mobile_ads_enabled: boolean
+  default_ad_frequency: number
+  max_ads_per_page: number
+  fallback_ad_id?: string | null
+  created_at: string
+  updated_at: string
+  updated_by?: string | null
+}
+
+export type AdSelectionRequest = {
+  placement: AdPlacement
+  device: 'web' | 'mobile'
+  page_url?: string
+  rail_index?: number
+  ads_served?: number
+}
+
+export type AdSelectionResult = AdRecord | null
+
+export type AdTrackingPayload = {
+  placement: AdPlacement
+  device_type: 'web' | 'mobile'
+  page_url?: string
+}
+
 export type TicketType = {
   id: ApiId
   event_id: ApiId
