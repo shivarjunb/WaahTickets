@@ -901,12 +901,12 @@ function formatPlacementLabel(value: string) {
 
 function useIsDesktopViewport() {
   const [isDesktop, setIsDesktop] = useState(() =>
-    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1100px)').matches
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 960px)').matches
   )
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const mediaQuery = window.matchMedia('(min-width: 1100px)')
+    const mediaQuery = window.matchMedia('(min-width: 960px)')
     const update = () => setIsDesktop(mediaQuery.matches)
     update()
     mediaQuery.addEventListener('change', update)

@@ -20,12 +20,15 @@ import {
   StatusBar as NativeStatusBar,
   type ImageStyle,
   type StyleProp,
+  type ViewStyle,
   Text,
   TextInput,
   View
 } from 'react-native'
 import { createApiClient } from '@waahtickets/api-client'
 import type {
+  AdPlacement,
+  AdRecord,
   AuthSessionPayload,
   CartItem,
   MobileSessionState,
@@ -39,9 +42,14 @@ import type {
 } from '@waahtickets/shared-types'
 import { defaultMobileApiBaseUrl } from './src/config/api'
 import {
+  readStoredCart,
   readStoredMobileSession,
+  readStoredPendingEsewaPayment,
   readStoredPendingKhaltiPayment,
+  type StoredCartItem,
   writeStoredMobileSession,
+  writeStoredCart,
+  writeStoredPendingEsewaPayment,
   writeStoredPendingKhaltiPayment
 } from './src/lib/session-storage'
 
@@ -145,6 +153,15 @@ type PendingKhaltiPayment = {
   orderGroups: StorefrontOrderGroup[]
 }
 
+type PendingEsewaPayment = {
+  transactionUuid: string
+  totalAmount: string
+  productCode: string
+  mode: 'test' | 'live'
+  launchUrl: string
+  orderGroups: StorefrontOrderGroup[]
+}
+
 const emptySession: MobileSessionState = {
   user: null,
   tokens: null
@@ -185,6 +202,7 @@ const mobileViews: Array<{ view: MobileView; label: string; icon: AppIconName }>
 ]
 
 const mobileKhaltiReturnPath = 'khalti-return'
+const mobileEsewaReturnPath = 'esewa-return'
 const mobileGoogleReturnPath = 'google-sso-return'
 
 function buildKhaltiMobileReturnUrl(apiBaseUrl: string) {
@@ -198,8 +216,28 @@ function buildGoogleMobileReturnUrl() {
   return ExpoLinking.createURL(mobileGoogleReturnPath)
 }
 
+function buildEsewaMobileReturnUrl(apiBaseUrl: string) {
+  const callbackTarget = ExpoLinking.createURL(mobileEsewaReturnPath)
+  const base = new URL('/api/mobile/esewa-return', apiBaseUrl)
+  base.searchParams.set('redirect_uri', callbackTarget)
+  return base.toString()
+}
+
+function buildEsewaMobileLaunchUrl(apiBaseUrl: string, formAction: string, fields: Record<string, string>) {
+  const base = new URL('/api/mobile/esewa-launch', apiBaseUrl)
+  base.searchParams.set('form_action', formAction)
+  for (const [key, value] of Object.entries(fields)) {
+    base.searchParams.set(key, String(value))
+  }
+  return base.toString()
+}
+
 export default function App() {
   const screenScrollRef = useRef<ScrollView | null>(null)
+  const processedPaymentCallbackRef = useRef('')
+  const restoredStoredCartRef = useRef(false)
+  const validatingCartRef = useRef(false)
+  const lastValidatedCartSignatureRef = useRef('')
   const [activeView, setActiveView] = useState<MobileView>('home')
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('login')
@@ -233,16 +271,20 @@ export default function App() {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({})
   const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [storedCartItems, setStoredCartItems] = useState<StoredCartItem[] | null>(null)
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [cartHoldRemainingMs, setCartHoldRemainingMs] = useState(0)
   const [isUpdatingCartItemId, setIsUpdatingCartItemId] = useState('')
+  const [isAddingToCartTicketTypeId, setIsAddingToCartTicketTypeId] = useState('')
   const [expandedTicketGroups, setExpandedTicketGroups] = useState<Record<string, boolean>>({})
   const [cartStatus, setCartStatus] = useState('')
   const [couponCodes, setCouponCodes] = useState<Record<string, string>>({})
   const [couponMessages, setCouponMessages] = useState<Record<string, string>>({})
   const [couponDiscounts, setCouponDiscounts] = useState<Record<string, { couponId: string; discount: number }>>({})
   const [pendingKhaltiPayment, setPendingKhaltiPayment] = useState<PendingKhaltiPayment | null>(null)
+  const [pendingEsewaPayment, setPendingEsewaPayment] = useState<PendingEsewaPayment | null>(null)
+  const [paymentProcessingOverlay, setPaymentProcessingOverlay] = useState<{ title: string; message: string } | null>(null)
   const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false)
   const [authForm, setAuthForm] = useState<AuthFormState>(initialAuthForm)
   const [authStatus, setAuthStatus] = useState('')
@@ -280,7 +322,9 @@ export default function App() {
 
   useEffect(() => {
     if (!isSessionRestored) return
+    void restoreStoredCart()
     void restorePendingKhaltiPayment()
+    void restorePendingEsewaPayment()
     void handleIncomingUrl()
     const subscription = Linking.addEventListener('url', ({ url }) => {
       void handleIncomingUrl(url)
@@ -314,6 +358,35 @@ export default function App() {
     if (!selectedEventId) return
     void loadTicketTypes(selectedEventId)
   }, [api, selectedEventId])
+
+  useEffect(() => {
+    if (restoredStoredCartRef.current) return
+    if (!storedCartItems) return
+    if (!events.items.length) return
+    if (storedCartItems.length === 0) {
+      restoredStoredCartRef.current = true
+      return
+    }
+
+    const optimisticItems = buildCartItemsFromStoredSnapshot(storedCartItems)
+    if (optimisticItems.length > 0) {
+      setCartItems((current) => (current.length > 0 ? current : optimisticItems))
+    }
+    restoredStoredCartRef.current = true
+    void validateAndHydrateStoredCart(storedCartItems, { fromStartup: true })
+  }, [events.items, storedCartItems])
+
+  useEffect(() => {
+    if (activeView !== 'cart') return
+    if (cartItems.length === 0) return
+    const signature = cartItems
+      .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
+      .sort()
+      .join('|')
+    if (!signature || signature === lastValidatedCartSignatureRef.current) return
+    lastValidatedCartSignatureRef.current = signature
+    void validateExistingCartItems()
+  }, [activeView, cartItems])
 
   useEffect(() => {
     if (!session.user) {
@@ -360,6 +433,30 @@ export default function App() {
       setPendingKhaltiPayment(payment)
     } catch {
       await writeStoredPendingKhaltiPayment(null)
+    }
+  }
+
+  async function restorePendingEsewaPayment() {
+    try {
+      const payment = await readStoredPendingEsewaPayment()
+      if (!payment?.transactionUuid || !payment.totalAmount || !payment.launchUrl || !Array.isArray(payment.orderGroups)) return
+      setPendingEsewaPayment(payment)
+    } catch {
+      await writeStoredPendingEsewaPayment(null)
+    }
+  }
+
+  async function restoreStoredCart() {
+    try {
+      const stored = await readStoredCart()
+      if (!Array.isArray(stored)) {
+        setStoredCartItems([])
+        return
+      }
+      setStoredCartItems(stored.filter(isStoredCartItemLike))
+    } catch {
+      await writeStoredCart([])
+      setStoredCartItems([])
     }
   }
 
@@ -644,6 +741,190 @@ export default function App() {
     )
   }
 
+  async function clearPendingPayments(options: { keep?: 'khalti' | 'esewa' } = {}) {
+    if (options.keep !== 'khalti') {
+      setPendingKhaltiPayment(null)
+      await writeStoredPendingKhaltiPayment(null)
+    }
+    if (options.keep !== 'esewa') {
+      setPendingEsewaPayment(null)
+      await writeStoredPendingEsewaPayment(null)
+    }
+  }
+
+  function buildStoredCartSnapshot(items: CartItem[]) {
+    return items.map((item) => {
+      const event = events.items.find((entry) => entry.id === item.event_id)
+      return {
+        eventId: item.event_id,
+        ticketTypeId: item.ticket_type_id,
+        ticketName: item.ticket_type_name,
+        quantity: item.quantity,
+        unitPrice: item.unit_price_paisa,
+        eventTitle: item.event_name,
+        eventDate: String(event?.start_datetime ?? '')
+      } satisfies StoredCartItem
+    })
+  }
+
+  function buildCartItemsFromStoredSnapshot(items: StoredCartItem[]) {
+    return items.flatMap((item) => {
+      const event = events.items.find((entry) => entry.id === item.eventId)
+      const eventLocationId = String(event?.location_id ?? '')
+      if (!event || !eventLocationId) return []
+
+      return [
+        {
+          id: `${item.ticketTypeId}:${eventLocationId}`,
+          event_id: event.id,
+          event_name: event.name,
+          event_location_id: eventLocationId,
+          event_location_name: event.location_name ?? event.organization_name ?? 'Venue coming soon',
+          ticket_type_id: item.ticketTypeId,
+          ticket_type_name: item.ticketName,
+          quantity: Math.max(1, Math.min(99, item.quantity)),
+          unit_price_paisa: item.unitPrice,
+          currency: 'NPR'
+        } satisfies CartItem
+      ]
+    })
+  }
+
+  async function persistCartSnapshot(items: CartItem[]) {
+    await writeStoredCart(buildStoredCartSnapshot(items))
+  }
+
+  async function validateAndHydrateStoredCart(
+    storedItems: StoredCartItem[],
+    options: { fromStartup?: boolean; preserveExpiresAt?: boolean } = {}
+  ) {
+    if (validatingCartRef.current) return
+    validatingCartRef.current = true
+    try {
+      const grouped = new Map<string, StoredCartItem[]>()
+      for (const item of storedItems) {
+        const current = grouped.get(item.eventId) ?? []
+        current.push(item)
+        grouped.set(item.eventId, current)
+      }
+
+      const ticketTypesByEvent = new Map<string, TicketType[]>()
+      await Promise.all(
+        [...grouped.keys()].map(async (eventId) => {
+          const response = await api.getPublicEventTicketTypes(eventId)
+          ticketTypesByEvent.set(eventId, response.data ?? [])
+        })
+      )
+
+      const nextItems: CartItem[] = []
+      const updates: string[] = []
+      for (const stored of storedItems) {
+        const event = events.items.find((entry) => entry.id === stored.eventId)
+        const ticketType = ticketTypesByEvent.get(stored.eventId)?.find((entry) => entry.id === stored.ticketTypeId)
+        if (!event || !ticketType) {
+          updates.push(`${stored.ticketName} is no longer available and was removed from your cart.`)
+          continue
+        }
+
+        const quantityRemaining =
+          ticketType.quantity_remaining === null || ticketType.quantity_remaining === undefined
+            ? null
+            : Math.max(Number(ticketType.quantity_remaining ?? 0), 0)
+        if (quantityRemaining !== null && quantityRemaining <= 0) {
+          updates.push(`${ticketType.name} is sold out and was removed from your cart.`)
+          continue
+        }
+
+        const allowedQuantity = Math.max(
+          1,
+          Math.min(
+            stored.quantity,
+            ticketType.max_per_order ?? 99,
+            quantityRemaining === null ? stored.quantity : quantityRemaining
+          )
+        )
+        if (allowedQuantity !== stored.quantity) {
+          updates.push(`${ticketType.name} quantity was adjusted to ${allowedQuantity}.`)
+        }
+        if (ticketType.price_paisa !== stored.unitPrice) {
+          updates.push(`${ticketType.name} price changed to ${formatPrice(ticketType.price_paisa)}.`)
+        }
+
+        const eventLocationId = String(ticketType.event_location_id ?? event.location_id ?? '')
+        if (!eventLocationId) {
+          updates.push(`${ticketType.name} is missing location details and was removed from your cart.`)
+          continue
+        }
+
+        nextItems.push({
+          id: `${ticketType.id}:${event.location_id ?? ticketType.event_location_id ?? 'location'}`,
+          event_id: event.id,
+          event_name: event.name,
+          event_location_id: eventLocationId,
+          event_location_name: event.location_name ?? event.organization_name ?? 'Venue coming soon',
+          ticket_type_id: ticketType.id,
+          ticket_type_name: ticketType.name,
+          quantity: allowedQuantity,
+          unit_price_paisa: ticketType.price_paisa,
+          currency: ticketType.currency ?? 'NPR'
+        })
+      }
+
+      if (nextItems.length === 0) {
+        setCartItems([])
+        setCartHoldToken('')
+        setCartHoldExpiresAt('')
+        setCouponCodes({})
+        setCouponMessages({})
+        setCouponDiscounts({})
+        lastValidatedCartSignatureRef.current = ''
+        await writeStoredCart([])
+        if (updates.length > 0) {
+          setCartStatus(updates.join(' '))
+        }
+        return
+      }
+
+      const changed =
+        nextItems.length !== cartItems.length ||
+        nextItems.some((item, index) => {
+          const current = cartItems[index]
+          return (
+            !current ||
+            current.id !== item.id ||
+            current.quantity !== item.quantity ||
+            current.unit_price_paisa !== item.unit_price_paisa
+          )
+        })
+
+      if (options.fromStartup || changed) {
+        const saved = await commitCartItems(nextItems, { preserveExpiresAt: options.preserveExpiresAt })
+        if (!saved) return
+      }
+
+      if (updates.length > 0) {
+        setCartStatus(`Your cart was updated after rechecking availability. ${updates.join(' ')}`)
+      }
+      lastValidatedCartSignatureRef.current = nextItems
+        .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
+        .sort()
+        .join('|')
+    } catch (error) {
+      if (options.fromStartup) {
+        setCartStatus(`We restored your saved cart, but couldn’t verify it yet. ${buildApiErrorMessage(error, resolvedApiBaseUrl)}`)
+      } else {
+        setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
+      }
+      lastValidatedCartSignatureRef.current = ''
+    } finally {
+      validatingCartRef.current = false
+    }
+  }
+
+  async function validateExistingCartItems() {
+    await validateAndHydrateStoredCart(buildStoredCartSnapshot(cartItems), { preserveExpiresAt: true })
+  }
+
   async function commitCartItems(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
     try {
       const response = await api.createCartHolds({
@@ -657,6 +938,7 @@ export default function App() {
       setCartItems(nextItems)
       setCartHoldToken(response.data?.hold_token ?? '')
       setCartHoldExpiresAt(nextItems.length > 0 ? response.data?.expires_at ?? '' : '')
+      await persistCartSnapshot(nextItems)
       if (nextItems.length === 0) {
         setCouponCodes({})
         setCouponMessages({})
@@ -670,7 +952,8 @@ export default function App() {
     }
   }
 
-  async function addTicketToCart(ticketType: TicketType, options: { stayOnCurrentView?: boolean } = {}) {
+  async function addTicketToCart(ticketType: TicketType) {
+    if (isAddingToCartTicketTypeId || isSubmittingCheckout) return
     const selectedEvent = events.items.find((event) => event.id === ticketType.event_id)
     if (!selectedEvent) {
       setCartStatus('Select an event before adding tickets.')
@@ -703,17 +986,21 @@ export default function App() {
         )
       : [...cartItems, nextItem]
 
-    const saved = await commitCartItems(nextItems)
-    if (saved) {
-      setCartStatus(`Added ${quantity} x ${ticketType.name} to cart.`)
-      if (!options.stayOnCurrentView) {
+    setIsAddingToCartTicketTypeId(ticketType.id)
+    try {
+      const saved = await commitCartItems(nextItems)
+      if (saved) {
+        setCartStatus(`Added ${quantity} x ${ticketType.name} to cart.`)
+        setIsTicketPickerOpen(false)
         setActiveView('cart')
       }
+    } finally {
+      setIsAddingToCartTicketTypeId('')
     }
   }
 
   async function updateCartItemQuantity(itemId: string, nextQuantity: number) {
-    if (isUpdatingCartItemId) return
+    if (isUpdatingCartItemId || isSubmittingCheckout) return
     setIsUpdatingCartItemId(itemId)
     if (nextQuantity <= 0) {
       try {
@@ -735,23 +1022,25 @@ export default function App() {
   }
 
   async function removeCartItem(itemId: string) {
+    if (isSubmittingCheckout) return
     const nextItems = cartItems.filter((item) => item.id !== itemId)
     await commitCartItems(nextItems, { preserveExpiresAt: true })
   }
 
   async function clearCart() {
+    if (isSubmittingCheckout) return
     await commitCartItems([])
-    setPendingKhaltiPayment(null)
-    await writeStoredPendingKhaltiPayment(null)
+    processedPaymentCallbackRef.current = ''
+    await clearPendingPayments()
   }
 
   async function resetCartAfterSuccessfulCheckout() {
     await commitCartItems([])
-    setPendingKhaltiPayment(null)
-    await writeStoredPendingKhaltiPayment(null)
+    await clearPendingPayments()
   }
 
   async function applyCoupon(eventId: string) {
+    if (isSubmittingCheckout) return
     const code = couponCodes[eventId]?.trim()
     const subtotal = getEventSubtotal(eventId)
 
@@ -909,6 +1198,8 @@ export default function App() {
         throw new Error('Khalti initiate did not return a payment URL.')
       }
 
+      await clearPendingPayments()
+      processedPaymentCallbackRef.current = ''
       const pendingPayment = {
         pidx: response.data.pidx,
         paymentUrl: response.data.payment_url,
@@ -925,11 +1216,66 @@ export default function App() {
     }
   }
 
+  async function startEsewaCheckout() {
+    if (!session.user) {
+      setCartStatus('Login is required for eSewa checkout in mobile right now.')
+      setActiveView('account')
+      return
+    }
+    if (cartItems.length === 0 || isSubmittingCheckout) return
+    if (!paymentState.settings?.esewa_can_initiate) {
+      setCartStatus(paymentState.settings?.esewa_runtime_note || 'eSewa is not configured right now.')
+      return
+    }
+
+    setIsSubmittingCheckout(true)
+    try {
+      const orderGroups = buildOrderGroups()
+      const amountPaisa = orderGroups.reduce((sum, group) => sum + group.total_amount_paisa, 0)
+      const response = await api.initiateStorefrontEsewaPayment({
+        amount_paisa: amountPaisa,
+        order_groups: orderGroups,
+        redirect_uri: buildEsewaMobileReturnUrl(resolvedApiBaseUrl)
+      })
+      const formAction = String(response.data?.form_action ?? '').trim()
+      const fields = response.data?.fields ?? {}
+      const transactionUuid = String(fields.transaction_uuid ?? '').trim()
+      const totalAmount = String(fields.total_amount ?? '').trim()
+      const productCode = String(fields.product_code ?? '').trim()
+      if (!formAction || !transactionUuid || !totalAmount || !productCode) {
+        throw new Error('eSewa initiate did not return complete payment details.')
+      }
+
+      await clearPendingPayments()
+      processedPaymentCallbackRef.current = ''
+      const pendingPayment = {
+        transactionUuid,
+        totalAmount,
+        productCode,
+        mode: response.data?.mode === 'live' ? 'live' : 'test',
+        launchUrl: buildEsewaMobileLaunchUrl(resolvedApiBaseUrl, formAction, fields),
+        orderGroups
+      } satisfies PendingEsewaPayment
+      setPendingEsewaPayment(pendingPayment)
+      await writeStoredPendingEsewaPayment(pendingPayment)
+      setCartStatus('eSewa payment session created. Complete payment in the browser, then return and verify.')
+      await Linking.openURL(pendingPayment.launchUrl)
+    } catch (error) {
+      setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
+    } finally {
+      setIsSubmittingCheckout(false)
+    }
+  }
+
   async function verifyKhaltiPayment() {
     if (!pendingKhaltiPayment || isSubmittingCheckout) return
 
     setIsSubmittingCheckout(true)
     try {
+      setPaymentProcessingOverlay({
+        title: 'Verifying payment',
+        message: 'Processing your Khalti payment. Please wait a moment.'
+      })
       const lookup = await api.lookupStorefrontKhaltiPayment({ pidx: pendingKhaltiPayment.pidx })
       const status = String(lookup.data?.status ?? '').trim().toLowerCase()
       if (!/complete|completed/.test(status)) {
@@ -949,6 +1295,62 @@ export default function App() {
     } catch (error) {
       setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
     } finally {
+      setPaymentProcessingOverlay(null)
+      setIsSubmittingCheckout(false)
+    }
+  }
+
+  async function verifyEsewaPayment(options: {
+    pendingPayment?: PendingEsewaPayment | null
+    encodedData?: string
+    successMessage?: string
+  } = {}) {
+    const payment = options.pendingPayment ?? pendingEsewaPayment
+    if (!payment || isSubmittingCheckout) return
+
+    setIsSubmittingCheckout(true)
+    try {
+      setCartStatus('')
+      setPaymentProcessingOverlay({
+        title: 'Verifying payment',
+        message: 'Processing your eSewa payment. Please wait a moment.'
+      })
+      const verification = options.encodedData?.trim()
+        ? await api.verifyStorefrontEsewaPayment({
+            data: options.encodedData.trim(),
+            mode: payment.mode
+          })
+        : await api.lookupStorefrontEsewaPaymentStatus({
+            transaction_uuid: payment.transactionUuid,
+            total_amount: payment.totalAmount,
+            mode: payment.mode
+          })
+      const status = String(verification.data?.status ?? '').trim().toUpperCase()
+      if (status !== 'COMPLETE') {
+        setCartStatus(`eSewa payment status is "${verification.data?.status ?? 'unknown'}". Finish payment first, then try again.`)
+        processedPaymentCallbackRef.current = ''
+        return
+      }
+
+      const completed = await api.completeStorefrontCheckout({
+        order_groups: payment.orderGroups,
+        payment: {
+          provider: 'esewa',
+          reference: String(verification.data?.transaction_code ?? '').trim() || undefined
+        }
+      })
+      await resetCartAfterSuccessfulCheckout()
+      setCartStatus(
+        options.successMessage ??
+          `eSewa payment verified in the app. ${Number(completed.data?.completed_orders ?? payment.orderGroups.length)} order(s) completed.`
+      )
+      await loadPurchasedTickets()
+      setActiveView('tickets')
+    } catch (error) {
+      setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
+      processedPaymentCallbackRef.current = ''
+    } finally {
+      setPaymentProcessingOverlay(null)
       setIsSubmittingCheckout(false)
     }
   }
@@ -963,54 +1365,113 @@ export default function App() {
         return
       }
 
-      if (!isMobileKhaltiReturnUrl(rawUrl)) return
+      if (isMobileKhaltiReturnUrl(rawUrl)) {
+        const url = new URL(rawUrl)
+        const pidx = url.searchParams.get('pidx')?.trim() ?? ''
+        const status = url.searchParams.get('status')?.trim().toLowerCase() ?? ''
+        const transactionId = url.searchParams.get('transaction_id')?.trim() ?? ''
+
+        setActiveView('cart')
+
+        if (!pidx) {
+          setCartStatus('Khalti returned to the app, but the payment reference is missing.')
+          return
+        }
+
+        const callbackKey = `khalti:${pidx}:${status}:${transactionId}`
+        if (processedPaymentCallbackRef.current === callbackKey) return
+        processedPaymentCallbackRef.current = callbackKey
+
+        const restoredPending = pendingKhaltiPayment ?? (await readStoredPendingKhaltiPayment())
+        if (!restoredPending || restoredPending.pidx !== pidx) {
+          setCartStatus('Khalti returned to the app, but this payment session is no longer available.')
+          processedPaymentCallbackRef.current = ''
+          return
+        }
+
+        setPendingKhaltiPayment(restoredPending)
+
+        if (status === 'user canceled') {
+          setCartStatus('Khalti payment was canceled. Your cart is still here.')
+          processedPaymentCallbackRef.current = ''
+          return
+        }
+
+        setIsSubmittingCheckout(true)
+        setCartStatus('')
+        setPaymentProcessingOverlay({
+          title: 'Verifying payment',
+          message: 'Processing your Khalti payment. Please wait a moment.'
+        })
+        const lookup = await api.lookupStorefrontKhaltiPayment({ pidx })
+        const lookupStatus = String(lookup.data?.status ?? '').trim().toLowerCase()
+        if (!/complete|completed/.test(lookupStatus)) {
+          setCartStatus(`Khalti payment status is "${lookup.data?.status ?? 'unknown'}". Finish payment first, then try again.`)
+          processedPaymentCallbackRef.current = ''
+          return
+        }
+
+        const completion = await api.completeStorefrontKhaltiPayment({
+          pidx,
+          transaction_id: transactionId || lookup.data?.transaction_id || undefined,
+          order_groups: restoredPending.orderGroups
+        })
+        await resetCartAfterSuccessfulCheckout()
+        setCartStatus(`Khalti payment verified in the app. ${Number(completion.data?.completed_orders ?? 0)} order(s) completed.`)
+        await loadPurchasedTickets()
+        setActiveView('tickets')
+        return
+      }
+
+      if (!isMobileEsewaReturnUrl(rawUrl)) return
 
       const url = new URL(rawUrl)
-      const pidx = url.searchParams.get('pidx')?.trim() ?? ''
+      const encodedData = url.searchParams.get('data')?.trim() ?? ''
       const status = url.searchParams.get('status')?.trim().toLowerCase() ?? ''
-      const transactionId = url.searchParams.get('transaction_id')?.trim() ?? ''
+      const transactionUuid = url.searchParams.get('transaction_uuid')?.trim() ?? ''
+      const totalAmount = url.searchParams.get('total_amount')?.trim() ?? ''
 
       setActiveView('cart')
 
-      if (!pidx) {
-        setCartStatus('Khalti returned to the app, but the payment reference is missing.')
+      const callbackKey = `esewa:${encodedData || `${transactionUuid}:${totalAmount}`}:${status}`
+      if (processedPaymentCallbackRef.current === callbackKey) return
+      processedPaymentCallbackRef.current = callbackKey
+
+      const restoredPending = pendingEsewaPayment ?? (await readStoredPendingEsewaPayment())
+      if (!restoredPending) {
+        setCartStatus('eSewa returned to the app, but this payment session is no longer available.')
+        processedPaymentCallbackRef.current = ''
         return
       }
 
-      const restoredPending = pendingKhaltiPayment ?? (await readStoredPendingKhaltiPayment())
-      if (!restoredPending || restoredPending.pidx !== pidx) {
-        setCartStatus('Khalti returned to the app, but this payment session is no longer available.')
+      setPendingEsewaPayment(restoredPending)
+
+      if (status === 'failed' || status === 'failure' || status === 'canceled' || status === 'cancelled') {
+        setCartStatus('eSewa payment was not completed. Your cart is still here.')
+        processedPaymentCallbackRef.current = ''
         return
       }
 
-      setPendingKhaltiPayment(restoredPending)
-
-      if (status === 'user canceled') {
-        setCartStatus('Khalti payment was canceled. Your cart is still here.')
+      if (
+        transactionUuid &&
+        totalAmount &&
+        (restoredPending.transactionUuid !== transactionUuid || restoredPending.totalAmount !== totalAmount)
+      ) {
+        setCartStatus('eSewa returned to the app, but this payment session does not match your current cart.')
+        processedPaymentCallbackRef.current = ''
         return
       }
 
-      setIsSubmittingCheckout(true)
-      setCartStatus('Khalti returned to the app. Verifying payment...')
-      const lookup = await api.lookupStorefrontKhaltiPayment({ pidx })
-      const lookupStatus = String(lookup.data?.status ?? '').trim().toLowerCase()
-      if (!/complete|completed/.test(lookupStatus)) {
-        setCartStatus(`Khalti payment status is "${lookup.data?.status ?? 'unknown'}". Finish payment first, then try again.`)
-        return
-      }
-
-      const completion = await api.completeStorefrontKhaltiPayment({
-        pidx,
-        transaction_id: transactionId || lookup.data?.transaction_id || undefined,
-        order_groups: restoredPending.orderGroups
+      await verifyEsewaPayment({
+        pendingPayment: restoredPending,
+        encodedData,
+        successMessage: 'eSewa payment verified in the app. Your tickets are ready.'
       })
-      await resetCartAfterSuccessfulCheckout()
-      setCartStatus(`Khalti payment verified in the app. ${Number(completion.data?.completed_orders ?? 0)} order(s) completed.`)
-      await loadPurchasedTickets()
-      setActiveView('tickets')
     } catch (error) {
       setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
+      processedPaymentCallbackRef.current = ''
     } finally {
+      setPaymentProcessingOverlay(null)
       setIsSubmittingCheckout(false)
     }
   }
@@ -1241,10 +1702,16 @@ export default function App() {
   const cartSubtotalPaisa = cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
   const cartDiscountPaisa = Object.values(couponDiscounts).reduce((sum, item) => sum + item.discount, 0)
   const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartDiscountPaisa)
+  const isPaymentFlowBusy = isSubmittingCheckout || Boolean(paymentProcessingOverlay)
   const currentTitle = getViewTitle(activeView)
   const currentSubtitle = getViewSubtitle(activeView, cartItems.length)
   const topInset = Platform.OS === 'android' ? Math.max(NativeStatusBar.currentHeight ?? 0, 18) : 18
   const bottomInset = Platform.OS === 'android' ? 18 : 12
+
+  useEffect(() => {
+    if (activeView !== 'tickets') return
+    setExpandedTicketGroups({})
+  }, [activeView, groupedPurchasedTickets.upcoming.length, groupedPurchasedTickets.past.length])
 
   useEffect(() => {
     if (rotatingFeaturedEvents.length <= 1) return
@@ -1317,7 +1784,7 @@ export default function App() {
         style={[
           styles.appChrome,
           {
-            paddingTop: topInset + 6
+            paddingTop: Math.max(topInset - 4, 0)
           }
         ]}
       >
@@ -1392,33 +1859,38 @@ export default function App() {
                 <Text style={styles.mutedText}>No events match that search yet.</Text>
               ) : (
                 <View style={styles.railsStack}>
-                  {/* Ads integration note:
-                      Insert a future <InlineAdCard /> between these rails using
-                      GET /api/ads/placement/HOME_BETWEEN_RAILS?device=mobile&rail_index=N&ads_served=M.
-                      The backend selector already applies device rules, frequency, and page caps. */}
-                  {eventRails.map((rail) => (
-                    <View key={rail.id} style={styles.eventRail}>
-                      <View style={styles.railHeader}>
-                        <View style={[styles.railAccent, { backgroundColor: rail.accent_color }]} />
-                        <View style={styles.railHeaderCopy}>
-                          <Text style={styles.railEyebrow}>{rail.eyebrow_text}</Text>
-                          <Text style={styles.railTitle}>{rail.label}</Text>
+                  {eventRails.map((rail, railIndex) => (
+                    <View key={rail.id} style={styles.eventRailSlot}>
+                      <View style={styles.eventRail}>
+                        <View style={styles.railHeader}>
+                          <View style={[styles.railAccent, { backgroundColor: rail.accent_color }]} />
+                          <View style={styles.railHeaderCopy}>
+                            <Text style={styles.railEyebrow}>{rail.eyebrow_text}</Text>
+                            <Text style={styles.railTitle}>{rail.label}</Text>
+                          </View>
                         </View>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbnailRail}>
+                          {rail.events.map((event, index) => (
+                            <EventThumbnail
+                              apiBaseUrl={resolvedApiBaseUrl}
+                              event={event}
+                              key={`${rail.id}-${event.id}`}
+                              fallbackIndex={index}
+                              selected={selectedEventId === event.id}
+                              onPress={() => {
+                                openTicketPicker(event.id)
+                              }}
+                            />
+                          ))}
+                        </ScrollView>
                       </View>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbnailRail}>
-                        {rail.events.map((event, index) => (
-                          <EventThumbnail
-                            apiBaseUrl={resolvedApiBaseUrl}
-                            event={event}
-                            key={`${rail.id}-${event.id}`}
-                            fallbackIndex={index}
-                            selected={selectedEventId === event.id}
-                            onPress={() => {
-                              openTicketPicker(event.id)
-                            }}
-                          />
-                        ))}
-                      </ScrollView>
+                      <MobileAdSlot
+                        api={api}
+                        adsServed={railIndex}
+                        pageUrl="mobile://home"
+                        placement="HOME_BETWEEN_RAILS"
+                        railIndex={railIndex + 1}
+                      />
                     </View>
                   ))}
                 </View>
@@ -1447,6 +1919,7 @@ export default function App() {
                 </View>
               ) : (
                 <View style={styles.stackSmall}>
+                  <MobileAdSlot api={api} adsServed={0} pageUrl="mobile://tickets" placement="EVENT_LIST_BETWEEN_RAILS" railIndex={1} />
                   {groupedPurchasedTickets.upcoming.length > 0 ? (
                     <View style={styles.ticketSection}>
                       <Text style={styles.ticketSectionTitle}>Upcoming events</Text>
@@ -1456,11 +1929,11 @@ export default function App() {
                           key={`upcoming-${group.eventId || index}`}
                           group={group}
                           downloadingId={purchasedTickets.downloadingId}
-                          expanded={expandedTicketGroups[group.eventId] ?? true}
+                          expanded={expandedTicketGroups[group.eventId] ?? false}
                           onToggleExpand={() =>
                             setExpandedTicketGroups((current) => ({
                               ...current,
-                              [group.eventId]: !(current[group.eventId] ?? true)
+                              [group.eventId]: !(current[group.eventId] ?? false)
                             }))
                           }
                           onDownload={(ticket) => void downloadTicketPdf(ticket)}
@@ -1513,10 +1986,6 @@ export default function App() {
                       ))}
                     </View>
                   ) : null}
-                  <View style={styles.inlineActions}>
-                    <ActionButton label="Refresh tickets" secondary onPress={() => void loadPurchasedTickets()} />
-                  </View>
-                  {purchasedTickets.lastLoadedAt ? <Text style={styles.cardHint}>Updated {formatTimestamp(purchasedTickets.lastLoadedAt)}</Text> : null}
                 </View>
               )}
             </Card>
@@ -1542,14 +2011,14 @@ export default function App() {
                           <View style={styles.cartItemControls}>
                             <MiniButton
                               label="-"
-                              disabled={Boolean(isUpdatingCartItemId)}
+                              disabled={Boolean(isUpdatingCartItemId) || isPaymentFlowBusy}
                               loading={isUpdatingCartItemId === item.id}
                               onPress={() => void updateCartItemQuantity(item.id, item.quantity - 1)}
                             />
                             <Text style={styles.quantityValue}>{item.quantity}</Text>
                             <MiniButton
                               label="+"
-                              disabled={Boolean(isUpdatingCartItemId)}
+                              disabled={Boolean(isUpdatingCartItemId) || isPaymentFlowBusy}
                               loading={isUpdatingCartItemId === item.id}
                               onPress={() => void updateCartItemQuantity(item.id, item.quantity + 1)}
                             />
@@ -1560,14 +2029,21 @@ export default function App() {
                       <TextInput
                         value={couponCodes[group.eventId] ?? ''}
                         onChangeText={(value) => setCouponCodes((current) => ({ ...current, [group.eventId]: value }))}
+                        editable={!isPaymentFlowBusy}
                         style={styles.input}
                         placeholder="Event coupon code"
                         placeholderTextColor="#90a3b8"
                         autoCapitalize="characters"
                       />
                       <View style={styles.inlineActions}>
-                        <ActionButton label="Apply coupon" secondary onPress={() => void applyCoupon(group.eventId)} />
                         <ActionButton
+                          disabled={isPaymentFlowBusy}
+                          label="Apply coupon"
+                          secondary
+                          onPress={() => void applyCoupon(group.eventId)}
+                        />
+                        <ActionButton
+                          disabled={isPaymentFlowBusy}
                           label="Remove items"
                           secondary
                           onPress={() => void commitCartItems(cartItems.filter((item) => item.event_id !== group.eventId), { preserveExpiresAt: true })}
@@ -1591,15 +2067,23 @@ export default function App() {
 
                   <View style={styles.inlineActions}>
                     <ActionButton
+                      disabled={isPaymentFlowBusy}
                       label={isSubmittingCheckout ? 'Please wait...' : 'Complete checkout'}
                       onPress={() => void completeManualCheckout()}
                     />
                     <ActionButton
+                      disabled={isPaymentFlowBusy}
                       label="Pay with Khalti"
                       secondary
                       onPress={() => void startKhaltiCheckout()}
                     />
-                    <ActionButton label="Clear cart" secondary onPress={() => void clearCart()} />
+                    <ActionButton
+                      disabled={isPaymentFlowBusy}
+                      label="Pay with eSewa"
+                      secondary
+                      onPress={() => void startEsewaCheckout()}
+                    />
+                    <ActionButton disabled={isPaymentFlowBusy} label="Clear cart" secondary onPress={() => void clearCart()} />
                   </View>
 
                   {pendingKhaltiPayment ? (
@@ -1607,8 +2091,32 @@ export default function App() {
                       <Text style={styles.cardTitle}>Pending Khalti payment</Text>
                       <Text style={styles.cardHint}>Open the payment page, finish payment, then verify it here.</Text>
                       <View style={styles.inlineActions}>
-                        <ActionButton label="Open payment page" onPress={() => void Linking.openURL(pendingKhaltiPayment.paymentUrl)} />
-                        <ActionButton label="Verify payment" secondary onPress={() => void verifyKhaltiPayment()} />
+                        <ActionButton
+                          disabled={isPaymentFlowBusy}
+                          label="Open payment page"
+                          onPress={() => void Linking.openURL(pendingKhaltiPayment.paymentUrl)}
+                        />
+                        <ActionButton disabled={isPaymentFlowBusy} label="Verify payment" secondary onPress={() => void verifyKhaltiPayment()} />
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {pendingEsewaPayment ? (
+                    <View style={styles.khaltiPanel}>
+                      <Text style={styles.cardTitle}>Pending eSewa payment</Text>
+                      <Text style={styles.cardHint}>Return to eSewa if needed, then verify the payment once you are back.</Text>
+                      <View style={styles.inlineActions}>
+                        <ActionButton
+                          disabled={isPaymentFlowBusy}
+                          label="Open payment page"
+                          onPress={() => void Linking.openURL(pendingEsewaPayment.launchUrl)}
+                        />
+                        <ActionButton
+                          disabled={isPaymentFlowBusy}
+                          label="Verify payment"
+                          secondary
+                          onPress={() => void verifyEsewaPayment()}
+                        />
                       </View>
                     </View>
                   ) : null}
@@ -1824,8 +2332,10 @@ export default function App() {
         loading={ticketTypes.loading}
         ticketTypes={ticketTypes.eventId === selectedEventId ? ticketTypes.items : []}
         visible={isTicketPickerOpen}
+        isAddingToCart={Boolean(isAddingToCartTicketTypeId)}
+        addingTicketTypeId={isAddingToCartTicketTypeId}
         selectedQuantities={selectedQuantities}
-        onAddToCart={(ticketType) => void addTicketToCart(ticketType, { stayOnCurrentView: true })}
+        onAddToCart={(ticketType) => void addTicketToCart(ticketType)}
         onClose={() => setIsTicketPickerOpen(false)}
         onOpenCart={() => {
           setIsTicketPickerOpen(false)
@@ -1843,6 +2353,7 @@ export default function App() {
           <Pressable style={styles.drawerScrim} onPress={() => setIsMenuOpen(false)} />
           <SideDrawer
             activeView={activeView}
+            api={api}
             cartCount={cartItems.length}
             onClose={() => setIsMenuOpen(false)}
             onRefreshFeed={() => void Promise.all([loadPublicEvents(), loadRailsSettings()])}
@@ -1854,6 +2365,15 @@ export default function App() {
             validatorAllowed={validatorAllowed}
           />
         </>
+      ) : null}
+      {paymentProcessingOverlay ? (
+        <View pointerEvents="auto" style={styles.paymentProcessingOverlay}>
+          <View style={styles.paymentProcessingCard}>
+            <ActivityIndicator color="#f97316" size="large" />
+            <Text style={styles.paymentProcessingTitle}>{paymentProcessingOverlay.title}</Text>
+            <Text style={styles.paymentProcessingMessage}>{paymentProcessingOverlay.message}</Text>
+          </View>
+        </View>
       ) : null}
       <Modal transparent visible={Boolean(activeTicketQrValue)} animationType="fade" onRequestClose={() => setActiveTicketQrValue('')}>
         <View style={styles.modalOverlay}>
@@ -2034,8 +2554,97 @@ function QuickAccessRow({
   )
 }
 
+function MobileAdSlot({
+  api,
+  placement,
+  pageUrl,
+  railIndex,
+  adsServed = 0,
+  style
+}: {
+  api: ReturnType<typeof createApiClient>
+  placement: AdPlacement
+  pageUrl: string
+  railIndex?: number
+  adsServed?: number
+  style?: StyleProp<ViewStyle>
+}) {
+  const [ad, setAd] = useState<AdRecord | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const effectiveRailIndex =
+    placement === 'HOME_BETWEEN_RAILS' || placement === 'EVENT_LIST_BETWEEN_RAILS' || placement === 'EVENT_DETAIL_BETWEEN_RAILS'
+      ? 3
+      : railIndex
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadAd() {
+      setIsLoading(true)
+      try {
+        const response = await api.getPlacementAd({
+          placement,
+          device: 'mobile',
+          page_url: pageUrl,
+          rail_index: effectiveRailIndex,
+          ads_served: adsServed
+        })
+        if (!cancelled) {
+          setAd(response.data ?? null)
+        }
+      } catch {
+        if (!cancelled) {
+          setAd(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    void loadAd()
+    return () => {
+      cancelled = true
+    }
+  }, [adsServed, api, effectiveRailIndex, pageUrl, placement])
+
+  useEffect(() => {
+    if (!ad?.id) return
+    void api.trackAdImpression(ad.id, {
+      placement,
+      device_type: 'mobile',
+      page_url: pageUrl
+    }).catch(() => {})
+  }, [ad?.id, api, pageUrl, placement])
+
+  async function openAd() {
+    if (!ad?.destination_url) return
+    void api.trackAdClick(ad.id, {
+      placement,
+      device_type: 'mobile',
+      page_url: pageUrl
+    }).catch(() => {})
+    await Linking.openURL(ad.destination_url)
+  }
+
+  if (isLoading || !ad) return null
+
+  return (
+    <Pressable onPress={() => void openAd()} style={[styles.mobileAdCard, style]}>
+      <Image resizeMode="cover" source={{ uri: ad.image_url }} style={styles.mobileAdImage} />
+      <View style={styles.mobileAdBody}>
+        <Text style={styles.mobileAdLabel}>Sponsored</Text>
+        <Text numberOfLines={2} style={styles.mobileAdTitle}>{ad.name}</Text>
+        <Text numberOfLines={1} style={styles.mobileAdMeta}>{ad.advertiser_name}</Text>
+      </View>
+    </Pressable>
+  )
+}
+
 function SideDrawer({
   activeView,
+  api,
   bottomInset,
   cartCount,
   sessionLabel,
@@ -2047,6 +2656,7 @@ function SideDrawer({
   onSelect
 }: {
   activeView: MobileView
+  api: ReturnType<typeof createApiClient>
   bottomInset: number
   cartCount: number
   sessionLabel: string
@@ -2098,6 +2708,14 @@ function SideDrawer({
             </Pressable>
           ))}
       </View>
+      <MobileAdSlot
+        api={api}
+        adsServed={0}
+        pageUrl="mobile://drawer"
+        placement="EVENT_LIST_BETWEEN_RAILS"
+        railIndex={3}
+        style={styles.drawerAdSlot}
+      />
       <View style={styles.drawerBackendCard}>
         <Text style={styles.drawerBackendTitle}>Refresh events</Text>
         <Text style={styles.drawerBackendHint}>Pull the latest featured events and availability.</Text>
@@ -2292,7 +2910,7 @@ function EventTicketGroupCard({
         </View>
       </Pressable>
       {expanded ? (
-        <View style={styles.stackSmall}>
+        <View style={styles.ticketEventGroupTickets}>
           {group.tickets.map((ticket) => (
             <PurchasedTicketCard
               key={ticket.id}
@@ -2315,6 +2933,8 @@ function TicketPickerModal({
   cartStatus,
   event,
   loading,
+  isAddingToCart,
+  addingTicketTypeId,
   selectedQuantities,
   ticketTypes,
   visible,
@@ -2328,6 +2948,8 @@ function TicketPickerModal({
   cartStatus: string
   event: PublicEvent | null
   loading: boolean
+  isAddingToCart: boolean
+  addingTicketTypeId: string
   selectedQuantities: Record<string, number>
   ticketTypes: TicketType[]
   visible: boolean
@@ -2345,7 +2967,7 @@ function TicketPickerModal({
               <Text style={styles.modalTitle}>{event?.name ?? 'Choose tickets'}</Text>
               <Text style={styles.modalSubtitle}>{event?.location_name || event?.organization_name || 'Select a ticket type'}</Text>
             </View>
-            <Pressable onPress={onClose} style={styles.drawerCloseButton}>
+            <Pressable disabled={isAddingToCart} onPress={onClose} style={[styles.drawerCloseButton, isAddingToCart ? styles.actionButtonDisabled : null]}>
               <AppIcon color="#0f172a" name="close" size={18} />
             </Pressable>
           </View>
@@ -2372,13 +2994,18 @@ function TicketPickerModal({
                     <View style={styles.ticketTypeActions}>
                       <Text style={styles.ticketTypePrice}>{formatPrice(ticketType.price_paisa)}</Text>
                       <View style={styles.quantityRow}>
-                        <MiniButton label="-" onPress={() => onQuantityChange(ticketType, quantity - 1)} />
+                        <MiniButton disabled={isAddingToCart} label="-" onPress={() => onQuantityChange(ticketType, quantity - 1)} />
                         <Text style={styles.quantityValue}>{quantity}</Text>
-                        <MiniButton label="+" onPress={() => onQuantityChange(ticketType, quantity + 1)} />
+                        <MiniButton disabled={isAddingToCart} label="+" onPress={() => onQuantityChange(ticketType, quantity + 1)} />
                       </View>
                       <View style={styles.inlineActions}>
-                        <ActionButton label="Add to cart" onPress={() => onAddToCart(ticketType)} />
-                        <ActionButton label="Close" secondary onPress={onClose} />
+                        <ActionButton
+                          disabled={isAddingToCart}
+                          label="Add to cart"
+                          loading={addingTicketTypeId === ticketType.id}
+                          onPress={() => onAddToCart(ticketType)}
+                        />
+                        <ActionButton disabled={isAddingToCart} label="Close" secondary onPress={onClose} />
                       </View>
                     </View>
                   </View>
@@ -2388,8 +3015,8 @@ function TicketPickerModal({
             {cartStatus ? <Text style={isStatusError(cartStatus) ? styles.errorText : styles.successText}>{cartStatus}</Text> : null}
           </ScrollView>
           <View style={styles.modalFooter}>
-            <ActionButton label={`Open cart${cartCount > 0 ? ` (${cartCount})` : ''}`} onPress={onOpenCart} />
-            <ActionButton label="Keep browsing" secondary onPress={onClose} />
+            <ActionButton disabled={isAddingToCart} label={`Open cart${cartCount > 0 ? ` (${cartCount})` : ''}`} onPress={onOpenCart} />
+            <ActionButton disabled={isAddingToCart} label="Keep browsing" secondary onPress={onClose} />
           </View>
         </View>
       </View>
@@ -2444,10 +3071,30 @@ function TabButton({
   )
 }
 
-function ActionButton({ label, onPress, secondary = false }: { label: string; onPress: () => void; secondary?: boolean }) {
+function ActionButton({
+  label,
+  onPress,
+  secondary = false,
+  disabled = false,
+  loading = false
+}: {
+  label: string
+  onPress: () => void
+  secondary?: boolean
+  disabled?: boolean
+  loading?: boolean
+}) {
   return (
-    <Pressable onPress={onPress} style={[styles.actionButton, secondary ? styles.actionButtonSecondary : null]}>
-      <Text style={[styles.actionButtonLabel, secondary ? styles.actionButtonLabelSecondary : null]}>{label}</Text>
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.actionButton, secondary ? styles.actionButtonSecondary : null, disabled ? styles.actionButtonDisabled : null]}
+    >
+      {loading ? (
+        <ActivityIndicator color={secondary ? '#9a3412' : '#fff7ed'} size="small" />
+      ) : (
+        <Text style={[styles.actionButtonLabel, secondary ? styles.actionButtonLabelSecondary : null]}>{label}</Text>
+      )}
     </Pressable>
   )
 }
@@ -2790,6 +3437,17 @@ function isMobileKhaltiReturnUrl(rawUrl: string) {
   }
 }
 
+function isMobileEsewaReturnUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl)
+    const host = url.hostname.trim().toLowerCase()
+    const path = url.pathname.trim().toLowerCase()
+    return host === mobileEsewaReturnPath || path.endsWith(`/${mobileEsewaReturnPath}`) || path === `/${mobileEsewaReturnPath}`
+  } catch {
+    return false
+  }
+}
+
 function isMobileGoogleReturnUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl)
@@ -2799,6 +3457,22 @@ function isMobileGoogleReturnUrl(rawUrl: string) {
   } catch {
     return false
   }
+}
+
+function isStoredCartItemLike(value: unknown): value is StoredCartItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Partial<StoredCartItem>
+  return (
+    typeof item.eventId === 'string' &&
+    typeof item.ticketTypeId === 'string' &&
+    typeof item.ticketName === 'string' &&
+    typeof item.quantity === 'number' &&
+    typeof item.unitPrice === 'number' &&
+    typeof item.eventTitle === 'string' &&
+    typeof item.eventDate === 'string' &&
+    Number.isFinite(item.quantity) &&
+    Number.isFinite(item.unitPrice)
+  )
 }
 
 function decodeGoogleMobileAuthUser(encodedUser: string) {
@@ -2909,20 +3583,20 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   appChrome: {
     paddingHorizontal: 18,
-    paddingBottom: 10,
-    gap: 12,
+    paddingBottom: 8,
+    gap: 10,
     backgroundColor: '#0b1220',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)'
   },
-  appHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  appHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   appHeaderCopy: { flex: 1, gap: 2 },
   appHeaderTitle: { color: '#f8fafc', fontSize: 22, fontWeight: '800' },
   appHeaderSubtitle: { color: '#94a3b8', fontSize: 13 },
   iconButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -2999,6 +3673,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9'
   },
   drawerMenu: { gap: 10 },
+  drawerAdSlot: { marginTop: 14 },
   drawerMenuItem: {
     minHeight: 50,
     borderRadius: 16,
@@ -3057,6 +3732,7 @@ const styles = StyleSheet.create({
   inlineActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   actionButton: { minHeight: 44, borderRadius: 999, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f97316' },
   actionButtonSecondary: { backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fdba74' },
+  actionButtonDisabled: { opacity: 0.6 },
   actionButtonLabel: { color: '#fff7ed', fontSize: 14, fontWeight: '800' },
   actionButtonLabelSecondary: { color: '#9a3412' },
   miniButton: { minWidth: 32, minHeight: 32, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0f172a' },
@@ -3074,6 +3750,7 @@ const styles = StyleSheet.create({
   railHeaderCopy: { flex: 1 },
   railEyebrow: { color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   railTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
+  eventRailSlot: { gap: 12 },
   thumbnailRail: { gap: 12, paddingRight: 6 },
   thumbnailCard: { width: 168, borderRadius: 16, overflow: 'hidden', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
   thumbnailCardSelected: { borderColor: '#f97316', backgroundColor: '#fff7ed' },
@@ -3133,6 +3810,54 @@ const styles = StyleSheet.create({
   ticketEventGroupCopy: { padding: 12, gap: 4 },
   ticketEventGroupTitle: { color: '#ffffff', fontSize: 20, lineHeight: 25, fontWeight: '800' },
   ticketEventGroupMeta: { color: '#e2e8f0', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  ticketEventGroupTickets: { gap: 10, marginLeft: 8 },
+  mobileAdCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0'
+  },
+  mobileAdImage: { width: '100%', height: 156, backgroundColor: '#e2e8f0' },
+  mobileAdBody: { padding: 14, gap: 4 },
+  mobileAdLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8
+  },
+  mobileAdTitle: { color: '#0f172a', fontSize: 17, lineHeight: 22, fontWeight: '800' },
+  mobileAdMeta: { color: '#9a3412', fontSize: 13, fontWeight: '700' },
+  paymentProcessingOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(2,6,23,0.62)',
+    zIndex: 40
+  },
+  paymentProcessingCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#fffaf5',
+    shadowColor: '#020617',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    elevation: 10
+  },
+  paymentProcessingTitle: { color: '#0f172a', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  paymentProcessingMessage: { color: '#64748b', fontSize: 14, lineHeight: 20, textAlign: 'center' },
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(2,6,23,0.58)' },
   ticketModal: { maxHeight: '92%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 18, backgroundColor: '#fffaf5', gap: 14 },
   modalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },

@@ -403,6 +403,16 @@ type CartItem = {
   currency: string
 }
 
+type PersistedCartItem = {
+  eventId: string
+  ticketTypeId: string
+  ticketName: string
+  quantity: number
+  unitPrice: number
+  eventTitle: string
+  eventDate: string
+}
+
 type UserCartSnapshot = {
   items: CartItem[]
   hold_token?: string
@@ -753,6 +763,18 @@ const esewaCheckoutDraftStorageKey = 'waah_esewa_checkout_draft'
 const guestCheckoutContactStorageKey = 'waah_guest_checkout_contact'
 const cartStorageKey = 'waah_cart_items'
 const cartHoldStorageKey = 'waah_cart_hold'
+
+function readPersistedCartItems() {
+  if (typeof window === 'undefined') return [] as PersistedCartItem[]
+  try {
+    const raw = window.localStorage.getItem(cartStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown[]
+    return Array.isArray(parsed) ? parsed.filter(isPersistedCartItemLike) : []
+  } catch {
+    return []
+  }
+}
 const cartHoldDurationMs = 15 * 60 * 1000
 const emptyColumnFilterState: Record<string, string> = {}
 const defaultMonthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
@@ -1014,6 +1036,7 @@ function PublicApp({
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
+  const [isAddingToCart, setIsAddingToCart] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [cartSettings, setCartSettings] = useState<CartSettingsData>(defaultCartSettingsData)
@@ -1188,14 +1211,144 @@ function PublicApp({
   const [verifiedTicketMessage, setVerifiedTicketMessage] = useState('')
   const verifyHandledTokenRef = useRef<string>('')
   const isCartStorageReadyRef = useRef(false)
+  const isValidatingCartRef = useRef(false)
+  const lastValidatedCartSignatureRef = useRef('')
+
+  function buildPersistedCartSnapshot(items: CartItem[]) {
+    return items.map((item) => {
+      const event = events.find((entry) => entry.id === item.event_id)
+      return {
+        eventId: item.event_id,
+        ticketTypeId: item.ticket_type_id,
+        ticketName: item.ticket_type_name,
+        quantity: item.quantity,
+        unitPrice: item.unit_price_paisa,
+        eventTitle: item.event_name,
+        eventDate: String(event?.start_datetime ?? '')
+      } satisfies PersistedCartItem
+    })
+  }
+
+  function persistCartSnapshot(items: CartItem[]) {
+    if (typeof window === 'undefined') return
+    const snapshot = buildPersistedCartSnapshot(items)
+    if (snapshot.length === 0) {
+      window.localStorage.removeItem(cartStorageKey)
+      return
+    }
+    window.localStorage.setItem(cartStorageKey, JSON.stringify(snapshot))
+  }
+
+  async function validatePersistedCartItems(
+    storedItems: PersistedCartItem[],
+    options: { preserveExpiresAt?: boolean } = {}
+  ) {
+    if (!user?.id || isValidatingCartRef.current) return false
+    isValidatingCartRef.current = true
+    try {
+      const grouped = new Map<string, PersistedCartItem[]>()
+      for (const item of storedItems) {
+        const current = grouped.get(item.eventId) ?? []
+        current.push(item)
+        grouped.set(item.eventId, current)
+      }
+
+      const ticketTypesByEvent = new Map<string, TicketTypeRecord[]>()
+      await Promise.all(
+        [...grouped.keys()].map(async (eventId) => {
+          const { data } = await fetchJson<{ data: TicketTypeRecord[] }>(`/api/public/events/${encodeURIComponent(eventId)}/ticket-types`)
+          ticketTypesByEvent.set(eventId, Array.isArray(data.data) ? data.data : [])
+        })
+      )
+
+      const nextItems: CartItem[] = []
+      const updates: string[] = []
+      for (const stored of storedItems) {
+        const event = events.find((entry) => entry.id === stored.eventId)
+        const ticketType = ticketTypesByEvent.get(stored.eventId)?.find((entry) => entry.id === stored.ticketTypeId)
+        if (!event || !ticketType) {
+          updates.push(`${stored.ticketName} is no longer available and was removed from your cart.`)
+          continue
+        }
+
+        const quantityRemaining =
+          ticketType.quantity_remaining === null || ticketType.quantity_remaining === undefined
+            ? null
+            : Math.max(Number(ticketType.quantity_remaining ?? 0), 0)
+        if (quantityRemaining !== null && quantityRemaining <= 0) {
+          updates.push(`${ticketType.name} is sold out and was removed from your cart.`)
+          continue
+        }
+
+        const allowedQuantity = Math.max(
+          1,
+          Math.min(
+            stored.quantity,
+            ticketType.max_per_order ?? 99,
+            quantityRemaining === null ? stored.quantity : quantityRemaining
+          )
+        )
+        if (allowedQuantity !== stored.quantity) {
+          updates.push(`${ticketType.name} quantity was adjusted to ${allowedQuantity}.`)
+        }
+        if (ticketType.price_paisa !== stored.unitPrice) {
+          updates.push(`${ticketType.name} price changed to ${formatMoney(ticketType.price_paisa)}.`)
+        }
+
+        const eventLocationId = String(ticketType.event_location_id ?? event.location_id ?? '')
+        if (!eventLocationId) {
+          updates.push(`${ticketType.name} is missing location details and was removed from your cart.`)
+          continue
+        }
+
+        nextItems.push({
+          id: `${event.id}::${ticketType.id}`,
+          event_id: event.id,
+          event_name: String(event.name ?? stored.eventTitle ?? 'Event'),
+          event_location_id: eventLocationId,
+          event_location_name: String(event.location_name ?? event.organization_name ?? 'Venue pending'),
+          ticket_type_id: ticketType.id,
+          ticket_type_name: String(ticketType.name ?? stored.ticketName),
+          quantity: allowedQuantity,
+          unit_price_paisa: ticketType.price_paisa,
+          currency: String(ticketType.currency ?? 'NPR')
+        })
+      }
+
+      if (nextItems.length === 0) {
+        clearExpiredCartHold()
+        lastValidatedCartSignatureRef.current = ''
+        if (updates.length > 0) {
+          setPublicStatus(`Your cart was updated after rechecking availability. ${updates.join(' ')}`)
+        }
+        return true
+      }
+
+      const saved = await commitCartItems(nextItems, undefined, { preserveExpiresAt: options.preserveExpiresAt })
+      if (!saved) {
+        lastValidatedCartSignatureRef.current = ''
+        return false
+      }
+      if (updates.length > 0) {
+        setPublicStatus(`Your cart was updated after rechecking availability. ${updates.join(' ')}`)
+      }
+      lastValidatedCartSignatureRef.current = nextItems
+        .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
+        .sort()
+        .join('|')
+      return true
+    } catch (error) {
+      setPublicStatus(getErrorMessage(error))
+      lastValidatedCartSignatureRef.current = ''
+      return false
+    } finally {
+      isValidatingCartRef.current = false
+    }
+  }
 
   useEffect(() => {
     if (isAuthLoading) return
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(cartStorageKey)
-      window.localStorage.removeItem(cartHoldStorageKey)
-    }
+    if (isEventsLoading) return
 
     if (!user?.id) {
       setCartItems([])
@@ -1207,26 +1360,47 @@ function PublicApp({
 
     isCartStorageReadyRef.current = false
     void (async () => {
+      const persistedItems = readPersistedCartItems()
       try {
         const { data } = await fetchJson<{ data: UserCartSnapshot }>('/api/cart')
         const snapshot = data.data
         const storedItems = Array.isArray(snapshot?.items) ? snapshot.items : []
-        setCartItems(storedItems.filter(isCartItemLike))
-        setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
-        setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
+        const validSnapshotItems = storedItems.filter(isCartItemLike)
+        if (validSnapshotItems.length > 0) {
+          setCartItems(validSnapshotItems)
+          setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
+          setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
+          persistCartSnapshot(validSnapshotItems)
+        } else if (persistedItems.length > 0) {
+          setCartItems([])
+          setCartHoldToken('')
+          setCartHoldExpiresAt('')
+          await validatePersistedCartItems(persistedItems)
+        } else {
+          setCartItems([])
+          setCartHoldToken('')
+          setCartHoldExpiresAt('')
+        }
         if (snapshot?.cart_expired) {
           setIsCartExpiredNoticeOpen(true)
         }
       } catch (error) {
-        setCartItems([])
-        setCartHoldToken('')
-        setCartHoldExpiresAt('')
-        setPublicStatus(getErrorMessage(error))
+        if (persistedItems.length > 0) {
+          setCartItems([])
+          setCartHoldToken('')
+          setCartHoldExpiresAt('')
+          await validatePersistedCartItems(persistedItems)
+        } else {
+          setCartItems([])
+          setCartHoldToken('')
+          setCartHoldExpiresAt('')
+          setPublicStatus(getErrorMessage(error))
+        }
       } finally {
         isCartStorageReadyRef.current = true
       }
     })()
-  }, [isAuthLoading, user?.id])
+  }, [isAuthLoading, isEventsLoading, user?.id])
 
   useEffect(() => {
     if (!isAuthLoading && !user?.id && cartItems.length > 0) {
@@ -1247,6 +1421,18 @@ function PublicApp({
     }, expiresIn)
     return () => window.clearTimeout(timer)
   }, [cartHoldExpiresAt])
+
+  useEffect(() => {
+    if (!isCartCheckoutOpen) return
+    if (cartItems.length === 0) return
+    const signature = cartItems
+      .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
+      .sort()
+      .join('|')
+    if (!signature || signature === lastValidatedCartSignatureRef.current) return
+    lastValidatedCartSignatureRef.current = signature
+    void validatePersistedCartItems(buildPersistedCartSnapshot(cartItems), { preserveExpiresAt: true })
+  }, [cartItems, isCartCheckoutOpen])
 
   useEffect(() => {
     const eventIds = new Set(cartGroups.map((group) => group.event_id))
@@ -1735,7 +1921,12 @@ function PublicApp({
     const isFailure = processPaymentPhase === 'failure'
     return (
       <main className="app-shell process-payment-shell">
-        <section className={`process-payment-card ${isSuccess ? 'is-success' : isFailure ? 'is-failure' : ''}`}>
+        <section
+          aria-busy={isProcessing}
+          className={`process-payment-card ${isSuccess ? 'is-success' : isFailure ? 'is-failure' : ''} ${
+            isProcessing ? 'is-processing' : ''
+          }`}
+        >
           <div className="process-payment-backdrop" aria-hidden="true" />
           {isProcessing ? (
             <div className="process-payment-visual process-payment-spinner-wrap" aria-label="Processing payment">
@@ -1758,7 +1949,7 @@ function PublicApp({
           <h1 className="featured-title">
             {isSuccess ? 'Payment Successful' : isFailure ? 'Payment Incomplete' : 'Processing Payment'}
           </h1>
-          <p className="featured-description">{publicStatus || 'Waiting for Khalti callback details...'}</p>
+          {!isProcessing ? <p className="featured-description">{publicStatus || 'Waiting for Khalti callback details...'}</p> : null}
           {isSuccess ? (
             <div className="process-payment-details">
               <p className="process-payment-note">
@@ -1810,6 +2001,15 @@ function PublicApp({
             )}
           </div>
         </section>
+        {isProcessing ? (
+          <div aria-live="polite" className="process-payment-overlay" role="status">
+            <div className="process-payment-overlay-card">
+              <span aria-hidden="true" className="process-payment-spinner process-payment-overlay-spinner" />
+              <strong>{publicStatus || 'Verifying payment...'}</strong>
+              <p>Please wait while we confirm your payment and finalize your tickets.</p>
+            </div>
+          </div>
+        ) : null}
       </main>
     )
   }
@@ -2015,51 +2215,53 @@ function PublicApp({
         ) : (
           <div className="events-sections" id="events">
             <div className="events-layout">
-              <div className="events-sidebar-column">
-                <SidebarAd adsServed={0} placement="WEB_LEFT_SIDEBAR" />
-              </div>
-              <aside className="panel events-panel event-filter-panel">
-                <div className="section-heading">
-                  <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
-                  <h2>Browse events</h2>
-                </div>
-                <div className="events-toolbar">
-                  <label className="events-toolbar-field">
-                    <span>Type</span>
-                    <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
-                      <option value="all">All types</option>
-                      {eventTypeOptions.map((type) => (
-                        <option key={type} value={type}>
-                          {formatResourceName(type)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="events-toolbar-field">
-                    <span>When</span>
-                    <select
-                      value={eventTimeFilter}
-                      onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
+              <div className="events-filter-column">
+                <aside className="panel events-panel event-filter-panel">
+                  <div className="section-heading">
+                    <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
+                    <h2>Browse events</h2>
+                  </div>
+                  <div className="events-toolbar">
+                    <label className="events-toolbar-field">
+                      <span>Type</span>
+                      <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
+                        <option value="all">All types</option>
+                        {eventTypeOptions.map((type) => (
+                          <option key={type} value={type}>
+                            {formatResourceName(type)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="events-toolbar-field">
+                      <span>When</span>
+                      <select
+                        value={eventTimeFilter}
+                        onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
+                      >
+                        <option value="all">Any time</option>
+                        <option value="weekend">This weekend</option>
+                        <option value="month">This month</option>
+                      </select>
+                    </label>
+                    <button
+                      className="secondary-button compact-button"
+                      disabled={!hasEventFilters}
+                      type="button"
+                      onClick={() => {
+                        setEventSearchQuery('')
+                        setEventTypeFilter('all')
+                        setEventTimeFilter('all')
+                      }}
                     >
-                      <option value="all">Any time</option>
-                      <option value="weekend">This weekend</option>
-                      <option value="month">This month</option>
-                    </select>
-                  </label>
-                  <button
-                    className="secondary-button compact-button"
-                    disabled={!hasEventFilters}
-                    type="button"
-                    onClick={() => {
-                      setEventSearchQuery('')
-                      setEventTypeFilter('all')
-                      setEventTimeFilter('all')
-                    }}
-                  >
-                    Clear filters
-                  </button>
+                      Clear filters
+                    </button>
+                  </div>
+                </aside>
+                <div className="event-filter-sidebar-ad">
+                  <SidebarAd adsServed={0} placement="WEB_LEFT_SIDEBAR" />
                 </div>
-              </aside>
+              </div>
 
               <div className="events-rails-column">
                 {/* Additional placement hook notes:
@@ -2210,9 +2412,6 @@ function PublicApp({
                   ))
                 )}
               </div>
-              <div className="events-sidebar-column">
-                <SidebarAd adsServed={1} placement="WEB_RIGHT_SIDEBAR" />
-              </div>
             </div>
           </div>
         )}
@@ -2221,7 +2420,7 @@ function PublicApp({
       {isCheckoutOpen ? (
         <CheckoutModal
           event={selectedEvent}
-          isSubmittingOrder={isSubmittingOrder}
+          isSubmittingOrder={isAddingToCart}
           isTicketTypesLoading={isTicketTypesLoading}
           quantity={quantity}
           remainingTickets={remainingTickets}
@@ -2231,12 +2430,22 @@ function PublicApp({
           totalPaisa={totalPaisa}
           onChangeQuantity={(nextQuantity) => setQuantity(nextQuantity)}
           onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
-          onClose={() => setIsCheckoutOpen(false)}
-          onReserve={async () => {
-            const added = await addCurrentSelectionToCart()
+          onClose={() => {
+            if (isAddingToCart) return
             setIsCheckoutOpen(false)
-            if (added) {
-              setIsCartOpen(true)
+          }}
+          onReserve={async () => {
+            if (isAddingToCart) return
+            setIsAddingToCart(true)
+            try {
+              const added = await addCurrentSelectionToCart()
+              if (added) {
+                setIsCheckoutOpen(false)
+                setIsCartOpen(false)
+                setIsCartCheckoutOpen(true)
+              }
+            } finally {
+              setIsAddingToCart(false)
             }
           }}
         />
@@ -2385,6 +2594,7 @@ function PublicApp({
     const reserved = await syncCartHold(nextItems, options)
     if (!reserved) return false
     setCartItems(nextItems)
+    persistCartSnapshot(nextItems)
     if (successMessage) {
       setPublicStatus(successMessage)
     }
@@ -2405,7 +2615,8 @@ function PublicApp({
         setOrderCouponCode('')
         setOrderCouponDiscount(null)
         setOrderCouponMessage('')
-        setIsCartOpen(true)
+        setIsCartOpen(false)
+        setIsCartCheckoutOpen(true)
       }
     } finally {
       setIsSingleEventCartReplacing(false)
@@ -2793,6 +3004,9 @@ function PublicApp({
       const providerLabel = paymentContext?.provider === 'khalti' ? ' via Khalti' : paymentContext?.provider === 'esewa' ? ' via eSewa' : ''
       setPublicStatus(`Checkout complete${providerLabel}. ${Number(data.data?.completed_orders ?? orderGroups.length)} event order(s) created.`)
       setCartItems([])
+      setCartHoldToken('')
+      setCartHoldExpiresAt('')
+      persistCartSnapshot([])
       setCartEventCoupons({})
       setCartEventCouponMessages({})
       setCartEventCouponDiscounts({})
@@ -3087,7 +3301,8 @@ function CheckoutModal({
   onChangeQuantity: (value: number) => void
   onReserve: () => void | Promise<void>
 }) {
-  const canReserve = !reserveBlockedMessage
+  const canReserve = !reserveBlockedMessage && !isSubmittingOrder
+  const isInteractionLocked = isSubmittingOrder
 
   return (
     <div className="modal-backdrop checkout-backdrop" role="presentation">
@@ -3103,14 +3318,14 @@ function CheckoutModal({
               </p>
             ) : null}
           </div>
-          <button aria-label="Close modal" type="button" onClick={onClose}>
+          <button aria-label="Close modal" disabled={isInteractionLocked} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
         <div className="checkout-stack">
           <label className="public-select-label">
             <span>Ticket type</span>
-            <select value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
+            <select disabled={isInteractionLocked} value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
               {ticketTypes.length === 0 ? (
                 <option value="">No ticket types</option>
               ) : (
@@ -3125,6 +3340,7 @@ function CheckoutModal({
           <label className="public-select-label">
             <span>Quantity</span>
             <input
+              disabled={isInteractionLocked}
               min="1"
               max={selectedTicketType?.max_per_order ? String(selectedTicketType.max_per_order) : '10'}
               type="number"
@@ -3147,6 +3363,7 @@ function CheckoutModal({
         </div>
         <footer className="record-modal-actions checkout-modal-actions">
           <button className="primary-admin-button" disabled={!canReserve} type="button" onClick={onReserve}>
+            {isSubmittingOrder ? <span aria-hidden="true" className="button-spinner" /> : null}
             {isSubmittingOrder
               ? 'Adding...'
               : isTicketTypesLoading
@@ -8461,6 +8678,22 @@ function isCartItemLike(value: unknown): value is CartItem {
     typeof item.currency === 'string' &&
     Number.isFinite(item.quantity) &&
     Number.isFinite(item.unit_price_paisa)
+  )
+}
+
+function isPersistedCartItemLike(value: unknown): value is PersistedCartItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Partial<PersistedCartItem>
+  return (
+    typeof item.eventId === 'string' &&
+    typeof item.ticketTypeId === 'string' &&
+    typeof item.ticketName === 'string' &&
+    typeof item.quantity === 'number' &&
+    typeof item.unitPrice === 'number' &&
+    typeof item.eventTitle === 'string' &&
+    typeof item.eventDate === 'string' &&
+    Number.isFinite(item.quantity) &&
+    Number.isFinite(item.unitPrice)
   )
 }
 

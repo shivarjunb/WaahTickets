@@ -250,6 +250,43 @@ export function createApiClient(options: ApiClientOptions) {
         withJsonBody(body, { method: 'POST' })
       )
     },
+    initiateStorefrontEsewaPayment(body: {
+      amount_paisa: number
+      order_groups: StorefrontOrderGroup[]
+      redirect_uri?: string
+      guest_checkout_token?: string
+    }) {
+      return request<{
+        mode: 'test' | 'live'
+        form_action: string
+        fields: Record<string, string>
+      }>('/api/storefront/payments/esewa/initiate', withJsonBody(body, { method: 'POST' }))
+    },
+    verifyStorefrontEsewaPayment(body: {
+      data: string
+      mode?: 'test' | 'live'
+      guest_checkout_token?: string
+    }) {
+      return request<{
+        status: string
+        transaction_code?: string
+        transaction_uuid?: string
+        total_amount?: string
+      }>('/api/storefront/payments/esewa/verify', withJsonBody(body, { method: 'POST' }))
+    },
+    lookupStorefrontEsewaPaymentStatus(body: {
+      transaction_uuid: string
+      total_amount: string
+      mode?: 'test' | 'live'
+      guest_checkout_token?: string
+    }) {
+      return request<{
+        status: string
+        transaction_code?: string
+        transaction_uuid?: string
+        total_amount?: string
+      }>('/api/storefront/payments/esewa/status', withJsonBody(body, { method: 'POST' }))
+    },
     postJson<T>(path: string, body: JsonBody, init?: RequestInit) {
       return request<T>(path, withJsonBody(body, { ...init, method: init?.method ?? 'POST' }))
     }

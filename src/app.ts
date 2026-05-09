@@ -99,28 +99,9 @@ app.post('/processpayment', async (c) => {
   return c.redirect(`/processpayment${suffix ? `?${suffix}` : ''}`, 303)
 })
 
-app.get('/api/mobile/khalti-return', (c) => {
-  const currentUrl = new URL(c.req.url)
-  const redirectUri = currentUrl.searchParams.get('redirect_uri')?.trim() ?? ''
-  if (!redirectUri) {
-    return c.text('Missing redirect_uri.', 400)
-  }
-
-  let target: URL
-  try {
-    target = new URL(redirectUri)
-  } catch {
-    return c.text('Invalid redirect_uri.', 400)
-  }
-
-  for (const [key, value] of currentUrl.searchParams.entries()) {
-    if (key === 'redirect_uri') continue
-    target.searchParams.set(key, value)
-  }
-
-  const targetUrl = target.toString()
+function renderMobileReturnHtml(targetUrl: string) {
   const escapedTargetUrl = targetUrl.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  const html = `<!doctype html>
+  return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -132,6 +113,104 @@ app.get('/api/mobile/khalti-return', (c) => {
     <p><a href="${escapedTargetUrl}">Open the app</a></p>
     <script>
       window.location.replace(${JSON.stringify(targetUrl)});
+    </script>
+  </body>
+</html>`
+}
+
+function buildMobileRedirectResponse(currentUrl: URL, redirectUri: string, payload: URLSearchParams) {
+  if (!redirectUri) {
+    return new Response('Missing redirect_uri.', { status: 400 })
+  }
+
+  let target: URL
+  try {
+    target = new URL(redirectUri)
+  } catch {
+    return new Response('Invalid redirect_uri.', { status: 400 })
+  }
+
+  for (const [key, value] of payload.entries()) {
+    if (key === 'redirect_uri') continue
+    target.searchParams.set(key, value)
+  }
+  for (const [key, value] of currentUrl.searchParams.entries()) {
+    if (key === 'redirect_uri') continue
+    if (!payload.has(key)) {
+      target.searchParams.set(key, value)
+    }
+  }
+
+  return new Response(renderMobileReturnHtml(target.toString()), {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+  })
+}
+
+app.get('/api/mobile/khalti-return', (c) => {
+  const currentUrl = new URL(c.req.url)
+  const redirectUri = currentUrl.searchParams.get('redirect_uri')?.trim() ?? ''
+  return buildMobileRedirectResponse(currentUrl, redirectUri, currentUrl.searchParams)
+})
+
+app.get('/api/mobile/esewa-return', (c) => {
+  const currentUrl = new URL(c.req.url)
+  const redirectUri = currentUrl.searchParams.get('redirect_uri')?.trim() ?? ''
+  return buildMobileRedirectResponse(currentUrl, redirectUri, currentUrl.searchParams)
+})
+
+app.post('/api/mobile/esewa-return', async (c) => {
+  const currentUrl = new URL(c.req.url)
+  const redirectUri = currentUrl.searchParams.get('redirect_uri')?.trim() ?? ''
+  const body = await c.req.parseBody()
+  const payload = new URLSearchParams()
+
+  for (const [key, value] of Object.entries(body)) {
+    const normalized = getFirstFormValue(value)
+    if (normalized) {
+      payload.set(key, normalized)
+    }
+  }
+
+  return buildMobileRedirectResponse(currentUrl, redirectUri, payload)
+})
+
+app.get('/api/mobile/esewa-launch', (c) => {
+  const currentUrl = new URL(c.req.url)
+  const formAction = currentUrl.searchParams.get('form_action')?.trim() ?? ''
+  if (!formAction) {
+    return c.text('Missing form_action.', 400)
+  }
+
+  let target: URL
+  try {
+    target = new URL(formAction)
+  } catch {
+    return c.text('Invalid form_action.', 400)
+  }
+
+  const fields = [...currentUrl.searchParams.entries()].filter(([key]) => key !== 'form_action')
+  const inputs = fields
+    .map(([key, value]) => {
+      const escapedKey = key.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+      const escapedValue = value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+      return `<input type="hidden" name="${escapedKey}" value="${escapedValue}" />`
+    })
+    .join('\n      ')
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Redirecting to eSewa</title>
+  </head>
+  <body style="font-family: sans-serif; padding: 24px;">
+    <p>Redirecting to eSewa...</p>
+    <form id="esewa-launch-form" method="POST" action="${target.toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}">
+      ${inputs}
+    </form>
+    <script>
+      document.getElementById('esewa-launch-form')?.submit();
     </script>
   </body>
 </html>`

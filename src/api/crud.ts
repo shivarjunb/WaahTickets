@@ -660,7 +660,10 @@ storefrontRoutes.post('/payments/esewa/initiate', async (c) => {
     product_code: productCode
   })
   const publicOrigin = buildPublicOrigin(new URL(c.req.url).origin)
-  const callbackBase = `${publicOrigin}/processpayment`
+  const mobileRedirectUri = String(payload.redirect_uri ?? '').trim()
+  const callbackBase = mobileRedirectUri
+    ? `${publicOrigin}/api/mobile/esewa-return?redirect_uri=${encodeURIComponent(mobileRedirectUri)}`
+    : `${publicOrigin}/processpayment`
   const failureUrl = new URL(callbackBase)
   failureUrl.searchParams.set('esewa_failed', '1')
   failureUrl.searchParams.set('status', 'FAILED')
