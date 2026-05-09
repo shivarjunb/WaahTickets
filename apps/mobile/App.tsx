@@ -2509,8 +2509,17 @@ function isEventWithinRange(event: PublicEvent, days: number) {
 
 function getEventImageUrl(event: PublicEvent | null | undefined, apiBaseUrl: string, fallbackIndex = 0) {
   const directUrl = event?.banner_public_url?.trim()
-  if (directUrl && /^https?:\/\//i.test(directUrl)) return directUrl
-  if (event?.id && event.banner_file_id) {
+  if (directUrl) {
+    try {
+      const resolved = new URL(directUrl, apiBaseUrl)
+      if (/^https?:$/i.test(resolved.protocol)) {
+        return resolved.toString()
+      }
+    } catch {
+      // Fall through to banner endpoint fallback.
+    }
+  }
+  if (event?.id && String(event.banner_file_id ?? '').trim()) {
     return new URL(`/api/public/events/${encodeURIComponent(event.id)}/banner`, apiBaseUrl).toString()
   }
   return ''
