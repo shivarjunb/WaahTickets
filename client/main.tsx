@@ -556,6 +556,24 @@ type AdminDashboardMetrics = {
   queueJobsProcessedLast30Days: number
 }
 
+type EventLocationDraft = {
+  name: string
+  address: string
+  latitude: string
+  longitude: string
+  total_capacity: string
+  is_active: string
+}
+
+const emptyEventLocationDraft: EventLocationDraft = {
+  name: '',
+  address: '',
+  latitude: '',
+  longitude: '',
+  total_capacity: '',
+  is_active: '1'
+}
+
 const hiddenTableColumns = new Set([
   'id',
   'user_id',
@@ -4126,6 +4144,11 @@ function AdminApp({
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [lookupOptions, setLookupOptions] = useState<Record<string, ApiRecord[]>>({})
+  const [pendingEventLocation, setPendingEventLocation] = useState<EventLocationDraft | null>(null)
+  const [isEventLocationPopupOpen, setIsEventLocationPopupOpen] = useState(false)
+  const [eventLocationDraft, setEventLocationDraft] = useState<EventLocationDraft>(emptyEventLocationDraft)
+  const [eventLocationError, setEventLocationError] = useState('')
+  const [isSavingEventLocation, setIsSavingEventLocation] = useState(false)
   const [filter, setFilter] = useState('')
   const [columnFiltersByResource, setColumnFiltersByResource] = useState<Record<string, Record<string, string>>>({})
   const [tableSortByResource, setTableSortByResource] = useState<Record<string, ResourceSort>>({})
@@ -5149,6 +5172,7 @@ function AdminApp({
     }
     if (selectedResource === 'events') {
       values.location_template_id = ''
+      setPendingEventLocation(null)
     }
     setFormValues(values)
     setModalMode('create')
@@ -5163,6 +5187,7 @@ function AdminApp({
 
     setSelectedRecord(record)
     setRecordError('')
+    setPendingEventLocation(null)
     const values = ensureFormHasRequiredFields(selectedResource, toFormValues(record))
     setModalMode('edit')
     void loadLookupOptions(selectedResource, values)
@@ -5193,6 +5218,89 @@ function AdminApp({
     setModalMode(null)
     setFormValues({})
     setRecordError('')
+    setPendingEventLocation(null)
+    setIsEventLocationPopupOpen(false)
+    setEventLocationError('')
+  }
+
+  function openEventLocationPopup() {
+    const selectedLocationId = String(formValues.location_template_id ?? '')
+    const selectedLocation = lookupOptions.location_template_id?.find((option) => String(option.id) === selectedLocationId)
+
+    setEventLocationDraft(
+      pendingEventLocation ??
+        (selectedLocation
+          ? {
+              name: String(selectedLocation.name ?? ''),
+              address: String(selectedLocation.address ?? ''),
+              latitude: String(selectedLocation.latitude ?? ''),
+              longitude: String(selectedLocation.longitude ?? ''),
+              total_capacity: String(selectedLocation.total_capacity ?? ''),
+              is_active: isTruthyValue(selectedLocation.is_active) ? '1' : '0'
+            }
+          : emptyEventLocationDraft)
+    )
+    setEventLocationError('')
+    setIsEventLocationPopupOpen(true)
+  }
+
+  async function saveEventLocationFromPopup() {
+    const name = eventLocationDraft.name.trim()
+    if (!name) {
+      setEventLocationError('location name is required.')
+      return
+    }
+
+    const draft = {
+      ...eventLocationDraft,
+      name,
+      address: eventLocationDraft.address.trim(),
+      latitude: eventLocationDraft.latitude.trim(),
+      longitude: eventLocationDraft.longitude.trim(),
+      total_capacity: eventLocationDraft.total_capacity.trim(),
+      is_active: isTruthyValue(eventLocationDraft.is_active) ? '1' : '0'
+    }
+
+    if (modalMode === 'edit' && selectedRecord?.id) {
+      setIsSavingEventLocation(true)
+      setEventLocationError('')
+      try {
+        const { data } = await fetchJson<ApiMutationResponse>('/api/event_locations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...eventLocationDraftToPayload(draft),
+            event_id: String(selectedRecord.id)
+          })
+        })
+        const createdLocation = data.data ?? null
+        const createdLocationId = String(createdLocation?.id ?? '')
+        setLookupOptions((current) => ({
+          ...current,
+          location_template_id: createdLocation
+            ? [...(current.location_template_id ?? []), createdLocation]
+            : current.location_template_id ?? []
+        }))
+        if (createdLocationId) {
+          setFormValues((current) => ({ ...current, location_template_id: createdLocationId }))
+        }
+        setPendingEventLocation(null)
+        setIsEventLocationPopupOpen(false)
+        setStatus('Created event location.')
+      } catch (error) {
+        const message = getErrorMessage(error)
+        setEventLocationError(message)
+        setStatus(message)
+      } finally {
+        setIsSavingEventLocation(false)
+      }
+      return
+    }
+
+    setPendingEventLocation(draft)
+    setFormValues((current) => ({ ...current, location_template_id: '' }))
+    setIsEventLocationPopupOpen(false)
+    setStatus(`Location "${draft.name}" will be created when the event is saved.`)
   }
 
   async function saveRecord() {
@@ -5264,6 +5372,19 @@ function AdminApp({
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ event_id: eventId })
+          })
+        }
+      }
+      if (selectedResource === 'events' && pendingEventLocation && !selectedLocationId) {
+        const eventId = String(data.data?.id ?? selectedRecord?.id ?? '')
+        if (eventId) {
+          await fetchJson<ApiMutationResponse>('/api/event_locations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...eventLocationDraftToPayload(pendingEventLocation),
+              event_id: eventId
+            })
           })
         }
       }
@@ -6896,12 +7017,25 @@ function AdminApp({
           lookupOptions={lookupOptions}
           mode={modalMode}
           onFileUploaded={handleFileUploadSuccess}
+          onOpenCreateEventLocation={openEventLocationPopup}
+          pendingEventLocation={pendingEventLocation}
           record={selectedRecord}
           resource={selectedResource}
           setFormValues={setFormValues}
           webRole={selectedWebRole}
           onClose={closeModal}
           onSave={() => void saveRecord()}
+        />
+      ) : null}
+      {isEventLocationPopupOpen ? (
+        <EventLocationPopup
+          draft={eventLocationDraft}
+          errorMessage={eventLocationError}
+          isSaving={isSavingEventLocation}
+          mode={modalMode ?? 'create'}
+          onChange={setEventLocationDraft}
+          onClose={() => setIsEventLocationPopupOpen(false)}
+          onSave={() => void saveEventLocationFromPopup()}
         />
       ) : null}
       {ticketQrModalValue ? (
@@ -6941,6 +7075,8 @@ function RecordModal({
   lookupOptions,
   mode,
   onFileUploaded,
+  onOpenCreateEventLocation,
+  pendingEventLocation,
   record,
   resource,
   setFormValues,
@@ -6955,6 +7091,8 @@ function RecordModal({
   lookupOptions: Record<string, ApiRecord[]>
   mode: 'create' | 'edit'
   onFileUploaded: (uploadedFile: ApiRecord) => Promise<void>
+  onOpenCreateEventLocation?: () => void
+  pendingEventLocation?: EventLocationDraft | null
   record: ApiRecord | null
   resource: string
   setFormValues: Dispatch<SetStateAction<Record<string, string>>>
@@ -6973,6 +7111,7 @@ function RecordModal({
   const supportsUpload = resource === 'files' || resource === 'events'
   const isUploadOnlyModal = resource === 'files'
   const fields = getOrderedFormFields(resource, formValues)
+  const canCreateEventLocation = resource === 'events' && Boolean(onOpenCreateEventLocation)
   const canEditField = (field: string) =>
     !isFieldReadOnly(field, mode) && canEditFieldForRole(field, resource, webRole, currentUser, record, formValues)
 
@@ -7117,25 +7256,38 @@ function RecordModal({
                       ))}
                     </select>
                   ) : Object.prototype.hasOwnProperty.call(lookupOptions, field) ? (
-                    <select
-                      disabled={isSaving || !canEditField(field)}
-                      value={formValues[field] ?? ''}
-                      onChange={(event) => {
-                        const nextValue = event.target.value
+                    <>
+                      <select
+                        disabled={isSaving || !canEditField(field)}
+                        value={formValues[field] ?? ''}
+                        onChange={(event) => {
+                          const nextValue = event.target.value
 
-                        setFormValues((current) => ({
-                          ...current,
-                          [field]: nextValue
-                        }))
-                      }}
-                    >
-                      <option value="">Select {formatResourceName(field)}</option>
-                      {lookupOptions[field].map((option) => (
-                        <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
-                          {getLookupLabel(option)}
-                        </option>
-                      ))}
-                    </select>
+                          setFormValues((current) => ({
+                            ...current,
+                            [field]: nextValue
+                          }))
+                        }}
+                      >
+                        <option value="">Select {formatResourceName(field)}</option>
+                        {lookupOptions[field].map((option) => (
+                          <option key={option.id} value={field === 'webrole' ? String(option.name) : option.id}>
+                            {getLookupLabel(option)}
+                          </option>
+                        ))}
+                      </select>
+                      {field === 'location_template_id' && canCreateEventLocation ? (
+                        <div className="inline-field-actions">
+                          <button disabled={isSaving} type="button" onClick={onOpenCreateEventLocation}>
+                            <Plus size={15} />
+                            {pendingEventLocation ? 'Edit new location' : 'Create location'}
+                          </button>
+                          {pendingEventLocation ? (
+                            <span>New location: {pendingEventLocation.name}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </>
                   ) : isBooleanField(field) ? (
                     <button
                       className={isTruthyValue(formValues[field]) ? 'boolean-toggle active' : 'boolean-toggle'}
@@ -7187,6 +7339,120 @@ function RecordModal({
   )
 }
 
+function EventLocationPopup({
+  draft,
+  errorMessage,
+  isSaving,
+  mode,
+  onChange,
+  onClose,
+  onSave
+}: {
+  draft: EventLocationDraft
+  errorMessage: string
+  isSaving: boolean
+  mode: 'create' | 'edit'
+  onChange: Dispatch<SetStateAction<EventLocationDraft>>
+  onClose: () => void
+  onSave: () => void
+}) {
+  return (
+    <div className="modal-backdrop nested-modal-backdrop" role="presentation">
+      <section className="record-modal event-location-popup" role="dialog" aria-modal="true" aria-labelledby="event-location-popup-title">
+        <header className="record-modal-header">
+          <div>
+            <p className="admin-breadcrumb">Event location</p>
+            <h2 id="event-location-popup-title">Create location</h2>
+          </div>
+          <button aria-label="Close location popup" disabled={isSaving} type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="record-modal-body">
+          <div className="modal-form-grid">
+            <label>
+              <span>
+                Name<em className="required-indicator">*</em>
+              </span>
+              <input
+                disabled={isSaving}
+                type="text"
+                value={draft.name}
+                onChange={(event) => onChange((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Address</span>
+              <input
+                disabled={isSaving}
+                type="text"
+                value={draft.address}
+                onChange={(event) => onChange((current) => ({ ...current, address: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Latitude</span>
+              <input
+                disabled={isSaving}
+                type="text"
+                value={draft.latitude}
+                onChange={(event) => onChange((current) => ({ ...current, latitude: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Longitude</span>
+              <input
+                disabled={isSaving}
+                type="text"
+                value={draft.longitude}
+                onChange={(event) => onChange((current) => ({ ...current, longitude: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Total capacity</span>
+              <input
+                disabled={isSaving}
+                inputMode="numeric"
+                type="text"
+                value={draft.total_capacity}
+                onChange={(event) => onChange((current) => ({ ...current, total_capacity: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Active</span>
+              <button
+                className={isTruthyValue(draft.is_active) ? 'boolean-toggle active' : 'boolean-toggle'}
+                disabled={isSaving}
+                type="button"
+                onClick={() =>
+                  onChange((current) => ({
+                    ...current,
+                    is_active: isTruthyValue(current.is_active) ? '0' : '1'
+                  }))
+                }
+              >
+                {isTruthyValue(draft.is_active) ? 'True' : 'False'}
+              </button>
+            </label>
+          </div>
+          {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
+        </div>
+
+        <footer className="record-modal-actions">
+          <button disabled={isSaving} type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-admin-button" disabled={isSaving} type="button" onClick={onSave}>
+            {isSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+            {isSaving ? 'Saving...' : mode === 'create' ? 'Add to event' : 'Create location'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 function getFieldSelectOptions(resource: string, field: string) {
   return fieldSelectOptions[resource]?.[field] ?? []
 }
@@ -7219,6 +7485,19 @@ function fromFormValues(
   }
 
   return payload
+}
+
+function eventLocationDraftToPayload(draft: EventLocationDraft) {
+  const values: Record<string, string> = {
+    name: draft.name,
+    address: draft.address,
+    latitude: draft.latitude,
+    longitude: draft.longitude,
+    total_capacity: draft.total_capacity,
+    is_active: draft.is_active
+  }
+
+  return fromFormValues(values, 'event_locations')
 }
 
 function coerceValue(value: string, originalValue: unknown) {
