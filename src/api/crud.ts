@@ -3125,6 +3125,16 @@ crudRoutes.post('/:resource', async (c) => {
   if (table.columns.includes('updated_at') && !record.updated_at) {
     record.updated_at = now
   }
+  if (table.table === 'event_locations' && table.columns.includes('created_by') && !record.created_by) {
+    record.created_by = scope.userId
+  }
+  if (table.table === 'event_locations' && !record.event_id) {
+    const fallbackEventId = await ensureEventLocationTemplateEvent(c, db, scope, payload, now)
+    if (fallbackEventId instanceof Response) {
+      return fallbackEventId
+    }
+    record.event_id = fallbackEventId
+  }
   if (table.table === 'organization_users' && Object.prototype.hasOwnProperty.call(record, 'role')) {
     const normalizedRole = normalizeOrganizationUserRole(record.role)
     if (!normalizedRole) {
@@ -4432,13 +4442,13 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
       case 'event_locations':
         return {
           allowed: true,
-          clause: `EXISTS (
+          clause: `(event_locations.created_by = ? OR EXISTS (
             SELECT 1
             FROM events
             WHERE events.id = event_locations.event_id
               AND events.organization_id IN (${placeholders})
-          )`,
-          bindings: orgBindings
+          ))`,
+          bindings: [scope.userId, ...orgBindings]
         }
       default:
         return { allowed: false, clause: '1 = 0', bindings: [] }
@@ -4483,13 +4493,13 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
     case 'event_locations':
       return {
         allowed: true,
-        clause: `EXISTS (
+        clause: `(event_locations.created_by = ? OR EXISTS (
           SELECT 1
           FROM events
           WHERE events.id = event_locations.event_id
             AND events.organization_id IN (${placeholders})
-        )`,
-        bindings: orgBindings
+        ))`,
+        bindings: [scope.userId, ...orgBindings]
       }
     case 'ticket_types':
       return {
@@ -4638,6 +4648,9 @@ async function authorizeCreateRecord(
       return null
     }
     case 'event_locations':
+      if (!record.event_id) {
+        return null
+      }
       if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
         return c.json({ error: 'Forbidden for this event.' }, 403)
       }
@@ -4811,6 +4824,79 @@ async function authorizeCustomerCreateRecord(
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)
   }
+}
+
+async function ensureEventLocationTemplateEvent(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  payload: JsonRecord,
+  now: string
+) {
+  const requestedOrganizationId = typeof payload.organization_id === 'string' ? payload.organization_id.trim() : ''
+  const organizationId =
+    requestedOrganizationId ||
+    (scope.webrole === 'Organizations' && scope.organizationIds.length === 1 ? scope.organizationIds[0] : '')
+
+  if (!organizationId) {
+    return c.json({ error: 'organization_id is required when event_id is omitted.' }, 400)
+  }
+
+  if (scope.webrole !== 'Admin' && !scope.organizationIds.includes(organizationId)) {
+    return c.json({ error: 'Forbidden for this organization.' }, 403)
+  }
+
+  const organization = await db
+    .prepare('SELECT id FROM organizations WHERE id = ? LIMIT 1')
+    .bind(organizationId)
+    .first<{ id: string }>()
+
+  if (!organization?.id) {
+    return c.json({ error: 'Forbidden for this organization.' }, 403)
+  }
+
+  const eventId = `location-template-event-${organizationId}`
+  const slug = `location-templates-${organizationId}`.toLowerCase().replaceAll(/[^a-z0-9-]+/g, '-').slice(0, 180)
+
+  const existing = await db
+    .prepare('SELECT id FROM events WHERE id = ? LIMIT 1')
+    .bind(eventId)
+    .first<{ id: string }>()
+
+  if (existing?.id) {
+    return existing.id
+  }
+
+  const createResult = await executeMutation(c, () =>
+    db
+      .prepare(
+        `INSERT INTO events (
+          id, organization_id, name, slug, description, event_type,
+          start_datetime, end_datetime, status, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        eventId,
+        organizationId,
+        'Location Templates',
+        slug,
+        'Internal event used to hold reusable event locations.',
+        'location_template',
+        now,
+        now,
+        'archived',
+        scope.userId,
+        now,
+        now
+      )
+      .run()
+  )
+
+  if (createResult instanceof Response) {
+    return createResult
+  }
+
+  return eventId
 }
 
 async function canScopedRoleAccessEvent(db: D1Database, scope: AuthScope, eventId: string) {

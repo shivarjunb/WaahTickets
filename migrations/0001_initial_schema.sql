@@ -95,20 +95,23 @@ CREATE INDEX IF NOT EXISTS idx_events_start_datetime ON events(start_datetime);
 
 CREATE TABLE IF NOT EXISTS event_locations (
     id TEXT PRIMARY KEY,
-    event_id TEXT NOT NULL,
+    event_id TEXT,
     name TEXT NOT NULL,
     address TEXT,
     latitude REAL,
     longitude REAL,
     total_capacity INTEGER,
     is_active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (event_id) REFERENCES events(id)
+    FOREIGN KEY (event_id) REFERENCES events(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_locations_event_id ON event_locations(event_id);
 CREATE INDEX IF NOT EXISTS idx_event_locations_is_active ON event_locations(is_active);
+CREATE INDEX IF NOT EXISTS idx_event_locations_created_by ON event_locations(created_by);
 
 CREATE TABLE IF NOT EXISTS ticket_types (
     id TEXT PRIMARY KEY,

@@ -160,6 +160,7 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'longitude',
       'total_capacity',
       'is_active',
+      'created_by',
       'created_at',
       'updated_at'
     ]

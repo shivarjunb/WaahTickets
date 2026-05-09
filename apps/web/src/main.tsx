@@ -253,7 +253,7 @@ const samplePayloads: Record<string, Record<string, unknown>> = {
     is_featured: 0
   },
   event_locations: {
-    event_id: 'replace-with-existing-event-id',
+    organization_id: 'replace-with-existing-organization-id',
     name: 'Main Hall',
     address: 'Kathmandu, Nepal',
     total_capacity: 500
@@ -512,7 +512,7 @@ const requiredFieldsByResource: Record<string, string[]> = {
   organizations: ['name'],
   organization_users: ['organization_id', 'role'],
   events: ['organization_id', 'name', 'slug', 'start_datetime', 'end_datetime', 'status'],
-  event_locations: ['event_id', 'name'],
+  event_locations: ['organization_id', 'name'],
   ticket_types: ['event_id', 'event_location_id', 'name', 'price_paisa'],
   orders: ['customer_id', 'event_id', 'event_location_id'],
   web_roles: ['name'],
@@ -8251,7 +8251,9 @@ function ensureFormHasRequiredFields(resource: string, values: Record<string, st
 }
 
 function getOrderedFormFields(resource: string, values: Record<string, string>) {
-  const visibleFields = Object.keys(values).filter((field) => !isAlwaysHiddenFormField(field))
+  const visibleFields = Object.keys(values).filter(
+    (field) => !isAlwaysHiddenFormField(field) && !(resource === 'event_locations' && field === 'event_id')
+  )
   const requiredFields = (requiredFieldsByResource[resource] ?? []).filter((field) => visibleFields.includes(field))
   const requiredSet = new Set(requiredFields)
   const optionalFields = visibleFields.filter((field) => !requiredSet.has(field))
