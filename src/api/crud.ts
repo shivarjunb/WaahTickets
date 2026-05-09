@@ -90,6 +90,7 @@ const DEFAULT_RAIL_AUTOPLAY_ENABLED = true
 const DEFAULT_RAIL_ACCENT_COLOR = '#4f8df5'
 const MAX_CONFIGURED_RAILS = 24
 const MAX_EVENTS_PER_RAIL = 48
+let userCartSchemaReady = false
 const ORGANIZER_IMAGE_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -1321,37 +1322,38 @@ crudRoutes.put('/cart', async (c) => {
   const now = new Date().toISOString()
 
   await ensureUserCartItemsTable(db)
-  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(scope.userId).run()
-
-  for (const item of items) {
-    await db
-      .prepare(
-        `INSERT INTO user_cart_items (
-          id, user_id, item_key, event_id, event_name, event_location_id, event_location_name,
-          ticket_type_id, ticket_type_name, quantity, unit_price_paisa, currency,
-          hold_token, hold_expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        crypto.randomUUID(),
-        scope.userId,
-        item.id,
-        item.event_id,
-        item.event_name,
-        item.event_location_id,
-        item.event_location_name,
-        item.ticket_type_id,
-        item.ticket_type_name,
-        item.quantity,
-        item.unit_price_paisa,
-        item.currency,
-        holdToken || null,
-        holdExpiresAt || null,
-        now,
-        now
-      )
-      .run()
-  }
+  const statements = [
+    db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(scope.userId),
+    ...items.map((item) =>
+      db
+        .prepare(
+          `INSERT INTO user_cart_items (
+            id, user_id, item_key, event_id, event_name, event_location_id, event_location_name,
+            ticket_type_id, ticket_type_name, quantity, unit_price_paisa, currency,
+            hold_token, hold_expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          scope.userId,
+          item.id,
+          item.event_id,
+          item.event_name,
+          item.event_location_id,
+          item.event_location_name,
+          item.ticket_type_id,
+          item.ticket_type_name,
+          item.quantity,
+          item.unit_price_paisa,
+          item.currency,
+          holdToken || null,
+          holdExpiresAt || null,
+          now,
+          now
+        )
+    )
+  ]
+  await db.batch(statements)
 
   return c.json({ data: { items, hold_token: holdToken, hold_expires_at: holdExpiresAt } })
 })
@@ -4110,10 +4112,12 @@ async function executeMutation<T>(
 }
 
 async function ensureUserCartItemsTable(db: D1Database) {
+  if (userCartSchemaReady) return
   await db.prepare(USER_CART_ITEMS_TABLE_SQL).run()
   for (const statement of USER_CART_ITEMS_INDEX_SQL) {
     await db.prepare(statement).run()
   }
+  userCartSchemaReady = true
 }
 
 async function hasExpiredUserCart(db: D1Database, userId: string) {

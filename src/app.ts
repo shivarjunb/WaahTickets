@@ -9,6 +9,7 @@ import { sanitizeServerError } from './utils/errors.js'
 const PUBLIC_EVENTS_CACHE_TTL_SECONDS = 60
 const PUBLIC_EVENT_TICKET_TYPES_CACHE_TTL_SECONDS = 60
 const CART_HOLD_MINUTES = 15
+let cartHoldsSchemaReady = false
 const APP_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS app_settings (
   setting_key TEXT PRIMARY KEY,
   setting_value TEXT NOT NULL,
@@ -338,45 +339,54 @@ app.post('/api/public/cart-holds', async (c) => {
     return c.json({ data: { hold_token: holdToken, expires_at: expiresAt, items: [] } })
   }
 
-  const heldItems: Array<Record<string, unknown>> = []
-  for (const [ticketTypeId, quantity] of requestedByTicketType.entries()) {
-    const ticketType = await c.env.DB
-      .prepare(
-        `SELECT
-          ticket_types.id,
-          ticket_types.event_id,
-          ticket_types.event_location_id,
-          ticket_types.quantity_available,
-          ticket_types.quantity_sold,
-          COALESCE(other_holds.quantity_held, 0) AS other_quantity_held
-        FROM ticket_types
-        LEFT JOIN (
-          SELECT ticket_type_id, SUM(quantity) AS quantity_held
-          FROM cart_holds
-          WHERE expires_at > ?
-            AND hold_token <> ?
-          GROUP BY ticket_type_id
-        ) other_holds ON other_holds.ticket_type_id = ticket_types.id
-        WHERE ticket_types.id = ?
-          AND ticket_types.is_active = 1
-          AND EXISTS (
-            SELECT 1
-            FROM events
-            WHERE events.id = ticket_types.event_id
-              AND events.status = 'published'
-          )
-        LIMIT 1`
-      )
-      .bind(nowIso, holdToken, ticketTypeId)
-      .first<{
-        id: string
-        event_id: string
-        event_location_id: string
-        quantity_available: number | null
-        quantity_sold: number | null
-        other_quantity_held: number | null
-      }>()
+  const requestedIds = [...requestedByTicketType.keys()]
+  const requestedPlaceholders = requestedIds.map(() => '?').join(', ')
+  const heldItems: Array<{
+    ticket_type_id: string
+    event_id: string
+    event_location_id: string
+    quantity: number
+  }> = []
+  const ticketTypeRows = await c.env.DB
+    .prepare(
+      `SELECT
+        ticket_types.id,
+        ticket_types.event_id,
+        ticket_types.event_location_id,
+        ticket_types.quantity_available,
+        ticket_types.quantity_sold,
+        COALESCE(other_holds.quantity_held, 0) AS other_quantity_held
+      FROM ticket_types
+      LEFT JOIN (
+        SELECT ticket_type_id, SUM(quantity) AS quantity_held
+        FROM cart_holds
+        WHERE expires_at > ?
+          AND hold_token <> ?
+          AND ticket_type_id IN (${requestedPlaceholders})
+        GROUP BY ticket_type_id
+      ) other_holds ON other_holds.ticket_type_id = ticket_types.id
+      WHERE ticket_types.id IN (${requestedPlaceholders})
+        AND ticket_types.is_active = 1
+        AND EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = ticket_types.event_id
+            AND events.status = 'published'
+        )`
+    )
+    .bind(nowIso, holdToken, ...requestedIds, ...requestedIds)
+    .all<{
+      id: string
+      event_id: string
+      event_location_id: string
+      quantity_available: number | null
+      quantity_sold: number | null
+      other_quantity_held: number | null
+    }>()
+  const ticketTypesById = new Map(ticketTypeRows.results.map((ticketType) => [ticketType.id, ticketType]))
 
+  for (const [ticketTypeId, quantity] of requestedByTicketType.entries()) {
+    const ticketType = ticketTypesById.get(ticketTypeId)
     if (!ticketType) {
       return c.json({ error: 'One or more ticket types are no longer available.' }, 409)
     }
@@ -402,37 +412,34 @@ app.post('/api/public/cart-holds', async (c) => {
     })
   }
 
-  const requestedIds = [...requestedByTicketType.keys()]
-  const placeholders = requestedIds.map(() => '?').join(', ')
-  await c.env.DB
-    .prepare(`DELETE FROM cart_holds WHERE hold_token = ? AND ticket_type_id NOT IN (${placeholders})`)
-    .bind(holdToken, ...requestedIds)
-    .run()
-
-  for (const item of heldItems) {
-    await c.env.DB
-      .prepare(
-        `INSERT INTO cart_holds (
-          id, hold_token, ticket_type_id, event_id, event_location_id, quantity, expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hold_token, ticket_type_id) DO UPDATE SET
-          quantity = excluded.quantity,
-          expires_at = excluded.expires_at,
-          updated_at = excluded.updated_at`
-      )
-      .bind(
-        crypto.randomUUID(),
-        holdToken,
-        item.ticket_type_id,
-        item.event_id,
-        item.event_location_id,
-        item.quantity,
-        expiresAt,
-        nowIso,
-        nowIso
-      )
-      .run()
-  }
+  await c.env.DB.batch([
+    c.env.DB
+      .prepare(`DELETE FROM cart_holds WHERE hold_token = ? AND ticket_type_id NOT IN (${requestedPlaceholders})`)
+      .bind(holdToken, ...requestedIds),
+    ...heldItems.map((item) =>
+      c.env.DB
+        .prepare(
+          `INSERT INTO cart_holds (
+            id, hold_token, ticket_type_id, event_id, event_location_id, quantity, expires_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(hold_token, ticket_type_id) DO UPDATE SET
+            quantity = excluded.quantity,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at`
+        )
+        .bind(
+          crypto.randomUUID(),
+          holdToken,
+          item.ticket_type_id,
+          item.event_id,
+          item.event_location_id,
+          item.quantity,
+          expiresAt,
+          nowIso,
+          nowIso
+        )
+    )
+  ])
 
   return c.json({ data: { hold_token: holdToken, expires_at: expiresAt, items: heldItems } })
 })
@@ -750,10 +757,12 @@ function getFirstFormValue(value: FormDataEntryValue | FormDataEntryValue[] | un
 }
 
 async function ensureCartHoldsTable(db: D1Database) {
+  if (cartHoldsSchemaReady) return
   await db.prepare(CART_HOLDS_TABLE_SQL).run()
   for (const statement of CART_HOLDS_INDEX_SQL) {
     await db.prepare(statement).run()
   }
+  cartHoldsSchemaReady = true
 }
 
 async function pruneExpiredCartHolds(db: D1Database) {
