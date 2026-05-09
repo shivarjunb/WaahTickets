@@ -247,6 +247,7 @@ export default function App() {
     scanning: false,
     busy: false
   })
+  const validationBusyRef = useRef(false)
   const [resolvedApiBaseUrl, setResolvedApiBaseUrl] = useState(defaultMobileApiBaseUrl)
   const [isTicketPickerOpen, setIsTicketPickerOpen] = useState(false)
   const [ticketPickerEventId, setTicketPickerEventId] = useState('')
@@ -254,6 +255,17 @@ export default function App() {
   useEffect(() => {
     void restoreSession()
   }, [])
+
+  const api = useMemo(
+    () =>
+      createApiClient({
+        baseUrl: resolvedApiBaseUrl,
+        async getAccessToken() {
+          return session.tokens?.accessToken ?? null
+        }
+      }),
+    [resolvedApiBaseUrl, session.tokens?.accessToken]
+  )
 
   useEffect(() => {
     if (!isSessionRestored) return
@@ -266,17 +278,6 @@ export default function App() {
       subscription.remove()
     }
   }, [isSessionRestored, api])
-
-  const api = useMemo(
-    () =>
-      createApiClient({
-        baseUrl: resolvedApiBaseUrl,
-        async getAccessToken() {
-          return session.tokens?.accessToken ?? null
-        }
-      }),
-    [resolvedApiBaseUrl, session.tokens?.accessToken]
-  )
 
   useEffect(() => {
     void Promise.all([loadPublicEvents(api), loadPaymentSettings(api), loadRailsSettings(api)])
@@ -1059,7 +1060,9 @@ export default function App() {
 
   async function inspectTicketByQr(value: string, source: 'camera' | 'manual') {
     const qrCodeValue = resolveQrCodeValueFromPayload(value)
-    if (!qrCodeValue || validationState.busy) return
+    if (!qrCodeValue || validationState.busy || validationBusyRef.current) return
+
+    validationBusyRef.current = true
 
     setValidationState((current) => ({
       ...current,
@@ -1069,6 +1072,7 @@ export default function App() {
       ticket: null,
       pendingQrValue: '',
       pendingStatus: null,
+      scanning: source === 'camera' ? false : current.scanning,
       busy: true
     }))
 
@@ -1102,6 +1106,7 @@ export default function App() {
           ticket,
           pendingQrValue: resolvedQrValue,
           pendingStatus: 'already_redeemed',
+          scanning: false,
           busy: false
         }))
         return
@@ -1114,6 +1119,7 @@ export default function App() {
         ticket: null,
         pendingQrValue: '',
         pendingStatus: null,
+        scanning: false,
         busy: false
       }))
     } catch (error) {
@@ -1124,8 +1130,11 @@ export default function App() {
         ticket: null,
         pendingQrValue: '',
         pendingStatus: null,
+        scanning: false,
         busy: false
       }))
+    } finally {
+      validationBusyRef.current = false
     }
   }
 
@@ -1186,6 +1195,7 @@ export default function App() {
         return
       }
     }
+    validationBusyRef.current = false
     setValidationState((current) => ({
       ...current,
       scanning: true,
@@ -1591,7 +1601,7 @@ export default function App() {
                     <ActionButton
                       label="Reset"
                       secondary
-                      onPress={() =>
+                      onPress={() => {
                         setValidationState({
                           qrInput: '',
                           status: 'Ready to scan tickets.',
@@ -1602,7 +1612,8 @@ export default function App() {
                           scanning: false,
                           busy: false
                         })
-                      }
+                        validationBusyRef.current = false
+                      }}
                     />
                   </View>
                   <TextInput
