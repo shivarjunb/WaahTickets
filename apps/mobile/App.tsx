@@ -7,6 +7,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -107,6 +108,7 @@ type ValidationState = {
 type PurchasedTicket = {
   id: string
   ticket_number?: string | null
+  qr_code_value?: string | null
   order_id?: string | null
   event_id?: string | null
   event_location_id?: string | null
@@ -205,6 +207,8 @@ export default function App() {
     downloadingId: '',
     lastLoadedAt: ''
   })
+  const [activeTicketQrValue, setActiveTicketQrValue] = useState('')
+  const [activeTicketQrLabel, setActiveTicketQrLabel] = useState('')
   const [paymentState, setPaymentState] = useState<PaymentState>({
     settings: null,
     loading: false,
@@ -442,7 +446,9 @@ export default function App() {
     }))
 
     try {
-      const fileName = sanitizeDownloadFileName(`ticket-${ticket.ticket_number || ticket.id}.pdf`)
+      const fileName = sanitizeDownloadFileName(
+        `ticket-${ticket.ticket_number || ticket.id}-${Date.now().toString(36)}.pdf`
+      )
       const targetFile = new FileSystem.File(FileSystem.Paths.cache, fileName)
       const downloadUrl = new URL(`/api/files/${encodeURIComponent(fileId)}/download`, resolvedApiBaseUrl).toString()
       const result = await FileSystem.File.downloadFileAsync(downloadUrl, targetFile, {
@@ -613,6 +619,17 @@ export default function App() {
       setAuthStatus('Signed out on this device.')
       setActiveView('account')
     }
+  }
+
+  function requestLogoutConfirmation() {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to log out from this device?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Logout', style: 'destructive', onPress: () => void logout() }
+      ]
+    )
   }
 
   async function commitCartItems(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
@@ -1249,13 +1266,13 @@ export default function App() {
         style={[
           styles.appChrome,
           {
-            paddingTop: topInset + 12
+            paddingTop: topInset + 6
           }
         ]}
       >
         <AppHeader
           isLoggedIn={Boolean(session.user)}
-          onAccountPress={() => session.user ? void logout() : navigateTo('account')}
+          onAccountPress={() => session.user ? requestLogoutConfirmation() : navigateTo('account')}
           onMenuPress={() => setIsMenuOpen(true)}
           subtitle={currentSubtitle}
           title={currentTitle}
@@ -1382,6 +1399,18 @@ export default function App() {
                       key={ticket.id}
                       ticket={ticket}
                       onDownload={() => void downloadTicketPdf(ticket)}
+                      onShowQr={() => {
+                        const qrValue = ticket.qr_code_value?.trim() ?? ''
+                        if (!qrValue) {
+                          setPurchasedTickets((current) => ({
+                            ...current,
+                            error: 'QR is not available for this ticket yet.'
+                          }))
+                          return
+                        }
+                        setActiveTicketQrValue(qrValue)
+                        setActiveTicketQrLabel(ticket.ticket_number?.trim() || ticket.id)
+                      }}
                     />
                   ))}
                   <View style={styles.inlineActions}>
@@ -1398,7 +1427,7 @@ export default function App() {
           <View style={styles.stack}>
             <Card title="Cart" subtitle="Review your tickets and finish checkout when you're ready.">
               {cartItems.length === 0 ? (
-                <Text style={styles.mutedText}>Your cart is empty. Add tickets from the Tickets tab.</Text>
+                <Text style={styles.mutedText}>It's lonely here.</Text>
               ) : (
                 <View style={styles.stackSmall}>
                   {eventGroups.map((group) => (
@@ -1466,7 +1495,6 @@ export default function App() {
                     <View style={styles.khaltiPanel}>
                       <Text style={styles.cardTitle}>Pending Khalti payment</Text>
                       <Text style={styles.cardHint}>Open the payment page, finish payment, then verify it here.</Text>
-                      <Text style={styles.mutedText}>PIDX: {pendingKhaltiPayment.pidx}</Text>
                       <View style={styles.inlineActions}>
                         <ActionButton label="Open payment page" onPress={() => void Linking.openURL(pendingKhaltiPayment.paymentUrl)} />
                         <ActionButton label="Verify payment" secondary onPress={() => void verifyKhaltiPayment()} />
@@ -1481,25 +1509,49 @@ export default function App() {
               ) : null}
             </Card>
 
-            <Card title="Payment options" subtitle="Choose how you'd like to complete this order.">
-              {paymentState.loading ? (
-                <LoadingRow label="Loading payment settings..." />
-              ) : paymentState.error ? (
-                <Text style={styles.errorText}>{paymentState.error}</Text>
-              ) : (
-                <View style={styles.stackSmall}>
-                  <LabelValue
-                    label="Khalti"
-                    value={paymentState.settings?.khalti_can_initiate ? 'Ready for initiate + verify flow' : paymentState.settings?.khalti_runtime_note || 'Not available'}
-                  />
-                  <LabelValue
-                    label="eSewa"
-                    value={paymentState.settings?.esewa_runtime_note || 'Not available'}
-                  />
-                  <Text style={styles.cardHint}>Khalti is ready today. Additional payment options will appear here as they become available.</Text>
-                </View>
-              )}
-            </Card>
+            {cartItems.length === 0 ? (
+              <Card title="Featured events" subtitle="Pick something fun and add it to your cart.">
+                {events.loading ? (
+                  <LoadingRow label="Loading events..." />
+                ) : events.error ? (
+                  <Text style={styles.errorText}>{events.error}</Text>
+                ) : featuredDiscoveryEvents.length === 0 ? (
+                  <Text style={styles.mutedText}>No featured events available right now.</Text>
+                ) : (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbnailRail}>
+                    {featuredDiscoveryEvents.map((event, index) => (
+                      <EventThumbnail
+                        apiBaseUrl={resolvedApiBaseUrl}
+                        event={event}
+                        key={`cart-featured-${event.id}`}
+                        fallbackIndex={index}
+                        selected={selectedEventId === event.id}
+                        onPress={() => openTicketPicker(event.id)}
+                      />
+                    ))}
+                  </ScrollView>
+                )}
+              </Card>
+            ) : (
+              <Card title="Payment options" subtitle="Choose how you'd like to complete this order.">
+                {paymentState.loading ? (
+                  <LoadingRow label="Loading payment settings..." />
+                ) : paymentState.error ? (
+                  <Text style={styles.errorText}>{paymentState.error}</Text>
+                ) : (
+                  <View style={styles.stackSmall}>
+                    <LabelValue
+                      label="Khalti"
+                      value={paymentState.settings?.khalti_can_initiate ? 'Ready' : paymentState.settings?.khalti_runtime_note || 'Not available'}
+                    />
+                    <LabelValue
+                      label="eSewa"
+                      value={paymentState.settings?.esewa_runtime_note || 'Not available'}
+                    />
+                  </View>
+                )}
+              </Card>
+            )}
           </View>
         ) : null}
 
@@ -1607,7 +1659,7 @@ export default function App() {
                   </View>
                   <View style={styles.inlineActions}>
                     <ActionButton label={isRefreshingAccount ? 'Syncing...' : 'Refresh profile'} onPress={() => void refreshAccountProfile()} />
-                    <ActionButton label="Logout" secondary onPress={() => void logout()} />
+                    <ActionButton label="Logout" secondary onPress={requestLogoutConfirmation} />
                   </View>
                 </View>
               ) : (
@@ -1691,6 +1743,20 @@ export default function App() {
           />
         </>
       ) : null}
+      <Modal transparent visible={Boolean(activeTicketQrValue)} animationType="fade" onRequestClose={() => setActiveTicketQrValue('')}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.ticketModal}>
+            <Text style={styles.modalTitle}>Ticket QR</Text>
+            <Text style={styles.modalSubtitle}>{activeTicketQrLabel}</Text>
+            <Image
+              source={{ uri: getQrImageUrl(activeTicketQrValue, 320) }}
+              style={styles.ticketQrImage}
+              resizeMode="contain"
+            />
+            <ActionButton label="Close" secondary onPress={() => setActiveTicketQrValue('')} />
+          </View>
+        </View>
+      </Modal>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -1728,14 +1794,26 @@ function HeroCard({
         Discover what’s happening next, grab tickets in a few taps, and keep everything in one place.
       </Text>
       <View style={styles.heroPoster}>
-        <EventImage apiBaseUrl={apiBaseUrl} event={featuredEvent} fallbackIndex={0} style={styles.heroPosterImage} />
+        <EventImage
+          apiBaseUrl={apiBaseUrl}
+          event={featuredEvent}
+          fallbackIndex={0}
+          style={styles.heroPosterImage}
+          showFallbackText={false}
+        />
         <View style={styles.heroPosterScrim} />
         <View style={styles.heroPosterCopy}>
-          <Text style={styles.heroPosterLabel}>{featuredEvent?.event_type || 'Featured event'}</Text>
-          <Text style={styles.heroPosterValue}>{featuredEvent?.location_name || featuredEvent?.organization_name || 'Venue coming soon'}</Text>
-          <Text style={styles.heroPosterCaption}>
-            {featuredEvent?.start_datetime ? formatEventDate(featuredEvent.start_datetime) : 'New events are added regularly'}
-          </Text>
+          <View style={styles.heroPosterInfoCard}>
+            <Text numberOfLines={1} style={styles.heroPosterLabel}>
+              {featuredEvent?.event_type || 'Featured event'}
+            </Text>
+            <Text numberOfLines={2} style={styles.heroPosterValue}>
+              {featuredEvent?.location_name || featuredEvent?.organization_name || 'Venue coming soon'}
+            </Text>
+            <Text numberOfLines={1} style={styles.heroPosterCaption}>
+              {featuredEvent?.start_datetime ? formatEventDate(featuredEvent.start_datetime) : 'New events are added regularly'}
+            </Text>
+          </View>
         </View>
       </View>
       {featuredEvents.length > 1 ? (
@@ -1966,12 +2044,14 @@ function EventImage({
   apiBaseUrl,
   event,
   fallbackIndex,
-  style
+  style,
+  showFallbackText = true
 }: {
   apiBaseUrl: string
   event: PublicEvent | null | undefined
   fallbackIndex: number
   style: StyleProp<ImageStyle>
+  showFallbackText?: boolean
 }) {
   const imageUrl = getEventImageUrl(event, apiBaseUrl, fallbackIndex)
   if (imageUrl) {
@@ -1981,8 +2061,12 @@ function EventImage({
     <View style={[style, styles.posterFallback]}>
       <View style={styles.posterAccentOne} />
       <View style={styles.posterAccentTwo} />
-      <Text style={styles.posterFallbackEyebrow}>{event?.organization_name || 'WaahTickets'}</Text>
-      <Text numberOfLines={3} style={styles.posterFallbackTitle}>{event?.name || 'Featured event'}</Text>
+      {showFallbackText ? (
+        <>
+          <Text style={styles.posterFallbackEyebrow}>{event?.organization_name || 'WaahTickets'}</Text>
+          <Text numberOfLines={3} style={styles.posterFallbackTitle}>{event?.name || 'Featured event'}</Text>
+        </>
+      ) : null}
     </View>
   )
 }
@@ -2013,12 +2097,14 @@ function PurchasedTicketCard({
   downloading,
   event,
   ticket,
-  onDownload
+  onDownload,
+  onShowQr
 }: {
   downloading: boolean
   event: PublicEvent | null
   ticket: PurchasedTicket
   onDownload: () => void
+  onShowQr: () => void
 }) {
   return (
     <View style={styles.purchasedTicketCard}>
@@ -2040,6 +2126,11 @@ function PurchasedTicketCard({
         <LabelValue label="Venue" value={ticket.event_location_name || event?.location_name || event?.organization_name || ticket.event_location_id || '-'} />
       </View>
       <View style={styles.inlineActions}>
+        <ActionButton
+          label="Show QR"
+          secondary={!ticket.qr_code_value}
+          onPress={onShowQr}
+        />
         <ActionButton
           label={downloading ? 'Downloading...' : ticket.pdf_file_id ? 'Download PDF' : 'PDF pending'}
           secondary={!ticket.pdf_file_id}
@@ -2249,6 +2340,7 @@ function normalizePurchasedTicket(row: Record<string, unknown>): PurchasedTicket
   return {
     id,
     ticket_number: asOptionalString(row.ticket_number),
+    qr_code_value: asOptionalString(row.qr_code_value),
     order_id: asOptionalString(row.order_id),
     event_id: asOptionalString(row.event_id),
     event_location_id: asOptionalString(row.event_location_id),
@@ -2262,6 +2354,12 @@ function normalizePurchasedTicket(row: Record<string, unknown>): PurchasedTicket
     event_location_name: asOptionalString(row.event_location_name),
     ticket_type_name: asOptionalString(row.ticket_type_name)
   }
+}
+
+function getQrImageUrl(value: string, size = 300) {
+  const safeSize = Math.max(120, Math.min(800, Math.floor(size)))
+  const encoded = encodeURIComponent(value)
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${safeSize}x${safeSize}&data=${encoded}`
 }
 
 function asOptionalString(value: unknown) {
@@ -2661,11 +2759,20 @@ const styles = StyleSheet.create({
   statPillValue: { color: '#f8fafc', fontSize: 13, fontWeight: '700' },
   heroPoster: { borderRadius: 18, overflow: 'hidden', backgroundColor: '#17263d', height: 210, justifyContent: 'flex-end' },
   heroPosterImage: { position: 'absolute', width: '100%', height: '100%' },
-  heroPosterScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.35)' },
-  heroPosterCopy: { padding: 16 },
-  heroPosterLabel: { color: '#fbbf24', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 6 },
-  heroPosterValue: { color: '#ffffff', fontSize: 20, fontWeight: '800' },
-  heroPosterCaption: { color: '#cbd5e1', fontSize: 13, marginTop: 6 },
+  heroPosterScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.5)' },
+  heroPosterCopy: { padding: 14 },
+  heroPosterInfoCard: {
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(2,6,23,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    gap: 4
+  },
+  heroPosterLabel: { color: '#fbbf24', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.7 },
+  heroPosterValue: { color: '#ffffff', fontSize: 18, lineHeight: 23, fontWeight: '800' },
+  heroPosterCaption: { color: '#dbe5f3', fontSize: 13, lineHeight: 18 },
   heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
   heroDot: { width: 8, height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' },
   heroDotActive: { width: 22, backgroundColor: '#fbbf24' },
@@ -2756,6 +2863,7 @@ const styles = StyleSheet.create({
   modalHeaderCopy: { flex: 1, gap: 4 },
   modalTitle: { color: '#0f172a', fontSize: 22, fontWeight: '800' },
   modalSubtitle: { color: '#64748b', fontSize: 13, lineHeight: 18 },
+  ticketQrImage: { width: '100%', maxWidth: 320, aspectRatio: 1, alignSelf: 'center', borderRadius: 14, backgroundColor: '#ffffff' },
   modalTicketList: { gap: 12, paddingBottom: 8 },
   modalFooter: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, borderTopWidth: 1, borderTopColor: '#fed7aa', paddingTop: 12 },
   cartGroup: { borderRadius: 18, padding: 14, backgroundColor: '#f8fafc', gap: 10 },

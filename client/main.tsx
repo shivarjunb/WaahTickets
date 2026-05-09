@@ -4171,6 +4171,8 @@ function AdminApp({
   const [isCartSettingsLoading, setIsCartSettingsLoading] = useState(false)
   const [isCartSettingsSaving, setIsCartSettingsSaving] = useState(false)
   const [cartSettingsError, setCartSettingsError] = useState('')
+  const [ticketQrModalValue, setTicketQrModalValue] = useState('')
+  const [ticketQrModalLabel, setTicketQrModalLabel] = useState('')
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
@@ -6659,6 +6661,28 @@ function AdminApp({
                               ) : null}
                               {selectedResource === 'tickets' ? (
                                 <button
+                                  aria-label="Show ticket QR"
+                                  title={typeof record.qr_code_value === 'string' && record.qr_code_value.trim() ? 'Show ticket QR' : 'QR is not available for this ticket'}
+                                  type="button"
+                                  onClick={() => {
+                                    const qrValue = typeof record.qr_code_value === 'string' ? record.qr_code_value.trim() : ''
+                                    if (!qrValue) {
+                                      setStatus('QR is not available for this ticket yet.')
+                                      return
+                                    }
+                                    const ticketLabel =
+                                      (typeof record.ticket_number === 'string' && record.ticket_number.trim()) ||
+                                      (typeof record.id === 'string' && record.id.trim()) ||
+                                      'Ticket'
+                                    setTicketQrModalValue(qrValue)
+                                    setTicketQrModalLabel(ticketLabel)
+                                  }}
+                                >
+                                  <ScanLine size={16} />
+                                </button>
+                              ) : null}
+                              {selectedResource === 'tickets' ? (
+                                <button
                                   aria-label="Download ticket PDF"
                                   title={getTicketPdfDownloadUrl(record) ? 'Download ticket PDF' : 'Ticket PDF is still being generated'}
                                   type="button"
@@ -6879,6 +6903,31 @@ function AdminApp({
           onClose={closeModal}
           onSave={() => void saveRecord()}
         />
+      ) : null}
+      {ticketQrModalValue ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="record-modal reservation-modal" role="dialog" aria-modal="true" aria-label="Ticket QR">
+            <header className="record-modal-header">
+              <div>
+                <p className="admin-breadcrumb">Ticket QR</p>
+                <h2>{ticketQrModalLabel}</h2>
+              </div>
+              <button aria-label="Close modal" type="button" onClick={() => setTicketQrModalValue('')}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="record-modal-body">
+              <img
+                alt={`QR code for ${ticketQrModalLabel}`}
+                src={getQrImageUrl(ticketQrModalValue, 320)}
+                style={{ width: '100%', maxWidth: 320, aspectRatio: '1 / 1', display: 'block', margin: '0 auto', borderRadius: 12 }}
+              />
+            </div>
+            <footer className="record-modal-actions">
+              <button type="button" onClick={() => setTicketQrModalValue('')}>Close</button>
+            </footer>
+          </section>
+        </div>
       ) : null}
     </div>
   )
@@ -7140,6 +7189,11 @@ function RecordModal({
 
 function getFieldSelectOptions(resource: string, field: string) {
   return fieldSelectOptions[resource]?.[field] ?? []
+}
+
+function getQrImageUrl(value: string, size = 300) {
+  const safeSize = Math.max(120, Math.min(800, Math.floor(size)))
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${safeSize}x${safeSize}&data=${encodeURIComponent(value)}`
 }
 
 function toFormValues(record: Record<string, unknown>) {

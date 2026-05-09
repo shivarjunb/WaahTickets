@@ -2934,6 +2934,7 @@ crudRoutes.get('/mobile/tickets', async (c) => {
     .prepare(
       `SELECT tickets.id,
               tickets.ticket_number,
+              tickets.qr_code_value,
               tickets.order_id,
               tickets.event_id,
               tickets.event_location_id,
