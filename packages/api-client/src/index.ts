@@ -65,7 +65,7 @@ export function createApiClient(options: ApiClientOptions) {
       return json
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Network request failed.'
-      throw new Error(`${message}${message.includes(requestUrl.toString()) ? '' : ` (${requestUrl.toString()})`}`)
+      throw new Error(message)
     }
   }
 

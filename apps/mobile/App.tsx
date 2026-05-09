@@ -214,6 +214,7 @@ export default function App() {
     error: ''
   })
   const [selectedEventId, setSelectedEventId] = useState('')
+  const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [eventSearchQuery, setEventSearchQuery] = useState('')
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({})
   const [cartItems, setCartItems] = useState<CartItem[]>([])
@@ -239,7 +240,6 @@ export default function App() {
     scanning: false,
     busy: false
   })
-  const [apiBaseUrlInput, setApiBaseUrlInput] = useState(defaultMobileApiBaseUrl)
   const [resolvedApiBaseUrl, setResolvedApiBaseUrl] = useState(defaultMobileApiBaseUrl)
   const [isTicketPickerOpen, setIsTicketPickerOpen] = useState(false)
   const [ticketPickerEventId, setTicketPickerEventId] = useState('')
@@ -586,7 +586,7 @@ export default function App() {
         user: response.user ?? null,
         tokens: session.tokens
       })
-      setAuthStatus(response.user ? 'Account synced from `/api/auth/me`.' : 'Session is no longer valid on the server.')
+      setAuthStatus(response.user ? 'Account refreshed.' : 'Session is no longer valid on the server.')
     } catch (error) {
       setAuthStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
     } finally {
@@ -606,14 +606,6 @@ export default function App() {
       setAuthStatus('Signed out on this device.')
       setActiveView('account')
     }
-  }
-
-  function applyApiBaseUrl() {
-    const normalized = normalizeApiBaseUrl(apiBaseUrlInput)
-    setResolvedApiBaseUrl(normalized)
-    setApiBaseUrlInput(normalized)
-    setAuthStatus('')
-    setCartStatus('')
   }
 
   async function commitCartItems(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
@@ -981,6 +973,7 @@ export default function App() {
     const url = new URL(rawUrl)
     const accessToken = url.searchParams.get('access_token')?.trim() ?? ''
     const expiresAt = url.searchParams.get('expires_at')?.trim() ?? ''
+    const encodedUser = url.searchParams.get('user')?.trim() ?? ''
     const error = url.searchParams.get('error')?.trim() ?? ''
 
     setActiveView('account')
@@ -994,22 +987,49 @@ export default function App() {
       return
     }
 
-    setAuthStatus('Google sign-in complete. Syncing profile...')
-    const googleClient = createApiClient({
-      baseUrl: resolvedApiBaseUrl,
-      getAccessToken: () => accessToken
-    })
-    const response = await googleClient.getAuthMe()
-    await persistSession({
-      user: response.user ?? null,
-      tokens: {
-        accessToken,
-        refreshToken: null
+    const returnedUser = decodeGoogleMobileAuthUser(encodedUser)
+
+    try {
+      if (returnedUser) {
+        await persistSession({
+          user: returnedUser,
+          tokens: {
+            accessToken,
+            refreshToken: null
+          }
+        })
+        setAuthStatus('Signed in with Google.')
+        void loadPurchasedTickets()
+        return
       }
-    })
-    setAuthStatus(response.user ? 'Signed in with Google.' : 'Google sign-in completed, but no profile was returned.')
-    if (response.user) {
-      void loadPurchasedTickets()
+
+      setAuthStatus('Google sign-in complete. Syncing profile...')
+      const googleClient = createApiClient({
+        baseUrl: resolvedApiBaseUrl,
+        getAccessToken: () => accessToken
+      })
+      const response = await googleClient.getAuthMe()
+      await persistSession({
+        user: response.user ?? null,
+        tokens: {
+          accessToken,
+          refreshToken: null
+        }
+      })
+      setAuthStatus(response.user ? 'Signed in with Google.' : 'Google sign-in completed, but no profile was returned.')
+      if (response.user) {
+        void loadPurchasedTickets()
+      }
+    } catch (syncError) {
+      await persistSession({
+        user: returnedUser,
+        tokens: {
+          accessToken,
+          refreshToken: null
+        }
+      })
+      const details = expiresAt ? ` Token expires at ${expiresAt}.` : ''
+      setAuthStatus(`Google sign-in succeeded, but profile sync failed: ${buildApiErrorMessage(syncError, resolvedApiBaseUrl)}.${details}`)
     }
   }
 
@@ -1151,11 +1171,13 @@ export default function App() {
   }
 
   const selectedEvent = events.items.find((event) => event.id === selectedEventId) ?? events.items[0] ?? null
-  const featuredEvent = events.items.find((event) => isFeatured(event)) ?? selectedEvent
+  const featuredEvents = events.items.filter(isFeatured)
+  const rotatingFeaturedEvents = featuredEvents.length > 0 ? featuredEvents : events.items
+  const featuredEvent = rotatingFeaturedEvents[featuredSlideIndex] ?? selectedEvent
   const filteredEvents = filterEvents(events.items, eventSearchQuery)
   const eventRails = buildMobileEventRails(filteredEvents, railsState.settings?.rails ?? [])
   const validatorAllowed = canUseValidator(session.user)
-  const apiHint = getApiBaseUrlHint(resolvedApiBaseUrl)
+  const featuredDiscoveryEvents = (featuredEvents.length > 0 ? featuredEvents : events.items).slice(0, 6)
   const eventGroups = groupCartItemsByEvent(cartItems)
   const cartSubtotalPaisa = cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
   const cartDiscountPaisa = Object.values(couponDiscounts).reduce((sum, item) => sum + item.discount, 0)
@@ -1164,6 +1186,14 @@ export default function App() {
   const currentSubtitle = getViewSubtitle(activeView, cartItems.length)
   const topInset = Platform.OS === 'android' ? Math.max(NativeStatusBar.currentHeight ?? 0, 18) : 18
   const bottomInset = Platform.OS === 'android' ? 18 : 12
+
+  useEffect(() => {
+    if (rotatingFeaturedEvents.length <= 1) return
+    const timer = setInterval(() => {
+      setFeaturedSlideIndex((current) => (current + 1) % rotatingFeaturedEvents.length)
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [rotatingFeaturedEvents.length])
 
   function navigateTo(view: MobileView) {
     if (view === 'tickets' && !session.user) {
@@ -1233,9 +1263,11 @@ export default function App() {
             <HeroCard
               apiBaseUrl={resolvedApiBaseUrl}
               featuredEvent={featuredEvent}
+              featuredEvents={rotatingFeaturedEvents}
+              featuredSlideIndex={featuredSlideIndex}
+              onSelectFeaturedSlide={setFeaturedSlideIndex}
               onPrimaryAction={() => featuredEvent ? openTicketPicker(featuredEvent.id) : undefined}
               onSecondaryAction={() => navigateTo(validatorAllowed ? 'validator' : 'account')}
-              sessionLabel={session.user ? session.user.email : 'Guest browsing'}
             />
 
             <Card
@@ -1252,7 +1284,7 @@ export default function App() {
                 placeholderTextColor="#90a3b8"
               />
               {events.loading ? (
-                <LoadingRow label="Loading events from the public API..." />
+                <LoadingRow label="Loading events..." />
               ) : events.error ? (
                 <Text style={styles.errorText}>{events.error}</Text>
               ) : railsState.error ? (
@@ -1333,7 +1365,7 @@ export default function App() {
 
         {activeView === 'cart' ? (
           <View style={styles.stack}>
-            <Card title="Cart" subtitle="Ticket holds are reserved via `/api/public/cart-holds` while you check out.">
+            <Card title="Cart" subtitle="Review your tickets and finish checkout when you're ready.">
               {cartItems.length === 0 ? (
                 <Text style={styles.mutedText}>Your cart is empty. Add tickets from the Tickets tab.</Text>
               ) : (
@@ -1418,7 +1450,7 @@ export default function App() {
               ) : null}
             </Card>
 
-            <Card title="Payment availability" subtitle="Pulled from `/api/public/payments/settings`.">
+            <Card title="Payment options" subtitle="Choose how you'd like to complete this order.">
               {paymentState.loading ? (
                 <LoadingRow label="Loading payment settings..." />
               ) : paymentState.error ? (
@@ -1433,9 +1465,7 @@ export default function App() {
                     label="eSewa"
                     value={paymentState.settings?.esewa_runtime_note || 'Not available'}
                   />
-                  <Text style={styles.cardHint}>
-                    Mobile checkout currently supports direct manual completion and Khalti browser handoff. eSewa still needs a mobile-native form handoff or embedded web flow.
-                  </Text>
+                  <Text style={styles.cardHint}>Khalti is ready today. Additional payment options will appear here as they become available.</Text>
                 </View>
               )}
             </Card>
@@ -1446,7 +1476,7 @@ export default function App() {
           <View style={styles.stack}>
             <Card
               title="QR ticket validator"
-              subtitle={validatorAllowed ? 'Scan ticket QR codes with the phone camera, inspect, then confirm redemption.' : 'Admin, organizer, or ticket validator login is required.'}
+              subtitle={validatorAllowed ? 'Scan ticket QR codes, confirm ticket details, and redeem at the gate.' : 'A staff account is required to use the scanner.'}
             >
               {validatorAllowed ? (
                 <View style={styles.stackSmall}>
@@ -1518,8 +1548,8 @@ export default function App() {
                 </View>
               ) : (
                 <View style={styles.stackSmall}>
-                  <Text style={styles.mutedText}>Sign in with an admin, organization, or TicketValidator account to unlock camera scanning and redemption.</Text>
-                  <ActionButton label="Admin login" onPress={() => setActiveView('account')} />
+                  <Text style={styles.mutedText}>Sign in with your approved staff account to unlock camera scanning and redemption.</Text>
+                  <ActionButton label="Sign in" onPress={() => setActiveView('account')} />
                 </View>
               )}
             </Card>
@@ -1530,7 +1560,7 @@ export default function App() {
           <View style={styles.stack}>
             <Card
               title={session.user ? 'Signed-in account' : authMode === 'login' ? 'Login on mobile' : 'Create mobile account'}
-              subtitle="Mobile stores the same backend session token securely and sends it as a bearer token."
+              subtitle={session.user ? 'Manage your account and keep your ticket wallet up to date.' : 'Sign in to view tickets, track orders, and check out faster.'}
             >
               {session.user ? (
                 <View style={styles.stackSmall}>
@@ -1541,9 +1571,7 @@ export default function App() {
                     <View style={styles.profileCopy}>
                       <Text style={styles.profileName}>{formatFullName(session.user.first_name, session.user.last_name) || 'WaahTickets customer'}</Text>
                       <Text style={styles.profileEmail}>{session.user.email}</Text>
-                      <Text style={styles.profileMeta}>
-                        Role: {session.user.webrole ?? 'Customers'} · {session.user.is_email_verified ? 'Verified' : 'Verification pending'}
-                      </Text>
+                      <Text style={styles.profileMeta}>{session.user.is_email_verified ? 'Verified account' : 'Verification pending'}</Text>
                     </View>
                   </View>
                   <View style={styles.inlineActions}>
@@ -1574,11 +1602,22 @@ export default function App() {
               {authStatus ? <Text style={isStatusError(authStatus) ? styles.errorText : styles.successText}>{authStatus}</Text> : null}
             </Card>
 
-            <Card title="Mobile checkout note" subtitle="Checkout currently assumes a signed-in customer on mobile.">
-              <Text style={styles.mutedText}>
-                The backend also supports guest storefront checkout, but this mobile screen is intentionally login-first so cart, order, and payment behavior stay predictable while we finish the native payment return flow.
-              </Text>
-            </Card>
+            {session.user ? (
+              <Card title="Keep exploring" subtitle="Jump back into featured events and start your next booking.">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbnailRail}>
+                  {featuredDiscoveryEvents.map((event, index) => (
+                    <EventThumbnail
+                      apiBaseUrl={resolvedApiBaseUrl}
+                      event={event}
+                      key={`account-featured-${event.id}`}
+                      fallbackIndex={index}
+                      selected={selectedEventId === event.id}
+                      onPress={() => openTicketPicker(event.id)}
+                    />
+                  ))}
+                </ScrollView>
+              </Card>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
@@ -1609,12 +1648,8 @@ export default function App() {
           <Pressable style={styles.drawerScrim} onPress={() => setIsMenuOpen(false)} />
           <SideDrawer
             activeView={activeView}
-            apiBaseUrlInput={apiBaseUrlInput}
-            apiHint={apiHint}
             cartCount={cartItems.length}
             onClose={() => setIsMenuOpen(false)}
-            onApiBaseUrlChange={setApiBaseUrlInput}
-            onApplyApiBaseUrl={applyApiBaseUrl}
             onRefreshFeed={() => void Promise.all([loadPublicEvents(), loadRailsSettings()])}
             onSelect={navigateTo}
             sessionLabel={session.user ? session.user.email : 'Guest browsing'}
@@ -1640,41 +1675,52 @@ export default function App() {
 function HeroCard({
   apiBaseUrl,
   featuredEvent,
+  featuredEvents,
+  featuredSlideIndex,
+  onSelectFeaturedSlide,
   onPrimaryAction,
-  onSecondaryAction,
-  sessionLabel
+  onSecondaryAction
 }: {
   apiBaseUrl: string
   featuredEvent: PublicEvent | null
+  featuredEvents: PublicEvent[]
+  featuredSlideIndex: number
+  onSelectFeaturedSlide: (index: number) => void
   onPrimaryAction: () => void
   onSecondaryAction: () => void
-  sessionLabel: string
 }) {
   return (
     <View style={styles.hero}>
       <Text style={styles.heroEyebrow}>WaahTickets Mobile</Text>
       <Text style={styles.heroTitle}>{featuredEvent?.name ?? 'Find live events on mobile.'}</Text>
       <Text style={styles.heroBody}>
-        Browse featured events, search by venue or category, buy tickets, and validate QR codes from the same backend that powers web.
+        Discover what’s happening next, grab tickets in a few taps, and keep everything in one place.
       </Text>
-      <View style={styles.heroStats}>
-        <StatPill label="Session" value={sessionLabel} />
-        <StatPill label="Featured" value={featuredEvent?.name ?? 'Waiting for live events'} />
-      </View>
       <View style={styles.heroPoster}>
         <EventImage apiBaseUrl={apiBaseUrl} event={featuredEvent} fallbackIndex={0} style={styles.heroPosterImage} />
         <View style={styles.heroPosterScrim} />
         <View style={styles.heroPosterCopy}>
-          <Text style={styles.heroPosterLabel}>{featuredEvent?.event_type || 'Featured'}</Text>
-          <Text style={styles.heroPosterValue}>{featuredEvent?.location_name || featuredEvent?.organization_name || apiBaseUrl}</Text>
+          <Text style={styles.heroPosterLabel}>{featuredEvent?.event_type || 'Featured event'}</Text>
+          <Text style={styles.heroPosterValue}>{featuredEvent?.location_name || featuredEvent?.organization_name || 'Venue coming soon'}</Text>
           <Text style={styles.heroPosterCaption}>
-            {featuredEvent?.start_datetime ? formatEventDate(featuredEvent.start_datetime) : 'Use your LAN IP for device testing'}
+            {featuredEvent?.start_datetime ? formatEventDate(featuredEvent.start_datetime) : 'New events are added regularly'}
           </Text>
         </View>
       </View>
+      {featuredEvents.length > 1 ? (
+        <View style={styles.heroDots}>
+          {featuredEvents.map((event, index) => (
+            <Pressable
+              key={`hero-dot-${event.id}`}
+              onPress={() => onSelectFeaturedSlide(index)}
+              style={[styles.heroDot, index === featuredSlideIndex ? styles.heroDotActive : null]}
+            />
+          ))}
+        </View>
+      ) : null}
       <View style={styles.inlineActions}>
         <ActionButton label="Browse tickets" onPress={onPrimaryAction} />
-        <ActionButton label="Admin scan" secondary onPress={onSecondaryAction} />
+        <ActionButton label="Open scanner" secondary onPress={onSecondaryAction} />
       </View>
     </View>
   )
@@ -1769,31 +1815,23 @@ function QuickAccessRow({
 
 function SideDrawer({
   activeView,
-  apiBaseUrlInput,
-  apiHint,
   bottomInset,
   cartCount,
   sessionLabel,
   signedIn,
   topInset,
   validatorAllowed,
-  onApiBaseUrlChange,
-  onApplyApiBaseUrl,
   onClose,
   onRefreshFeed,
   onSelect
 }: {
   activeView: MobileView
-  apiBaseUrlInput: string
-  apiHint: string
   bottomInset: number
   cartCount: number
   sessionLabel: string
   signedIn: boolean
   topInset: number
   validatorAllowed: boolean
-  onApiBaseUrlChange: (value: string) => void
-  onApplyApiBaseUrl: () => void
   onClose: () => void
   onRefreshFeed: () => void
   onSelect: (view: MobileView) => void
@@ -1840,21 +1878,11 @@ function SideDrawer({
           ))}
       </View>
       <View style={styles.drawerBackendCard}>
-        <Text style={styles.drawerBackendTitle}>Backend connection</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={apiBaseUrlInput}
-          onChangeText={onApiBaseUrlChange}
-          style={styles.drawerInput}
-          placeholder="http://192.168.1.83:8787"
-          placeholderTextColor="#94a3b8"
-        />
+        <Text style={styles.drawerBackendTitle}>Refresh events</Text>
+        <Text style={styles.drawerBackendHint}>Pull the latest featured events and availability.</Text>
         <View style={styles.inlineActions}>
-          <ActionButton label="Apply" onPress={onApplyApiBaseUrl} />
-          <ActionButton label="Refresh" secondary onPress={onRefreshFeed} />
+          <ActionButton label="Refresh" onPress={onRefreshFeed} />
         </View>
-        <Text style={styles.drawerBackendHint}>{apiHint}</Text>
       </View>
     </View>
   )
@@ -2142,26 +2170,13 @@ function MiniButton({ label, onPress }: { label: string; onPress: () => void }) 
   )
 }
 
-function normalizeApiBaseUrl(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return defaultMobileApiBaseUrl
-  if (/^https?:\/\//i.test(trimmed)) return trimmed
-  return `http://${trimmed}`
-}
-
 function buildApiErrorMessage(error: unknown, apiBaseUrl: string) {
   const message = error instanceof Error ? error.message : 'Request failed.'
-  const loopbackHint = /127\.0\.0\.1|localhost/.test(apiBaseUrl)
-    ? ' If you are using a physical phone, switch the API URL to your computer LAN IP or a tunnel.'
-    : ''
-  return `${message}${loopbackHint}`
-}
-
-function getApiBaseUrlHint(apiBaseUrl: string) {
-  if (/127\.0\.0\.1|localhost/.test(apiBaseUrl)) {
-    return 'Loopback URLs usually work only for simulators. On a physical device, enter your computer LAN IP or a reachable tunnel URL.'
+  const sanitized = message.trim().replace(/\s*\(https?:\/\/[^)]+\)\s*$/i, '')
+  if (sanitized === 'Customer login is required.') {
+    return 'Please sign in to continue.'
   }
-  return 'This origin powers events, ticket types, cart holds, checkout, and mobile payment initiation.'
+  return sanitized
 }
 
 function formatEventDate(value: string) {
@@ -2463,6 +2478,20 @@ function isMobileGoogleReturnUrl(rawUrl: string) {
   }
 }
 
+function decodeGoogleMobileAuthUser(encodedUser: string) {
+  if (!encodedUser) return null
+
+  try {
+    const normalized = encodedUser.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const binary = atob(padded)
+    const percentEncoded = Array.from(binary, (char) => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`).join('')
+    return JSON.parse(decodeURIComponent(percentEncoded)) as MobileSessionState['user']
+  } catch {
+    return null
+  }
+}
+
 function groupCartItemsByEvent(items: CartItem[]) {
   const groups = new Map<string, { eventId: string; eventName: string; items: CartItem[] }>()
   for (const item of items) {
@@ -2606,6 +2635,9 @@ const styles = StyleSheet.create({
   heroPosterLabel: { color: '#fbbf24', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 6 },
   heroPosterValue: { color: '#ffffff', fontSize: 20, fontWeight: '800' },
   heroPosterCaption: { color: '#cbd5e1', fontSize: 13, marginTop: 6 },
+  heroDots: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  heroDot: { width: 8, height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' },
+  heroDotActive: { width: 22, backgroundColor: '#fbbf24' },
   tabBar: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   tabButton: { minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 14 },
   tabButtonCompact: { minHeight: 40, flex: 1 },

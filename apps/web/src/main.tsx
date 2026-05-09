@@ -1740,7 +1740,7 @@ function PublicApp({
                   type="button"
                   onClick={() => void startEsewaCheckout()}
                 >
-                  {isSubmittingOrder ? 'Processing...' : `Retry eSewa payment (${publicPaymentSettings.esewa_mode})`}
+                  {isSubmittingOrder ? 'Processing...' : 'Retry eSewa payment'}
                 </button>
                 <button
                   className="secondary-button"
@@ -3355,7 +3355,7 @@ function CartCheckoutModal({
               onClick={onPayWithKhalti}
             >
               <CreditCard size={17} />
-              {isSubmitting ? 'Processing...' : `Pay with Khalti (${khaltiMode})`}
+              {isSubmitting ? 'Processing...' : 'Pay with Khalti'}
             </button>
             <button
               className="esewa-pay-button"
@@ -3364,11 +3364,11 @@ function CartCheckoutModal({
               onClick={onPayWithEsewa}
             >
               <CreditCard size={17} />
-              {isSubmitting ? 'Processing...' : `Pay with eSewa (${esewaMode})`}
+              {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
             </button>
             <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
               {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-              {isSubmitting ? 'Placing order...' : 'Bypass payment (dev)'}
+              {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
             </button>
           </aside>
         </div>
@@ -8140,11 +8140,11 @@ async function fetchJson<T>(url: string, options?: FetchJsonOptions) {
 
     throw new Error(
       preview.startsWith('<!doctype') || preview.startsWith('<html')
-        ? 'The API returned the React HTML page. Run the app through Wrangler or start Wrangler on port 8787 for Vite proxying.'
+        ? 'The app received an unexpected page instead of event data. Please try again in a moment.'
         : contentType.includes('text/plain') &&
             response.status >= 500 &&
             (lowerPreview.includes('internal server error') || lowerPreview === '')
-          ? 'The API is returning a plain-text 500 error. Start/restart Wrangler on port 8787 and run local D1 migrations (`npm run db:migrate:local`).'
+          ? 'Something went wrong while loading data. Please try again in a moment.'
         : `Expected JSON but received ${contentType || 'an unknown content type'}: ${preview || response.statusText}`
     )
   }
@@ -8168,8 +8168,11 @@ function getErrorMessage(error: unknown) {
 }
 
 function sanitizeClientErrorMessage(message: string) {
-  const trimmed = message.trim()
+  const trimmed = message.trim().replace(/\s*\(https?:\/\/[^)]+\)\s*$/i, '')
   if (!trimmed) return 'Request failed'
+  if (trimmed === 'Customer login is required.') {
+    return 'Please sign in to continue.'
+  }
   if (trimmed.includes('UNIQUE constraint failed') && trimmed.includes('users.email')) {
     return 'This email address is already registered.'
   }
