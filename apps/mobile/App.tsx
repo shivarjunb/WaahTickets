@@ -13,6 +13,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
@@ -217,6 +218,7 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState('')
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [eventSearchQuery, setEventSearchQuery] = useState('')
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({})
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [cartHoldToken, setCartHoldToken] = useState('')
@@ -1219,6 +1221,21 @@ export default function App() {
     void loadTicketTypes(eventId)
   }
 
+  async function refreshMobileFeed() {
+    if (isPullRefreshing) return
+    setIsPullRefreshing(true)
+    try {
+      await Promise.all([
+        loadPublicEvents(),
+        loadRailsSettings(),
+        loadPaymentSettings(),
+        session.user ? loadPurchasedTickets() : Promise.resolve()
+      ])
+    } finally {
+      setIsPullRefreshing(false)
+    }
+  }
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
@@ -1262,6 +1279,15 @@ export default function App() {
         ]}
         keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={isPullRefreshing}
+            onRefresh={() => void refreshMobileFeed()}
+            tintColor="#cfd8e3"
+            colors={['#3ec6a8']}
+            progressBackgroundColor="#0f1726"
+          />
+        }
       >
         {activeView === 'home' ? (
           <View style={styles.stack}>
