@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
+import type { HeroSettingsData } from "../../shared/types";
+import { defaultHeroSettingsData } from "../../shared/constants";
+import { normalizeHeroSettings } from "../../shared/utils";
+import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Database, Drama, Edit3, Eye, FileText, FilterX, Headphones, Heart, Home, Laugh, LayoutDashboard, Lock, LogIn, LogOut, Mail, MapPin, Menu, Music, Plus, RefreshCw, Save, Search, ScanLine, Settings2, Share2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Star, Ticket, Trash2, Trophy, Upload, Utensils, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
-import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
-import { SidebarAd, RailAd } from '../../ads-ui';
+import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
+import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { AdSlot } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 
@@ -39,12 +42,17 @@ export default function PublicApp({
   const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
   const [eventSearchQuery, setEventSearchQuery] = useState('')
+  const [eventLocationQuery, setEventLocationQuery] = useState('')
   const [eventTypeFilter, setEventTypeFilter] = useState('all')
   const [eventTimeFilter, setEventTimeFilter] = useState<'all' | 'weekend' | 'month'>('all')
   const [railsSettings, setRailsSettings] = useState<PublicRailsSettingsData>(defaultRailsSettingsData)
+  const [heroSettings, setHeroSettings] = useState<HeroSettingsData>(defaultHeroSettingsData)
+  const [isHeroHovered, setIsHeroHovered] = useState(false)
+  const [expandedHomepageRailIds, setExpandedHomepageRailIds] = useState<Set<string>>(() => new Set())
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
+  const [isPublicMenuOpen, setIsPublicMenuOpen] = useState(false)
   const [isAddingToCart, setIsAddingToCart] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
@@ -87,6 +95,9 @@ export default function PublicApp({
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
   const processedPaymentCallbackRef = useRef('')
+  const homepageRailRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const pausedHomepageRailIdsRef = useRef<Set<string>>(new Set())
+  const homepageRailNextRunAtRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -131,6 +142,7 @@ export default function PublicApp({
   }, [events])
   const filteredEvents = useMemo(() => {
     const search = eventSearchQuery.trim().toLowerCase()
+    const locationSearch = eventLocationQuery.trim().toLowerCase()
     const now = Date.now()
 
     return events.filter((event) => {
@@ -141,6 +153,18 @@ export default function PublicApp({
 
       if (eventTimeFilter === 'weekend' && !isEventWithinRange(event, now, 7)) return false
       if (eventTimeFilter === 'month' && !isEventWithinRange(event, now, 30)) return false
+
+      if (locationSearch) {
+        const locationHaystack = [
+          event.location_name,
+          event.location_address,
+          event.organization_name
+        ]
+          .filter((value) => typeof value === 'string' && value.trim())
+          .join(' ')
+          .toLowerCase()
+        if (!locationHaystack.includes(locationSearch)) return false
+      }
 
       if (!search) return true
       const haystack = [
@@ -156,9 +180,7 @@ export default function PublicApp({
 
       return haystack.includes(search)
     })
-  }, [eventSearchQuery, eventTimeFilter, eventTypeFilter, events])
-  const hasEventFilters =
-    eventSearchQuery.trim().length > 0 || eventTypeFilter !== 'all' || eventTimeFilter !== 'all'
+  }, [eventLocationQuery, eventSearchQuery, eventTimeFilter, eventTypeFilter, events])
   const featuredEvents = useMemo(() => {
     const eventsWithImages = events.filter((event) => {
       const bannerUrl = typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
@@ -169,19 +191,82 @@ export default function PublicApp({
     if (eventsWithImages.length > 0) return eventsWithImages
     return events
   }, [events])
-  const activeFeaturedEvent = featuredEvents[featuredSlideIndex] ?? selectedEvent ?? events[0]
-  const eventRails = useMemo(() => {
-    const configuredRails = buildConfiguredRails(filteredEvents, railsSettings.rails)
-    if (configuredRails.length > 0) return configuredRails
-    return buildDefaultEventRails(filteredEvents)
-  }, [filteredEvents, railsSettings.rails])
-  const featuredImages = useMemo(
-    () =>
-      featuredEvents.length > 0
-        ? featuredEvents.map((event, index) => getEventImageUrl(event, index))
-        : featuredSlideImages,
-    [featuredEvents]
+  const heroActiveSlides = useMemo(
+    () => [...heroSettings.slides].filter((slide) => slide.is_active).sort((left, right) => left.sort_order - right.sort_order),
+    [heroSettings.slides]
   )
+  const activeHeroSlide = heroActiveSlides[featuredSlideIndex] ?? heroActiveSlides[0] ?? null
+  const heroIsSlider = heroSettings.slider_enabled && heroActiveSlides.length > 1
+  const heroShowArrows = heroSettings.show_arrows && heroIsSlider
+  const heroShowDots = heroSettings.show_dots && heroIsSlider
+  const heroImageUrl = activeHeroSlide?.background_image_url?.trim() || featuredSlideImages[0]
+  const heroEyebrowText = activeHeroSlide?.eyebrow_text?.trim() || heroSettings.eyebrow_text
+  const heroBadgeText = activeHeroSlide?.badge_text?.trim() || heroSettings.badge_text
+  const heroHeadline = activeHeroSlide?.title?.trim() || heroSettings.headline
+  const heroSubtitle = activeHeroSlide?.subtitle?.trim() || heroSettings.subtitle
+  const heroAlignment = activeHeroSlide?.text_alignment ?? 'left'
+  const heroOverlayIntensity = activeHeroSlide?.overlay_intensity ?? 70
+  const heroDisplayTitle =
+    heroHeadline && heroHeadline.toLowerCase() !== 'waah tickets at your service!'
+      ? heroHeadline
+      : 'Find your next live experience'
+  const heroDisplaySubtitle = heroSubtitle || 'Book concerts, restaurants, venues, festivals, theatre, and food events near you.'
+  const heroDisplayEyebrow = heroEyebrowText || 'LOCAL EVENTS NEAR YOU'
+  const trendingEvents = useMemo(() => {
+    const featured = filteredEvents.filter((event) => isTruthyValue(event.is_featured))
+    return (featured.length > 0 ? featured : filteredEvents).slice(0, 8)
+  }, [filteredEvents])
+  const topVenues = useMemo(() => {
+    const venues = new Map<string, { name: string; location: string; imageUrl: string; eventCount: number }>()
+    events.forEach((event, index) => {
+      const name = String(event.location_name ?? event.organization_name ?? '').trim()
+      if (!name) return
+      const location = String(event.organization_name ?? event.location_name ?? 'Nepal').trim()
+      const existing = venues.get(name)
+      if (existing) {
+        existing.eventCount += 1
+        return
+      }
+      venues.set(name, {
+        name,
+        location,
+        imageUrl: getEventImageUrl(event, index),
+        eventCount: 1
+      })
+    })
+    return [...venues.values()].slice(0, 4)
+  }, [events])
+  const categoryCards = useMemo(
+    () => [
+      { label: 'Concerts', icon: Music, value: 'concert' },
+      { label: 'Theatre', icon: Drama, value: 'theatre' },
+      { label: 'Sports', icon: Trophy, value: 'sports' },
+      { label: 'Comedy', icon: Laugh, value: 'comedy' },
+      { label: 'Festivals', icon: Megaphone, value: 'festival' },
+      { label: 'Food & Drink', icon: Utensils, value: 'food' }
+    ],
+    []
+  )
+  const categoryEventCounts = useMemo(() => {
+    return Object.fromEntries(
+      categoryCards.map((category) => [
+        category.label,
+        events.filter((event) =>
+          String(event.event_type ?? '').toLowerCase().includes(category.value)
+        ).length
+      ])
+    ) as Record<string, number>
+  }, [events])
+  const configuredHomepageRails = useMemo(
+    () => buildConfiguredRails(events, railsSettings.rails),
+    [events, railsSettings.rails]
+  )
+  const configuredHomepageRailIds = useMemo(
+    () => new Set(configuredHomepageRails.map((rail) => rail.id)),
+    [configuredHomepageRails]
+  )
+  const homepagePageUrl = typeof window === 'undefined' ? '/' : `${window.location.pathname}${window.location.search}`
+  const homepageAdRailIndex = Math.max(1, Math.floor(Number(defaultAdSettingsData.default_ad_frequency || 3)))
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
   const cartSubtotalPaisa = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0),
@@ -216,11 +301,6 @@ export default function PublicApp({
           0
         )
   const reserveBlockedMessage = getReserveBlockedMessage()
-  const eventRailRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const pausedEventRailsRef = useRef<Set<string>>(new Set())
-  const nextAutoRailIndexRef = useRef(0)
-  const railNextRunAtRef = useRef<Record<string, number>>({})
-  const canAccessAdmin = hasAdminConsoleAccess(user)
   const canAccessTickets = hasCustomerTicketsAccess(user)
   const isProcessPaymentRoute = currentPath === '/processpayment'
   const [isVerifyingTicket, setIsVerifyingTicket] = useState(false)
@@ -474,11 +554,12 @@ export default function PublicApp({
     async function loadPublicEvents() {
       setIsEventsLoading(true)
       try {
-        const [eventsResponse, railsResponse, paymentsResponse, cartSettingsResponse] = await Promise.all([
+        const [eventsResponse, railsResponse, paymentsResponse, cartSettingsResponse, heroSettingsResponse] = await Promise.all([
           fetchJson<ApiListResponse>('/api/public/events'),
           fetchJson<{ data?: PublicRailsSettingsData }>('/api/public/rails/settings').catch(() => null),
           fetchJson<{ data?: PublicPaymentSettingsData }>('/api/public/payments/settings').catch(() => null),
-          fetchJson<{ data?: CartSettingsData }>('/api/public/cart/settings').catch(() => null)
+          fetchJson<{ data?: CartSettingsData }>('/api/public/cart/settings').catch(() => null),
+          fetchJson<{ data?: HeroSettingsData }>('/api/public/hero/settings').catch(() => null)
         ])
         const loadedEvents = ((eventsResponse.data.data ?? []) as PublicEvent[]).filter(
           (event) => event.status === 'published'
@@ -495,6 +576,9 @@ export default function PublicApp({
         }
         if (cartSettingsResponse?.data?.data) {
           setCartSettings(normalizeCartSettings(cartSettingsResponse.data.data))
+        }
+        if (heroSettingsResponse?.data?.data) {
+          setHeroSettings(normalizeHeroSettings(heroSettingsResponse.data.data))
         }
         setSelectedEventId(defaultEvent?.id ?? null)
         // Preserve Khalti callback status messages when returning from payment.
@@ -583,94 +667,54 @@ export default function PublicApp({
 
   useEffect(() => {
     setFeaturedSlideIndex(0)
-  }, [featuredEvents.length])
+  }, [heroActiveSlides.length])
 
   useEffect(() => {
-    if (featuredEvents.length <= 1) return
-
-    const timer = window.setInterval(() => {
-      setFeaturedSlideIndex((current) => (current + 1) % featuredEvents.length)
-    }, 3800)
-
-    return () => window.clearInterval(timer)
-  }, [featuredEvents.length])
+    setExpandedHomepageRailIds((current) => {
+      const next = new Set([...current].filter((railId) => configuredHomepageRailIds.has(railId)))
+      return next.size === current.size ? current : next
+    })
+  }, [configuredHomepageRailIds])
 
   useEffect(() => {
-    if (eventRails.length === 0) return
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-
-    const now = Date.now()
-    const nextRunByRail = railNextRunAtRef.current
-    for (const rail of eventRails) {
-      if (!rail.autoplay_enabled) {
-        nextRunByRail[rail.id] = Number.POSITIVE_INFINITY
-        continue
-      }
-      if (!Number.isFinite(nextRunByRail[rail.id])) {
-        nextRunByRail[rail.id] = now + rail.autoplay_interval_seconds * 1000
-      }
+    if (
+      !heroSettings.slider_enabled ||
+      !heroSettings.autoplay ||
+      heroActiveSlides.length <= 1 ||
+      (heroSettings.pause_on_hover && isHeroHovered)
+    ) {
+      return
     }
 
     const timer = window.setInterval(() => {
-      const nowTime = Date.now()
-      let didAutoScroll = false
-
-      for (let attempt = 0; attempt < eventRails.length; attempt += 1) {
-        const railIndex = nextAutoRailIndexRef.current % eventRails.length
-        nextAutoRailIndexRef.current = railIndex + 1
-        const rail = eventRails[railIndex]
-
-        if (!rail.autoplay_enabled) continue
-        if (pausedEventRailsRef.current.has(rail.id)) continue
-        if ((nextRunByRail[rail.id] ?? 0) > nowTime) continue
-
-        const railElement = eventRailRefs.current[rail.id]
-        if (!railElement) {
-          nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
-          continue
-        }
-
-        const maxScrollLeft = Math.max(railElement.scrollWidth - railElement.clientWidth, 0)
-        if (maxScrollLeft <= 6) {
-          nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
-          continue
-        }
-
-        const scrollAmount = Math.max(railElement.clientWidth * 0.52, 160)
-        const nextScrollLeft = railElement.scrollLeft + scrollAmount
-        if (nextScrollLeft >= maxScrollLeft - 6) {
-          railElement.scrollTo({ left: 0, behavior: 'smooth' })
-        } else {
-          railElement.scrollBy({ left: scrollAmount, behavior: 'smooth' })
-        }
-
-        nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
-        didAutoScroll = true
-        break
-      }
-
-      if (!didAutoScroll) {
-        for (const rail of eventRails) {
-          if (!rail.autoplay_enabled) continue
-          if (!Number.isFinite(nextRunByRail[rail.id])) {
-            nextRunByRail[rail.id] = nowTime + rail.autoplay_interval_seconds * 1000
-          }
-        }
-      }
-    }, 500)
+      setFeaturedSlideIndex((current) => (current + 1) % heroActiveSlides.length)
+    }, Math.max(1000, Number(heroSettings.slider_speed_seconds ?? 6) * 1000))
 
     return () => window.clearInterval(timer)
-  }, [eventRails])
+  }, [heroActiveSlides.length, heroSettings.autoplay, heroSettings.pause_on_hover, heroSettings.slider_speed_seconds, isHeroHovered])
 
-  function scrollEventRail(railId: string, direction: 'left' | 'right') {
-    const rail = eventRailRefs.current[railId]
-    if (!rail) return
-    const scrollAmount = Math.max(rail.clientWidth * 0.86, 280)
-    rail.scrollBy({
-      left: direction === 'right' ? scrollAmount : -scrollAmount,
-      behavior: 'smooth'
-    })
-  }
+  useEffect(() => {
+    if (configuredHomepageRails.length === 0) return
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      for (const rail of configuredHomepageRails) {
+        if (!rail.autoplay_enabled || expandedHomepageRailIds.has(rail.id)) continue
+        if (rail.events.length <= 4) continue
+        if (pausedHomepageRailIdsRef.current.has(rail.id)) continue
+
+        const nextRunAt = homepageRailNextRunAtRef.current[rail.id] ?? 0
+        if (nextRunAt > now) continue
+
+        homepageRailNextRunAtRef.current[rail.id] =
+          now + Math.max(3, Math.floor(Number(rail.autoplay_interval_seconds || railsSettings.autoplay_interval_seconds || 9))) * 1000
+        scrollHomepageRail(rail.id, 'right')
+      }
+    }, 800)
+
+    return () => window.clearInterval(timer)
+  }, [configuredHomepageRails, expandedHomepageRailIds, railsSettings.autoplay_interval_seconds])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -940,6 +984,42 @@ export default function PublicApp({
     }
   }, [isProcessPaymentRoute])
 
+  function scrollHomepageRail(railId: string, direction: 'left' | 'right') {
+    const track = homepageRailRefs.current[railId]
+    if (!track) return
+
+    const maxScrollLeft = Math.max(0, track.scrollWidth - track.clientWidth)
+    const distance = Math.max(280, Math.floor(track.clientWidth * 0.85))
+    const nextLeft = direction === 'left' ? track.scrollLeft - distance : track.scrollLeft + distance
+
+    if (direction === 'right' && track.scrollLeft >= maxScrollLeft - 8) {
+      track.scrollTo({ left: 0, behavior: 'smooth' })
+      return
+    }
+
+    if (direction === 'left' && track.scrollLeft <= 8) {
+      track.scrollTo({ left: maxScrollLeft, behavior: 'smooth' })
+      return
+    }
+
+    track.scrollTo({
+      left: Math.max(0, Math.min(maxScrollLeft, nextLeft)),
+      behavior: 'smooth'
+    })
+  }
+
+  function toggleHomepageRailExpanded(railId: string) {
+    setExpandedHomepageRailIds((current) => {
+      const next = new Set(current)
+      if (next.has(railId)) {
+        next.delete(railId)
+      } else {
+        next.add(railId)
+      }
+      return next
+    })
+  }
+
   if (isProcessPaymentRoute) {
     const isProcessing = processPaymentPhase === 'processing' || isSubmittingOrder
     const isSuccess = processPaymentPhase === 'success'
@@ -1040,103 +1120,29 @@ export default function PublicApp({
   }
 
   return (
-    <main className="app-shell">
-      <nav className="topbar storefront-topbar" aria-label="Main navigation">
-        <a className="brand" href="/">
-          <span className="brand-mark">W</span>
-          <span>Waahtickets</span>
-        </a>
-        <div className="nav-links">
-          <a href="#featured">Featured</a>
-          <a href="#events">Events</a>
-        </div>
-        <label className="topbar-search">
-          <Search size={15} />
-          <input
-            aria-label="Search events"
-            placeholder="Search events, venues, organizers..."
-            type="search"
-            value={eventSearchQuery}
-            onChange={(event) => setEventSearchQuery(event.target.value)}
-          />
-        </label>
-        <div className="topbar-right">
-          {isAuthLoading ? (
-            <div className="nav-session-placeholder" aria-hidden="true" />
-          ) : user ? (
-            <div className="nav-session-actions">
-              <button
-                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                className="secondary-button compact-button mobile-icon-action"
-                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-                type="button"
-                onClick={onToggleTheme}
-              >
-                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-              </button>
-              {canAccessTickets ? (
-                <a
-                  aria-label="Open tickets dashboard"
-                  className="nav-action tickets-nav-action mobile-icon-action"
-                  href="/admin"
-                  title="Tickets"
-                >
-                  <Ticket size={16} />
-                  <span>Tickets</span>
-                </a>
-              ) : canAccessAdmin ? (
-                <a
-                  aria-label="Open admin dashboard"
-                  className="nav-action admin-nav-action mobile-icon-action"
-                  href="/admin"
-                  title="Admin dashboard"
-                >
-                  <LayoutDashboard size={16} />
-                  <span>Admin</span>
-                </a>
-              ) : null}
-              <button
-                aria-label="Logout"
-                className="secondary-button compact-button logout-nav-button mobile-icon-action"
-                title="Logout"
-                type="button"
-                onClick={() => void onLogout()}
-              >
-                <LogOut size={16} />
-                <span>Logout</span>
-              </button>
-            </div>
-          ) : (
-            <div className="nav-session-actions">
-              <button
-                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                className="secondary-button compact-button mobile-icon-action"
-                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-                type="button"
-                onClick={onToggleTheme}
-              >
-                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-              </button>
-              <button
-                aria-label="Login"
-                className="nav-action mobile-icon-action"
-                title="Login"
-                type="button"
-                onClick={requestLoginWithGuestCartConfirmation}
-              >
-                <LogIn size={16} />
-                <span>Login</span>
-              </button>
-            </div>
-          )}
-          <button className="nav-action nav-cart-button" type="button" onClick={() => setIsCartOpen(true)}>
-            <ShoppingCart size={16} />
-            Cart ({cartItemCount})
-          </button>
-        </div>
-      </nav>
+    <main className="app-shell public-marketplace-shell">
+      <PublicHeader
+        canAccessTickets={canAccessTickets}
+        cartItemCount={cartItemCount}
+        isAuthLoading={isAuthLoading}
+        isMenuOpen={isPublicMenuOpen}
+        searchQuery={eventSearchQuery}
+        theme={theme}
+        user={user}
+        onCartOpen={() => setIsCartOpen(true)}
+        onLoginClick={requestLoginWithGuestCartConfirmation}
+        onLogout={onLogout}
+        onMenuToggle={() => setIsPublicMenuOpen((current) => !current)}
+        onNavigate={(target) => {
+          setIsPublicMenuOpen(false)
+          if (target.startsWith('#')) {
+            document.querySelector(target)?.scrollIntoView({ behavior: 'smooth' })
+            return
+          }
+          onNavigate(target)
+        }}
+        onSearchChange={setEventSearchQuery}
+      />
 
       <button
         aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
@@ -1150,304 +1156,240 @@ export default function PublicApp({
         </span>
       </button>
 
-      <section className="featured-shell" id="featured">
-        <article className="featured-event-card" aria-label="Featured event">
-          <div className="featured-content">
-            <p className="eyebrow">{publicStatus}</p>
-            <h1 className="featured-title">
-              {isEventsLoading ? 'Loading featured event...' : activeFeaturedEvent?.name ?? ''}
-            </h1>
-            <p className="featured-meta">
-              {activeFeaturedEvent?.location_name ?? activeFeaturedEvent?.organization_name ?? 'Venue pending'} ·{' '}
-              {formatEventDate(activeFeaturedEvent?.start_datetime)} · {formatEventTime(activeFeaturedEvent?.start_datetime)}
-            </p>
-            {activeFeaturedEvent?.description ? (
-              <p className="featured-description">{activeFeaturedEvent.description}</p>
-            ) : null}
-            <div className="hero-actions">
-              <button
-                className="secondary-button featured-cta"
-                type="button"
+      <HeroSearch
+        badgeText={heroBadgeText}
+        heroAlignment={heroAlignment}
+        heroOverlayIntensity={heroOverlayIntensity}
+        imageUrl={heroImageUrl}
+        isLoading={isEventsLoading}
+        isSlider={heroIsSlider}
+        locationQuery={eventLocationQuery}
+        searchQuery={eventSearchQuery}
+        onHeroHoverChange={setIsHeroHovered}
+        onHeroNext={() => setFeaturedSlideIndex((current) => (heroActiveSlides.length > 0 ? (current + 1) % heroActiveSlides.length : 0))}
+        onApplyQuickFilter={(filter) => {
+          if (filter === 'weekend') {
+            setEventTimeFilter('weekend')
+          } else if (filter === 'free') {
+            setEventSearchQuery('free')
+          } else {
+            const matchedType = eventTypeOptions.find((type) => type.toLowerCase().includes(filter))
+            setEventTypeFilter(matchedType ?? 'all')
+          }
+          document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+        }}
+        onHeroPrev={() =>
+          setFeaturedSlideIndex((current) => {
+            if (heroActiveSlides.length <= 0) return 0
+            return (current - 1 + heroActiveSlides.length) % heroActiveSlides.length
+          })
+        }
+        onHeroSelect={(index) => setFeaturedSlideIndex(index)}
+        onLocationChange={setEventLocationQuery}
+        onSearchChange={setEventSearchQuery}
+        onSearchSubmit={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
+        slideCount={heroActiveSlides.length}
+        slideIndex={Math.min(featuredSlideIndex, Math.max(0, heroActiveSlides.length - 1))}
+        subtitle={heroDisplaySubtitle}
+        title={heroDisplayTitle}
+        eyebrowText={heroDisplayEyebrow}
+        showArrows={heroShowArrows}
+        showDots={heroShowDots}
+      />
+
+      <div className="tw-grid tw-gap-8">
+        <section className="marketplace-section" aria-labelledby="popular-categories-heading">
+          <SectionHeader
+            title="Popular Categories"
+            actionLabel="View all"
+            onAction={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
+          />
+          <div className="category-grid">
+            {categoryCards.map((category) => (
+              <CategoryCard
+                key={category.label}
+                count={categoryEventCounts[category.label] ?? 0}
+                icon={category.icon}
+                label={category.label}
                 onClick={() => {
-                  if (!activeFeaturedEvent?.id) return
-                  setSelectedEventId(activeFeaturedEvent.id)
-                  setIsCheckoutOpen(true)
+                  const matchedType = eventTypeOptions.find((type) => type.toLowerCase().includes(category.value))
+                  setEventTypeFilter(matchedType ?? 'all')
+                  document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+                }}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="marketplace-section" id="events" aria-labelledby="events-heading">
+          <SectionHeader title="Browse Events" />
+          <EventFilters
+            eventTypeFilter={eventTypeFilter}
+            eventTimeFilter={eventTimeFilter}
+            eventTypeOptions={eventTypeOptions}
+            hasFilters={eventTypeFilter !== 'all' || eventTimeFilter !== 'all'}
+            onClear={() => {
+              setEventTypeFilter('all')
+              setEventTimeFilter('all')
+            }}
+            onTypeChange={setEventTypeFilter}
+            onTimeChange={setEventTimeFilter}
+          />
+        </section>
+
+        <section className="marketplace-section homepage-ad-section" aria-label="Sponsored">
+          <AdSlot
+            adsServed={0}
+            fallbackHidden
+            pageUrl={homepagePageUrl}
+            placementKey="HOME_BETWEEN_RAILS"
+            railIndex={homepageAdRailIndex}
+            variant="banner"
+          />
+        </section>
+
+        {configuredHomepageRails.length > 0 ? (
+          configuredHomepageRails.map((rail, index) => (
+            <section
+              className={`marketplace-section homepage-event-rail ${expandedHomepageRailIds.has(rail.id) ? 'is-expanded' : ''}`}
+              id={`rail-${rail.id}`}
+              key={rail.id}
+              aria-labelledby={`rail-heading-${rail.id}`}
+              onMouseEnter={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+              onMouseLeave={() => pausedHomepageRailIdsRef.current.delete(rail.id)}
+              onFocusCapture={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+              onBlurCapture={(event) => {
+                const nextTarget = event.relatedTarget as Node | null
+                if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                  pausedHomepageRailIdsRef.current.delete(rail.id)
+                }
+              }}
+            >
+              <SectionHeader
+                title={rail.label}
+                actionLabel={expandedHomepageRailIds.has(rail.id) ? 'Show less' : 'See all'}
+                onAction={() => toggleHomepageRailExpanded(rail.id)}
+              />
+              {!expandedHomepageRailIds.has(rail.id) && rail.events.length > 4 ? (
+                <div className="homepage-rail-controls" aria-label={`${rail.label} slider controls`}>
+                  <button
+                    aria-label={`Show previous ${rail.label} events`}
+                    type="button"
+                    onClick={() => scrollHomepageRail(rail.id, 'left')}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    aria-label={`Show next ${rail.label} events`}
+                    type="button"
+                    onClick={() => scrollHomepageRail(rail.id, 'right')}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              ) : null}
+              <div
+                className={expandedHomepageRailIds.has(rail.id) ? 'marketplace-event-grid' : 'homepage-event-slider'}
+                ref={(element) => {
+                  homepageRailRefs.current[rail.id] = element
                 }}
               >
-                See tickets
-              </button>
-            </div>
-            <div className="featured-dots" aria-label="Featured image slides">
-              {featuredImages.map((_, index) => (
-                <button
-                  aria-label={`Slide ${index + 1}`}
-                  className={index === featuredSlideIndex ? 'featured-dot active' : 'featured-dot'}
-                  key={`featured-dot-${index}`}
-                  type="button"
-                  onClick={() => setFeaturedSlideIndex(index)}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="featured-media">
-            <div
-              className="featured-media-track"
-              style={{ transform: `translateX(-${featuredSlideIndex * 100}%)` }}
-            >
-              {featuredImages.map((image, index) => (
-                <div className="featured-media-frame" key={`featured-slide-${index}`}>
-                  <img
-                    alt={featuredEvents[index]?.name ? `${featuredEvents[index]?.name} banner` : 'Featured event'}
-                    src={image}
-                    onError={(event) => {
-                      if (event.currentTarget.dataset.fallbackApplied === '1') return
-                      event.currentTarget.dataset.fallbackApplied = '1'
-                      event.currentTarget.src = eventImagePlaceholder
+                {rail.events.map((event, eventIndex) => (
+                  <EventCard
+                    key={event.id ?? `${rail.id}-${eventIndex}`}
+                    event={event}
+                    imageUrl={getEventImageUrl(event, eventIndex)}
+                    statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                    onSelectTickets={() => {
+                      if (!event.id) return
+                      setSelectedEventId(event.id)
+                      setIsCheckoutOpen(true)
                     }}
                   />
-                </div>
-              ))}
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <label className="topbar-search mobile-inline-search">
-        <Search size={15} />
-        <input
-          aria-label="Search events"
-          placeholder="Search events, venues, organizers..."
-          type="search"
-          value={eventSearchQuery}
-          onChange={(event) => setEventSearchQuery(event.target.value)}
-        />
-      </label>
-
-      <section className="content-grid events-only-grid">
-        {isEventsLoading ? (
-          <div className="panel events-panel" id="events">
-            <div className="section-heading">
-              <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
-              <h2>Browse events</h2>
-            </div>
-            <div className="event-list">
-              <div className="public-empty">Loading published events...</div>
-            </div>
-          </div>
-        ) : events.length === 0 ? (
-          <div className="panel events-panel" id="events">
-            <div className="section-heading">
-              <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
-              <h2>Browse events</h2>
-            </div>
-            <div className="event-list">
-              <div className="public-empty">No published events available yet.</div>
-            </div>
-          </div>
+                ))}
+              </div>
+              {index < configuredHomepageRails.length - 1 ? (
+                <AdSlot
+                  adsServed={index + 1}
+                  className="homepage-between-rails-ad"
+                  fallbackHidden
+                  pageUrl={homepagePageUrl}
+                  placementKey="HOME_BETWEEN_RAILS"
+                  railIndex={index + 1}
+                  variant="banner"
+                />
+              ) : null}
+            </section>
+          ))
         ) : (
-          <div className="events-sections" id="events">
-            <div className="events-layout">
-              <div className="events-filter-column">
-                <aside className="panel events-panel event-filter-panel">
-                  <div className="section-heading">
-                    <p className="eyebrow">{railsSettings.filter_panel_eyebrow_text || 'Browse'}</p>
-                    <h2>Browse events</h2>
-                  </div>
-                  <div className="events-toolbar">
-                    <label className="events-toolbar-field">
-                      <span>Type</span>
-                      <select value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
-                        <option value="all">All types</option>
-                        {eventTypeOptions.map((type) => (
-                          <option key={type} value={type}>
-                            {formatResourceName(type)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="events-toolbar-field">
-                      <span>When</span>
-                      <select
-                        value={eventTimeFilter}
-                        onChange={(event) => setEventTimeFilter(event.target.value as 'all' | 'weekend' | 'month')}
-                      >
-                        <option value="all">Any time</option>
-                        <option value="weekend">This weekend</option>
-                        <option value="month">This month</option>
-                      </select>
-                    </label>
-                    <button
-                      className="secondary-button compact-button"
-                      disabled={!hasEventFilters}
-                      type="button"
-                      onClick={() => {
-                        setEventSearchQuery('')
-                        setEventTypeFilter('all')
-                        setEventTimeFilter('all')
-                      }}
-                    >
-                      Clear filters
-                    </button>
-                  </div>
-                </aside>
-                <div className="event-filter-sidebar-ad">
-                  <SidebarAd adsServed={0} placement="WEB_LEFT_SIDEBAR" />
-                </div>
+          <>
+            <section className="marketplace-section" aria-labelledby="featured-events-heading">
+              <SectionHeader
+                title="Featured Events"
+                actionLabel="Explore all"
+                onAction={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
+              />
+              <div className="marketplace-event-grid">
+                {featuredEvents.slice(0, 4).map((event, index) => (
+                  <EventCard
+                    key={event.id ?? `featured-${index}`}
+                    event={event}
+                    imageUrl={getEventImageUrl(event, index)}
+                    statusLabel="Featured"
+                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                    onSelectTickets={() => {
+                      if (!event.id) return
+                      setSelectedEventId(event.id)
+                      setIsCheckoutOpen(true)
+                    }}
+                  />
+                ))}
               </div>
+            </section>
 
-              <div className="events-rails-column">
-                {/* Additional placement hook notes:
-                    - EVENT_LIST_BETWEEN_RAILS maps to this storefront rail stack once list/detail pages are split.
-                    - EVENT_DETAIL_BETWEEN_RAILS should be inserted inside the event detail modal/content shell.
-                    - CHECKOUT_BETWEEN_RAILS should be inserted inside the checkout/cart modal flow.
-                    - ORGANIZER_PAGE_BETWEEN_RAILS should be inserted once the organizer page is extracted from the shared storefront shell. */}
-                {eventRails.length === 0 ? (
-                  <section className="panel events-panel">
-                    <div className="public-empty">
-                      No events match your filters.
-                    </div>
-                  </section>
-                ) : (
-                  eventRails.map((rail, railIndex) => (
-                    <div className="event-rail-slot" key={rail.id}>
-                    <section className="panel events-panel event-row-section">
-                  <header
-                    className="event-rail-header section-heading"
-                    style={{ ['--rail-accent-color' as string]: rail.accent_color }}
-                  >
-                    <div>
-                      <p className="eyebrow">{rail.eyebrow_text || 'Featured'}</p>
-                      <h2>{rail.label}</h2>
-                    </div>
-                    {rail.header_decor_image_url ? (
-                      <img
-                        alt=""
-                        aria-hidden="true"
-                        className="event-rail-decor"
-                        loading="lazy"
-                        src={rail.header_decor_image_url}
-                      />
-                    ) : null}
-                    <div className="event-rail-controls" aria-label={`${rail.label} controls`}>
-                      <button
-                        aria-label={`Scroll ${rail.label} left`}
-                        className="event-rail-control"
-                        type="button"
-                        onClick={() => scrollEventRail(rail.id, 'left')}
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <button
-                        aria-label={`Scroll ${rail.label} right`}
-                        className="event-rail-control"
-                        type="button"
-                        onClick={() => scrollEventRail(rail.id, 'right')}
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                  </header>
-                  <div
-                    className="event-rail-track"
-                    ref={(element) => {
-                      eventRailRefs.current[rail.id] = element
+            <section className="marketplace-section" aria-labelledby="events-heading">
+              <SectionHeader title="Trending Events" />
+              <div className="marketplace-event-grid">
+                {trendingEvents.map((event, index) => (
+                  <EventCard
+                    key={event.id ?? `trending-${index}`}
+                    event={event}
+                    imageUrl={getEventImageUrl(event, index)}
+                    statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                    onSelectTickets={() => {
+                      if (!event.id) return
+                      setSelectedEventId(event.id)
+                      setIsCheckoutOpen(true)
                     }}
-                    onMouseEnter={() => pausedEventRailsRef.current.add(rail.id)}
-                    onMouseLeave={() => pausedEventRailsRef.current.delete(rail.id)}
-                    onFocusCapture={() => pausedEventRailsRef.current.add(rail.id)}
-                    onBlurCapture={(event) => {
-                      const nextTarget = event.relatedTarget as Node | null
-                      if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                        pausedEventRailsRef.current.delete(rail.id)
-                      }
-                    }}
-                  >
-                    {rail.events.map((event, index) => (
-                      <article
-                        className={event.id === selectedEvent?.id ? 'event-card selected-public-event' : 'event-card'}
-                        key={event.id}
-                      >
-                        <div className="event-card-media">
-                          <button
-                            aria-label={`View details for ${event.name ?? 'event'}`}
-                            className="event-card-media-button"
-                            type="button"
-                            onClick={() => setSelectedEventDetailId(event.id ?? null)}
-                          >
-                            <img
-                              alt={event.name ? `${event.name} image` : 'Event image'}
-                              loading="lazy"
-                              src={getEventImageUrl(event, index)}
-                              onError={(event) => {
-                                if (event.currentTarget.dataset.fallbackApplied === '1') return
-                                event.currentTarget.dataset.fallbackApplied = '1'
-                                event.currentTarget.src = eventImagePlaceholder
-                              }}
-                            />
-                          </button>
-                          {isTruthyValue(event.is_featured) ? (
-                            <span className="event-card-badge">
-                              <Star size={13} />
-                              Featured
-                            </span>
-                          ) : null}
-                          <span className="event-card-price">
-                            {typeof event.starting_price_paisa === 'number'
-                              ? `From ${formatMoney(event.starting_price_paisa)}`
-                              : 'Price announced soon'}
-                          </span>
-                        </div>
-                        <div className="event-card-body">
-                          <div className="event-card-copy">
-                            <h3>{event.name}</h3>
-                            <div className="event-card-meta">
-                              <span className="event-date">{formatEventDate(event.start_datetime)}</span>
-                              <span>{formatEventTime(event.start_datetime)}</span>
-                              <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
-                            </div>
-                          </div>
-                          <div className="event-card-actions">
-                            <button
-                              aria-label="Choose tickets"
-                              className="event-icon-button"
-                              title="Choose tickets"
-                              type="button"
-                              onClick={() => {
-                                setSelectedEventId(event.id ?? null)
-                                setIsCheckoutOpen(true)
-                              }}
-                            >
-                              <Ticket size={15} />
-                            </button>
-                            <button
-                              aria-label="View event details"
-                              className="event-icon-button"
-                              title="View event details"
-                              type="button"
-                              onClick={() => setSelectedEventDetailId(event.id ?? null)}
-                            >
-                              <Eye size={15} />
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                    </section>
-                    <RailAd
-                      adsServed={railIndex}
-                      className="waah-rail-ad"
-                      placement="HOME_BETWEEN_RAILS"
-                      railIndex={railIndex + 1}
-                    />
-                    </div>
-                  ))
-                )}
+                  />
+                ))}
               </div>
+            </section>
+          </>
+        )}
+
+        <section className="seller-cta" aria-label="Sell tickets for your event">
+          <div>
+            <Ticket size={30} />
+            <div>
+              <h2>Host an event with Waah Tickets</h2>
+              <p>Create, sell, validate, and manage tickets from one simple platform.</p>
             </div>
           </div>
-        )}
-      </section>
+          <button className="primary-admin-button" type="button" onClick={() => onNavigate('/admin/events')}>
+            Create Event
+          </button>
+        </section>
+
+        <section className="trust-strip" id="support" aria-label="Why book with Waah Tickets">
+          <TrustItem icon={ShieldCheck} title="100% Secure Payments" text="Encrypted checkout for every booking." />
+          <TrustItem icon={Ticket} title="Instant Ticket Delivery" text="Tickets arrive as soon as checkout completes." />
+          <TrustItem icon={ScanLine} title="Easy Ticket Validation" text="Fast QR checks for smooth entry." />
+          <TrustItem icon={MapPin} title="Local Event Discovery" text="Find concerts, food events, venues, and shows nearby." />
+        </section>
+      </div>
 
       {isCheckoutOpen ? (
         <CheckoutModal
@@ -1486,10 +1428,16 @@ export default function PublicApp({
       {isCartOpen ? (
         <CartModal
           cartGroups={cartGroups}
+          events={events}
           holdExpiresAt={cartHoldExpiresAt}
-          totalPaisa={cartSubtotalPaisa}
+          feePaisa={0}
+          subtotalPaisa={cartSubtotalPaisa}
           updatingItemIds={updatingCartItemIds}
           onClose={() => setIsCartOpen(false)}
+          onBrowseEvents={() => {
+            setIsCartOpen(false)
+            onNavigate('#events')
+          }}
           onCheckout={() => {
             setIsCartOpen(false)
             setIsCartCheckoutOpen(true)
@@ -2229,6 +2177,509 @@ export default function PublicApp({
 }
 
 
+function SectionHeader({
+  title,
+  actionLabel,
+  onAction
+}: {
+  title: string
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <header className="marketplace-section-header">
+      <h2>{title}</h2>
+      {actionLabel && onAction ? (
+        <button type="button" onClick={onAction}>
+          {actionLabel}
+        </button>
+      ) : null}
+    </header>
+  )
+}
+
+function PublicHeader({
+  canAccessTickets,
+  cartItemCount,
+  isAuthLoading,
+  isMenuOpen,
+  searchQuery,
+  user,
+  onCartOpen,
+  onLoginClick,
+  onLogout,
+  onMenuToggle,
+  onNavigate,
+  onSearchChange
+}: {
+  canAccessTickets: boolean
+  cartItemCount: number
+  isAuthLoading: boolean
+  isMenuOpen: boolean
+  searchQuery: string
+  user: AuthUser
+  onCartOpen: () => void
+  onLoginClick: () => void
+  onLogout: () => void
+  onMenuToggle: () => void
+  onNavigate: (target: string) => void
+  onSearchChange: (value: string) => void
+}) {
+  const navItems = [
+    { label: 'Events', target: '#events' },
+    { label: 'Venues', target: '#venues' },
+    { label: 'Help', target: '#support' }
+  ]
+  return (
+    <nav className="marketplace-header" aria-label="Main navigation">
+      <div className="marketplace-header-inner">
+        <a className="marketplace-brand" href="/">
+          <span className="marketplace-brand-mark">W</span>
+          <span>Waah Tickets</span>
+        </a>
+        <label className="marketplace-nav-search">
+          <Search size={16} />
+          <input
+            aria-label="Search events, artists, or venues"
+            placeholder="Search events, artists, venues..."
+            type="search"
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+          />
+        </label>
+        <div className={isMenuOpen ? 'marketplace-nav-links open' : 'marketplace-nav-links'}>
+          {navItems.map((item) => (
+            <button key={item.label} type="button" onClick={() => onNavigate(item.target)}>
+              {item.label}
+            </button>
+          ))}
+          {!isAuthLoading && user && canAccessTickets ? (
+            <button className="marketplace-mobile-only" type="button" onClick={() => onNavigate('/admin')}>
+              My Tickets
+            </button>
+          ) : null}
+          {!isAuthLoading && user ? (
+            <button className="marketplace-mobile-only" type="button" onClick={() => void onLogout()}>
+              Log out
+            </button>
+          ) : !isAuthLoading ? (
+            <button className="marketplace-mobile-only" type="button" onClick={onLoginClick}>
+              Login / Sign Up
+            </button>
+          ) : null}
+        </div>
+        <div className="marketplace-header-actions">
+          <button
+            aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
+            className="marketplace-cart-button"
+            type="button"
+            onClick={onCartOpen}
+          >
+            <ShoppingCart size={17} />
+            <span>{cartItemCount}</span>
+          </button>
+          {isAuthLoading ? null : user ? (
+            <>
+              {canAccessTickets ? (
+                <a className="marketplace-login-link" href="/admin">
+                  My Tickets
+                </a>
+              ) : null}
+              <button className="marketplace-account-button" type="button" onClick={() => void onLogout()}>
+                <UserCog size={16} />
+                <span>{String(user.first_name ?? user.email ?? 'Account').split(' ')[0]}</span>
+                <LogOut size={15} />
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="marketplace-login-link" type="button" onClick={onLoginClick}>
+                Log in
+              </button>
+              <button className="marketplace-signup-button" type="button" onClick={onLoginClick}>
+                Sign Up
+              </button>
+            </>
+          )}
+          <button className="marketplace-menu-button" aria-label="Open menu" type="button" onClick={onMenuToggle}>
+            {isMenuOpen ? <X size={19} /> : <Menu size={19} />}
+          </button>
+        </div>
+      </div>
+    </nav>
+  )
+}
+
+function HeroSearch({
+  badgeText,
+  heroAlignment,
+  heroOverlayIntensity,
+  imageUrl,
+  isLoading,
+  isSlider,
+  locationQuery,
+  onApplyQuickFilter,
+  onHeroHoverChange,
+  onHeroNext,
+  onHeroPrev,
+  onHeroSelect,
+  onLocationChange,
+  onSearchChange,
+  onSearchSubmit,
+  searchQuery,
+  slideCount,
+  slideIndex,
+  showArrows,
+  showDots,
+  subtitle,
+  title,
+  eyebrowText
+}: {
+  badgeText: string
+  heroAlignment: 'left' | 'center' | 'right'
+  heroOverlayIntensity: number
+  imageUrl: string
+  isLoading: boolean
+  isSlider: boolean
+  locationQuery: string
+  onApplyQuickFilter: (filter: 'weekend' | 'food' | 'concert' | 'family' | 'free') => void
+  onHeroHoverChange: (isHovered: boolean) => void
+  onHeroNext: () => void
+  onHeroPrev: () => void
+  onHeroSelect: (index: number) => void
+  onLocationChange: (value: string) => void
+  onSearchChange: (value: string) => void
+  onSearchSubmit: () => void
+  searchQuery: string
+  slideCount: number
+  slideIndex: number
+  showArrows: boolean
+  showDots: boolean
+  subtitle: string
+  title: string
+  eyebrowText: string
+}) {
+  const quickFilters = [
+    { label: 'This Weekend', value: 'weekend' },
+    { label: 'Food & Drink', value: 'food' },
+    { label: 'Concerts', value: 'concert' },
+    { label: 'Family', value: 'family' },
+    { label: 'Free Events', value: 'free' }
+  ] as const
+
+  return (
+    <section
+      className="marketplace-hero"
+      id="featured"
+      onMouseEnter={() => onHeroHoverChange(true)}
+      onMouseLeave={() => onHeroHoverChange(false)}
+    >
+      <SafeImage
+        alt="Homepage hero background"
+        className="marketplace-hero-image"
+        fallbackType="hero"
+        src={imageUrl}
+      />
+      <div className="marketplace-hero-overlay" style={{ opacity: Math.max(0.18, Math.min(0.92, heroOverlayIntensity / 100)) }} />
+      <div className="marketplace-hero-content">
+        <div className={`hero-main-column hero-align-${heroAlignment}`}>
+          {eyebrowText ? <p className="hero-eyebrow">{eyebrowText}</p> : null}
+          {badgeText ? <span className="hero-badge">{badgeText}</span> : null}
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+          <div className="hero-search-card">
+            <label>
+              <Search size={18} />
+              <input
+                aria-label="Search events, artists, or venues"
+                placeholder="Event, artist, or venue"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => onSearchChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') onSearchSubmit()
+                }}
+              />
+            </label>
+            <label className="hero-location-input">
+              <MapPin size={18} />
+              <input
+                aria-label="Search by location"
+                placeholder="Location"
+                type="search"
+                value={locationQuery}
+                onChange={(event) => onLocationChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') onSearchSubmit()
+                }}
+              />
+            </label>
+            <button type="button" onClick={onSearchSubmit}>
+              Search
+            </button>
+          </div>
+          <div className="hero-quick-filters" aria-label="Quick event filters">
+            {quickFilters.map((filter) => (
+              <button key={filter.value} type="button" onClick={() => onApplyQuickFilter(filter.value)}>
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <div className="hero-slider-meta">
+            <span className="hero-live-status">{isLoading ? 'Loading hero settings...' : 'Live experiences'}</span>
+            {isSlider && slideCount > 1 ? <span className="hero-slide-counter">{slideIndex + 1} / {slideCount}</span> : null}
+          </div>
+          {(showArrows || showDots) && isSlider && slideCount > 1 ? (
+            <div className="hero-slider-controls">
+              {showArrows ? (
+                <button aria-label="Previous hero slide" type="button" onClick={onHeroPrev}>
+                  <ChevronLeft size={16} />
+                </button>
+              ) : null}
+              {showDots ? (
+                <div className="hero-dots" aria-label="Hero slide navigation">
+                  {Array.from({ length: slideCount }, (_, index) => (
+                    <button
+                      aria-label={`Show hero slide ${index + 1}`}
+                      aria-pressed={index === slideIndex}
+                      className={index === slideIndex ? 'active' : ''}
+                      key={`hero-dot-${index}`}
+                      type="button"
+                      onClick={() => onHeroSelect(index)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {showArrows ? (
+                <button aria-label="Next hero slide" type="button" onClick={onHeroNext}>
+                  <ChevronRight size={16} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function SafeImage({
+  src,
+  alt,
+  className = '',
+  fallbackType = 'event'
+}: {
+  src?: string | null
+  alt: string
+  className?: string
+  fallbackType?: 'hero' | 'event' | 'venue'
+}) {
+  const [hasFailed, setHasFailed] = useState(false)
+  const cleanSrc = typeof src === 'string' ? src.trim() : ''
+
+  useEffect(() => {
+    setHasFailed(false)
+  }, [cleanSrc])
+
+  if (!cleanSrc || hasFailed) {
+    return (
+      <div
+        aria-label={alt}
+        className={`safe-image safe-image-${fallbackType} ${className}`}
+        role="img"
+      >
+        <div className="safe-image-collage">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={className}
+      loading={fallbackType === 'hero' ? undefined : 'lazy'}
+      src={cleanSrc}
+      onError={() => setHasFailed(true)}
+    />
+  )
+}
+
+function CategoryCard({
+  count,
+  icon: Icon,
+  label,
+  onClick
+}: {
+  count: number
+  icon: typeof Ticket
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button className="category-card" type="button" onClick={onClick}>
+      <span className="category-icon"><Icon size={24} /></span>
+      <strong>{label}</strong>
+      <span>{count > 0 ? `${count} event${count === 1 ? '' : 's'}` : 'Explore events'}</span>
+    </button>
+  )
+}
+
+function EventFilters({
+  eventTypeFilter,
+  eventTimeFilter,
+  eventTypeOptions,
+  hasFilters,
+  onClear,
+  onTypeChange,
+  onTimeChange
+}: {
+  eventTypeFilter: string
+  eventTimeFilter: 'all' | 'weekend' | 'month'
+  eventTypeOptions: string[]
+  hasFilters: boolean
+  onClear: () => void
+  onTypeChange: (value: string) => void
+  onTimeChange: (value: 'all' | 'weekend' | 'month') => void
+}) {
+  return (
+    <div className="event-filter-bar" aria-label="Event filters">
+      <label>
+        <span>Category</span>
+        <select value={eventTypeFilter} onChange={(event) => onTypeChange(event.target.value)}>
+          <option value="all">All categories</option>
+          {eventTypeOptions.map((type) => (
+            <option key={type} value={type}>
+              {formatResourceName(type)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Date</span>
+        <select value={eventTimeFilter} onChange={(event) => onTimeChange(event.target.value as 'all' | 'weekend' | 'month')}>
+          <option value="all">Any date</option>
+          <option value="weekend">This weekend</option>
+          <option value="month">This month</option>
+        </select>
+      </label>
+      <label>
+        <span>Location</span>
+        <select defaultValue="all">
+          <option value="all">All locations</option>
+        </select>
+      </label>
+      <label>
+        <span>Price</span>
+        <select defaultValue="all">
+          <option value="all">Any price</option>
+        </select>
+      </label>
+      <button disabled={!hasFilters} type="button" onClick={onClear}>
+        Clear filters
+      </button>
+    </div>
+  )
+}
+
+function EventCard({
+  event,
+  imageUrl,
+  statusLabel,
+  onOpenDetails,
+  onSelectTickets
+}: {
+  event: PublicEvent
+  imageUrl: string
+  statusLabel?: string
+  onOpenDetails: () => void
+  onSelectTickets: () => void
+}) {
+  const location = event.location_address ?? event.location_name ?? 'Location pending'
+  const venue = event.location_name ?? event.organization_name ?? 'Venue pending'
+  const priceLabel =
+    typeof event.starting_price_paisa === 'number'
+      ? `From ${formatMoney(event.starting_price_paisa)}`
+      : 'Price announced soon'
+
+  return (
+    <article className="marketplace-event-card">
+      <button className="marketplace-event-media" type="button" onClick={onOpenDetails}>
+        <SafeImage
+          alt={event.name ? `${event.name} event` : 'Event'}
+          className="marketplace-card-image"
+          fallbackType="event"
+          src={imageUrl}
+        />
+        <span className="marketplace-event-date-badge">
+          <CalendarDays size={15} />
+          {formatEventDate(event.start_datetime)}
+        </span>
+        {statusLabel ? <span className="marketplace-event-status">{statusLabel}</span> : null}
+      </button>
+      <div className="marketplace-event-content">
+        <h3>{event.name}</h3>
+        <p><Building2 size={15} /> {venue}</p>
+        <p><MapPin size={15} /> {location}</p>
+        <span><Clock size={15} /> {formatEventTime(event.start_datetime)}</span>
+        <div className="marketplace-event-footer">
+          <strong>{priceLabel}</strong>
+          <button type="button" onClick={onSelectTickets}>
+            View Tickets
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function VenueCard({
+  venue
+}: {
+  venue: { name: string; location: string; imageUrl: string; eventCount: number }
+}) {
+  return (
+    <article className="venue-card">
+      <SafeImage
+        alt={`${venue.name} venue`}
+        className="venue-card-image"
+        fallbackType="venue"
+        src={venue.imageUrl}
+      />
+      <div>
+        <h3>{venue.name}</h3>
+        <p><MapPin size={14} /> {venue.location}</p>
+        <span><Star size={14} /> 4.{Math.min(9, venue.eventCount + 3)} ({venue.eventCount * 24 + 72})</span>
+        <strong>{venue.eventCount} event{venue.eventCount === 1 ? '' : 's'}</strong>
+      </div>
+    </article>
+  )
+}
+
+function TrustItem({
+  icon: Icon,
+  title,
+  text
+}: {
+  icon: typeof Ticket
+  title: string
+  text: string
+}) {
+  return (
+    <div className="trust-item">
+      <span><Icon size={22} /></span>
+      <div>
+        <h3>{title}</h3>
+        <p>{text}</p>
+      </div>
+    </div>
+  )
+}
+
+
 export function EventDetailsModal({
   event,
   imageUrl,
@@ -2242,44 +2693,69 @@ export function EventDetailsModal({
 }) {
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="record-modal event-details-modal" role="dialog" aria-modal="true">
-        <header className="record-modal-header">
-          <div>
-            <p className="admin-breadcrumb">{event.location_name ?? event.organization_name ?? 'Event details'}</p>
-            <h2>{event.name ?? 'Event details'}</h2>
-          </div>
+      <section className="record-modal event-detail-page" role="dialog" aria-modal="true">
+        <header className="event-detail-topbar">
+          <nav aria-label="Breadcrumbs">
+            <button type="button" onClick={onClose}>Home</button>
+            <ChevronRight size={14} />
+            <button type="button" onClick={onClose}>Events</button>
+            <ChevronRight size={14} />
+            <span>{event.name ?? 'Event details'}</span>
+          </nav>
           <button aria-label="Close modal" type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
-        <div className="event-details-media">
-          <img
-            alt={event.name ? `${event.name} banner` : 'Event'}
-            src={imageUrl}
-            onError={(event) => {
-              if (event.currentTarget.dataset.fallbackApplied === '1') return
-              event.currentTarget.dataset.fallbackApplied = '1'
-              event.currentTarget.src = eventImagePlaceholder
-            }}
-          />
+        <div className="event-detail-grid">
+          <EventDetailHero event={event} imageUrl={imageUrl} />
+          <aside className="event-detail-sidebar">
+            <span className="event-status-badge">{isTruthyValue(event.is_featured) ? 'Popular' : 'Selling Fast'}</span>
+            <h2>{event.name ?? 'Event details'}</h2>
+            <div className="event-detail-facts">
+              <p><MapPin size={17} /> {event.location_name ?? event.organization_name ?? 'Venue pending'}</p>
+              <p><CalendarDays size={17} /> {formatEventDate(event.start_datetime)}</p>
+              <p><Clock size={17} /> {formatEventTime(event.start_datetime)}</p>
+              <p><Ticket size={17} /> {event.event_type ? formatResourceName(String(event.event_type)) : 'All Ages'}</p>
+            </div>
+            <a className="view-map-link" href={`https://www.google.com/maps/search/${encodeURIComponent(String(event.location_name ?? event.organization_name ?? 'venue'))}`} target="_blank" rel="noreferrer">
+              View map
+            </a>
+            <div className="event-detail-actions">
+              <button type="button"><Share2 size={16} /> Share</button>
+              <button type="button"><Heart size={16} /> Save</button>
+            </div>
+          </aside>
         </div>
-        <div className="event-details-content">
-          <div className="event-details-meta">
-            <span>{formatEventDate(event.start_datetime)}</span>
-            <span>{formatEventTime(event.start_datetime)}</span>
-            <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General event'}</span>
-            <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
-          </div>
-          <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
+        <div className="event-detail-body">
+          <section>
+            <h3>About this event</h3>
+            <details>
+              <summary>See more</summary>
+              <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
+            </details>
+          </section>
+          <aside className="event-detail-order-summary">
+            <p>Tickets from</p>
+            <strong>{typeof event.starting_price_paisa === 'number' ? formatMoney(event.starting_price_paisa) : 'Announced soon'}</strong>
+            <button className="primary-admin-button" type="button" onClick={onViewTickets}>
+              Continue to tickets
+            </button>
+            <span><Lock size={14} /> Secure checkout</span>
+          </aside>
         </div>
-        <footer className="record-modal-actions">
-          <button type="button" onClick={onClose}>Close</button>
-          <button className="primary-admin-button" type="button" onClick={onViewTickets}>
-            <Ticket size={17} />
-            Buy tickets
-          </button>
-        </footer>
       </section>
+    </div>
+  )
+}
+
+function EventDetailHero({ event, imageUrl }: { event: PublicEvent; imageUrl: string }) {
+  return (
+    <div className="event-detail-hero-image">
+      <SafeImage
+        alt={event.name ? `${event.name} banner` : 'Event'}
+        fallbackType="event"
+        src={imageUrl}
+      />
     </div>
   )
 }
@@ -2391,10 +2867,10 @@ export function CheckoutModal({
 
   return (
     <div className="modal-backdrop checkout-backdrop" role="presentation">
-      <section className="record-modal checkout-modal checkout-centered-modal" role="dialog" aria-modal="true">
+      <section className="record-modal checkout-modal ticket-selection-page" role="dialog" aria-modal="true">
         <header className="record-modal-header">
           <div>
-            <p className="admin-breadcrumb">Ticket checkout</p>
+            <p className="admin-breadcrumb">Tickets</p>
             <h2>{event?.name ?? 'Select an event'}</h2>
             {event ? (
               <p className="checkout-event-meta">
@@ -2407,82 +2883,211 @@ export function CheckoutModal({
             <X size={18} />
           </button>
         </header>
-        <div className="checkout-stack">
-          <label className="public-select-label">
-            <span>Ticket type</span>
-            <select disabled={isInteractionLocked} value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
-              {ticketTypes.length === 0 ? (
-                <option value="">No ticket types</option>
-              ) : (
-                ticketTypes.map((ticketType) => (
-                  <option key={ticketType.id} value={ticketType.id}>
-                    {ticketType.name} - {formatMoney(ticketType.price_paisa ?? 0)}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <label className="public-select-label">
-            <span>Quantity</span>
-            <input
-              disabled={isInteractionLocked}
-              min="1"
-              max={selectedTicketType?.max_per_order ? String(selectedTicketType.max_per_order) : '10'}
-              type="number"
-              value={quantity}
-              onChange={(event) => onChangeQuantity(Math.max(Number(event.target.value), 1))}
+        <CheckoutStepper activeStep="Tickets" />
+        <div className="ticket-selection-layout">
+          <div className="ticket-selection-main">
+            <div className="event-summary-card">
+              <SafeImage
+                alt={event?.name ? `${event.name} thumbnail` : 'Event'}
+                fallbackType="event"
+                src={event ? getEventImageUrl(event) : ''}
+              />
+              <div>
+                <strong>{event?.name ?? 'Event'}</strong>
+                <span>{formatEventDate(event?.start_datetime)} · {formatEventTime(event?.start_datetime)}</span>
+                <span>{event?.location_name ?? event?.organization_name ?? 'Venue pending'}</span>
+              </div>
+            </div>
+            <div className="seat-map-panel" aria-label="Ticket availability">
+              <div className="seat-stage">Stage</div>
+              <div className="seat-grid" aria-hidden="true">
+                {Array.from({ length: 96 }).map((_, index) => (
+                  <span
+                    className={index % 13 === 0 ? 'seat unavailable' : index >= 42 && index <= 50 ? 'seat selected' : 'seat available'}
+                    key={index}
+                  />
+                ))}
+              </div>
+              <div className="seat-legend">
+                <span><i className="seat available" /> Available</span>
+                <span><i className="seat selected" /> Selected</span>
+                <span><i className="seat unavailable" /> Unavailable</span>
+              </div>
+            </div>
+            <TicketSelector
+              isLocked={isInteractionLocked}
+              quantity={quantity}
+              remainingTickets={remainingTickets}
+              selectedTicketType={selectedTicketType}
+              ticketTypes={ticketTypes}
+              onChangeQuantity={onChangeQuantity}
+              onChangeTicketType={onChangeTicketType}
             />
-          </label>
-          <div className="checkout-line">
-            <span>{selectedTicketType?.name ?? 'Ticket'}</span>
-            <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
           </div>
-          <div className="checkout-line">
-            <span>Available</span>
-            <strong>{remainingTickets === null ? 'Open' : remainingTickets}</strong>
-          </div>
-          <div className="checkout-total">
-            <span>Total</span>
-            <strong>{formatMoney(totalPaisa)}</strong>
-          </div>
+          <OrderSummary
+            feePaisa={0}
+            isSubmitting={isSubmittingOrder}
+            primaryLabel={isSubmittingOrder ? 'Adding...' : isTicketTypesLoading ? 'Loading ticket types...' : 'Continue to Checkout'}
+            reserveBlockedMessage={reserveBlockedMessage}
+            selectedTicketLabel={selectedTicketType?.name ?? 'Ticket'}
+            quantity={quantity}
+            subtotalPaisa={totalPaisa}
+            totalPaisa={totalPaisa}
+            onSubmit={onReserve}
+            canSubmit={canReserve}
+          />
         </div>
-        <footer className="record-modal-actions checkout-modal-actions">
-          <button className="primary-admin-button" disabled={!canReserve} type="button" onClick={onReserve}>
-            {isSubmittingOrder ? <span aria-hidden="true" className="button-spinner" /> : null}
-            {isSubmittingOrder
-              ? 'Adding...'
-              : isTicketTypesLoading
-                ? 'Loading ticket types...'
-                : 'Add to cart'}
-          </button>
-        </footer>
-        {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : <p className="checkout-hint">Pick ticket type and quantity, then add to cart.</p>}
       </section>
     </div>
+  )
+}
+
+function CheckoutStepper({ activeStep }: { activeStep: 'Tickets' | 'Details' | 'Payment' | 'Review' }) {
+  const steps = ['Tickets', 'Details', 'Payment', 'Review']
+  return (
+    <ol className="checkout-stepper" aria-label="Checkout steps">
+      {steps.map((step, index) => (
+        <li className={step === activeStep ? 'active' : ''} key={step}>
+          <span>{index + 1}</span>
+          {step}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function TicketSelector({
+  isLocked,
+  quantity,
+  remainingTickets,
+  selectedTicketType,
+  ticketTypes,
+  onChangeQuantity,
+  onChangeTicketType
+}: {
+  isLocked: boolean
+  quantity: number
+  remainingTickets: number | null
+  selectedTicketType?: TicketType
+  ticketTypes: TicketType[]
+  onChangeQuantity: (value: number) => void
+  onChangeTicketType: (id: string) => void
+}) {
+  const maxQuantity = Math.max(1, selectedTicketType?.max_per_order ?? 10)
+  return (
+    <section className="ticket-selector" aria-label="Select tickets">
+      <h3>Select Tickets</h3>
+      <label className="ticket-type-select">
+        <span>Ticket type</span>
+        <select disabled={isLocked} value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
+          {ticketTypes.length === 0 ? (
+            <option value="">No ticket types</option>
+          ) : (
+            ticketTypes.map((ticketType) => (
+              <option key={ticketType.id} value={ticketType.id}>
+                {ticketType.name} - {formatMoney(ticketType.price_paisa ?? 0)}
+              </option>
+            ))
+          )}
+        </select>
+      </label>
+      <div className="ticket-option-row">
+        <div>
+          <strong>{selectedTicketType?.name ?? 'General Admission'}</strong>
+          <p>{remainingTickets === null ? 'Open availability' : `${remainingTickets} available`} · First come, first served.</p>
+        </div>
+        <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
+        <div className="quantity-stepper">
+          <button disabled={isLocked || quantity <= 1} type="button" onClick={() => onChangeQuantity(Math.max(1, quantity - 1))}>-</button>
+          <span>{quantity}</span>
+          <button disabled={isLocked || quantity >= maxQuantity} type="button" onClick={() => onChangeQuantity(Math.min(maxQuantity, quantity + 1))}>+</button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function OrderSummary({
+  canSubmit,
+  feePaisa,
+  isSubmitting,
+  primaryLabel,
+  quantity,
+  reserveBlockedMessage,
+  selectedTicketLabel,
+  subtotalPaisa,
+  totalPaisa,
+  onSubmit
+}: {
+  canSubmit: boolean
+  feePaisa: number
+  isSubmitting: boolean
+  primaryLabel: string
+  quantity: number
+  reserveBlockedMessage: string
+  selectedTicketLabel: string
+  subtotalPaisa: number
+  totalPaisa: number
+  onSubmit: () => void | Promise<void>
+}) {
+  return (
+    <aside className="order-summary-card">
+      <h3>Order Summary</h3>
+      <div className="checkout-line">
+        <span>{selectedTicketLabel} ({quantity})</span>
+        <strong>{formatMoney(subtotalPaisa)}</strong>
+      </div>
+      <div className="checkout-line">
+        <span>Fees</span>
+        <strong>{formatMoney(feePaisa)}</strong>
+      </div>
+      <div className="checkout-total grand">
+        <span>Total</span>
+        <strong>{formatMoney(totalPaisa + feePaisa)}</strong>
+      </div>
+      <button className="primary-admin-button" disabled={!canSubmit} type="button" onClick={onSubmit}>
+        {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : null}
+        {primaryLabel}
+      </button>
+      {reserveBlockedMessage ? <p className="checkout-hint">{reserveBlockedMessage}</p> : <p className="checkout-hint"><Lock size={14} /> Secure checkout</p>}
+    </aside>
   )
 }
 
 
 export function CartModal({
   cartGroups,
+  events,
   holdExpiresAt,
-  totalPaisa,
+  feePaisa = 0,
+  subtotalPaisa,
   updatingItemIds,
   onClose,
+  onBrowseEvents,
   onCheckout,
   onUpdateQuantity,
   onRemoveItem
 }: {
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
+  events: PublicEvent[]
   holdExpiresAt: string
-  totalPaisa: number
+  feePaisa?: number
+  subtotalPaisa: number
   updatingItemIds: ReadonlySet<string>
   onClose: () => void
+  onBrowseEvents: () => void
   onCheckout: () => void
   onUpdateQuantity: (itemId: string, quantity: number) => void
   onRemoveItem: (itemId: string) => void
 }) {
-  const isEmpty = cartGroups.length === 0
+  const dialogRef = useRef<HTMLElement | null>(null)
+  const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events])
+  const cartItemCount = useMemo(
+    () => cartGroups.reduce((sum, group) => sum + group.items.reduce((groupSum, item) => groupSum + item.quantity, 0), 0),
+    [cartGroups]
+  )
+  const isEmpty = cartItemCount === 0
+  const totalPaisa = subtotalPaisa + Math.max(0, feePaisa)
   const [now, setNow] = useState(() => Date.now())
   const holdRemainingMs = holdExpiresAt ? Math.max(0, new Date(holdExpiresAt).getTime() - now) : 0
   const holdCountdown = formatCountdown(holdRemainingMs)
@@ -2493,94 +3098,202 @@ export function CartModal({
     return () => window.clearInterval(timer)
   }, [holdExpiresAt, isEmpty])
 
+  useEffect(() => {
+    if (typeof document === 'undefined' || !dialogRef.current) return
+
+    const dialog = dialogRef.current
+    const focusableSelector =
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const getFocusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+
+    const focusables = getFocusableElements()
+    ;(focusables[0] ?? dialog).focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== 'Tab') return
+
+      const elements = getFocusableElements()
+      if (elements.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      if (event.shiftKey) {
+        if (!active || active === first || !dialog.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+        return
+      }
+
+      if (!active || active === last || !dialog.contains(active)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="record-modal reservation-modal cart-modal-modern" role="dialog" aria-modal="true">
-        <header className="record-modal-header">
-          <div>
-            <p className="admin-breadcrumb">Cart</p>
-            <h2>Your cart</h2>
+    <div className="modal-backdrop cart-modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        ref={dialogRef}
+        aria-labelledby="cart-modal-title"
+        className={`record-modal reservation-modal cart-modal-modern ${isEmpty ? 'is-empty' : 'is-filled'}`}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="cart-modal-header">
+          <div className="cart-modal-title-wrap">
+            <h2 id="cart-modal-title">
+              {isEmpty ? 'Your cart' : `Your cart · ${cartItemCount} ticket${cartItemCount === 1 ? '' : 's'}`}
+            </h2>
           </div>
-          <button aria-label="Close modal" type="button" onClick={onClose}>
+          <button aria-label="Close cart" type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
-        <div className="cart-modal-layout">
-          <div className="checkout-stack cart-modal-main">
-            {isEmpty ? (
-              <p className="checkout-hint">Your cart is empty.</p>
-            ) : (
-              cartGroups.map((group) => (
-                <div className="cart-event-group" key={group.event_id}>
-                  <p className="eyebrow">{group.event_name}</p>
-                  <p className="checkout-event-meta">{group.event_location_name}</p>
-                  {group.items.map((item) => {
-                    const isUpdating = updatingItemIds.has(item.id)
-                    return (
-                      <div className="cart-item-row" key={item.id}>
-                        <div>
-                          <strong>{item.ticket_type_name}</strong>
-                          <p>{formatMoney(item.unit_price_paisa)} each</p>
-                        </div>
-                        <div className="cart-item-actions">
-                          <button
-                            aria-label={`Decrease ${item.ticket_type_name} quantity`}
-                            disabled={isUpdating}
-                            type="button"
-                            onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
-                          >
-                            -
-                          </button>
-                          <span className="cart-item-quantity" aria-live="polite">
-                            {isUpdating ? (
-                              <span className="cart-quantity-spinner" role="status" aria-label="Updating quantity" />
-                            ) : (
-                              item.quantity
-                            )}
-                          </span>
-                          <button
-                            aria-label={`Increase ${item.ticket_type_name} quantity`}
-                            disabled={isUpdating}
-                            type="button"
-                            onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
-                          >
-                            +
-                          </button>
-                          <button
-                            aria-label={`Remove ${item.ticket_type_name} from cart`}
-                            disabled={isUpdating}
-                            type="button"
-                            onClick={() => onRemoveItem(item.id)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              ))
-            )}
-          </div>
-          <aside className="cart-modal-summary">
-            <div className="cart-summary-card">
-              <p className="cart-summary-label">Subtotal</p>
-              <p className="cart-summary-amount">{formatMoney(totalPaisa)}</p>
-              {!isEmpty ? (
-                <div className={`cart-hold-countdown ${holdRemainingMs <= 60000 ? 'is-urgent' : ''}`} aria-live="polite">
-                  <span>Hold expires in</span>
-                  <strong>{holdCountdown}</strong>
-                </div>
-              ) : null}
-              <p className="checkout-hint">Coupons and discounts are applied on checkout.</p>
+        {isEmpty ? (
+          <div className="cart-empty-state">
+            <div className="cart-empty-illustration" aria-hidden="true">
+              <Ticket size={34} />
             </div>
-            <button type="button" onClick={onClose}>Close</button>
-            <button className="primary-admin-button" disabled={isEmpty} type="button" onClick={onCheckout}>
-              <CreditCard size={17} />
-              Checkout
-            </button>
-          </aside>
-        </div>
+            <h3>Your cart is empty</h3>
+            <p>Find an event and add tickets to continue.</p>
+            <div className="cart-empty-actions">
+              <button className="primary-admin-button" type="button" onClick={onBrowseEvents}>
+                Browse Events
+              </button>
+              <button className="secondary-button" type="button" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="cart-modal-layout">
+            <div className="cart-modal-main">
+              {cartGroups.map((group, groupIndex) => {
+                const event = eventById.get(group.event_id) ?? null
+                return (
+                  <article className="cart-event-group" key={group.event_id}>
+                    <div className="cart-event-header">
+                      <SafeImage
+                        alt={group.event_name ? `${group.event_name} thumbnail` : 'Event'}
+                        className="cart-event-thumbnail"
+                        fallbackType="event"
+                        src={getEventImageUrl(event, groupIndex)}
+                      />
+                      <div className="cart-event-copy">
+                        <h3>{group.event_name}</h3>
+                        <p>{formatEventDate(event?.start_datetime)} · {formatEventTime(event?.start_datetime)}</p>
+                        <span>{group.event_location_name}</span>
+                      </div>
+                    </div>
+                    <div className="cart-item-list">
+                      {group.items.map((item) => {
+                        const isUpdating = updatingItemIds.has(item.id)
+                        return (
+                          <div className="cart-item-row" key={item.id}>
+                            <div className="cart-item-main">
+                              <div className="cart-item-title-row">
+                                <strong>{item.ticket_type_name}</strong>
+                                <span className="cart-item-line-total">{formatMoney(item.unit_price_paisa * item.quantity)}</span>
+                              </div>
+                              <p>
+                                Price per ticket: <strong>{formatMoney(item.unit_price_paisa)}</strong>
+                              </p>
+                              <div className="cart-item-actions">
+                                <button
+                                  aria-label={`Decrease ${item.ticket_type_name} quantity`}
+                                  disabled={isUpdating}
+                                  type="button"
+                                  onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                                >
+                                  -
+                                </button>
+                                <span className="cart-item-quantity" aria-live="polite">
+                                  {isUpdating ? (
+                                    <span className="cart-quantity-spinner" role="status" aria-label="Updating quantity" />
+                                  ) : (
+                                    item.quantity
+                                  )}
+                                </span>
+                                <button
+                                  aria-label={`Increase ${item.ticket_type_name} quantity`}
+                                  disabled={isUpdating}
+                                  type="button"
+                                  onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                                >
+                                  +
+                                </button>
+                                <button
+                                  aria-label={`Remove ${item.ticket_type_name} from cart`}
+                                  disabled={isUpdating}
+                                  type="button"
+                                  onClick={() => onRemoveItem(item.id)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+            <aside className="cart-modal-summary" aria-label="Cart summary">
+              <div className="cart-summary-card">
+                <div className="cart-summary-row">
+                  <span>Subtotal</span>
+                  <strong>{formatMoney(subtotalPaisa)}</strong>
+                </div>
+                {feePaisa > 0 ? (
+                  <div className="cart-summary-row">
+                    <span>Fees</span>
+                    <strong>{formatMoney(feePaisa)}</strong>
+                  </div>
+                ) : null}
+                <div className="cart-summary-row cart-summary-total">
+                  <span>Total</span>
+                  <strong>{formatMoney(totalPaisa)}</strong>
+                </div>
+                <p className="cart-summary-note">Coupons and discounts are applied during checkout.</p>
+                {!isEmpty ? (
+                  <div className={`cart-hold-countdown ${holdRemainingMs <= 60000 ? 'is-urgent' : ''}`} aria-live="polite">
+                    <span>Hold expires in</span>
+                    <strong>{holdCountdown}</strong>
+                  </div>
+                ) : null}
+              </div>
+              <div className="cart-modal-actions">
+                <button className="secondary-button cart-continue-button" type="button" onClick={onBrowseEvents}>
+                  Continue browsing
+                </button>
+                <button className="primary-admin-button cart-checkout-button" type="button" onClick={onCheckout}>
+                  <CreditCard size={17} />
+                  Checkout
+                </button>
+              </div>
+            </aside>
+          </div>
+        )}
       </section>
     </div>
   )
@@ -2654,6 +3367,7 @@ export function CartCheckoutModal({
   esewaMode: 'test' | 'live'
   esewaNote: string
 }) {
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal checkout-modal cart-checkout-modern" role="dialog" aria-modal="true">
@@ -2666,6 +3380,7 @@ export function CartCheckoutModal({
             <X size={18} />
           </button>
         </header>
+        <CheckoutStepper activeStep="Details" />
         <div className="cart-checkout-layout">
           <div className="checkout-stack cart-checkout-main">
             {!user?.id ? (
@@ -2759,6 +3474,16 @@ export function CartCheckoutModal({
             ))}
 
             <fieldset className="cart-checkout-group">
+              <legend>Payment method</legend>
+              <p className="checkout-hint">Choose Khalti, eSewa, or complete the order without online payment if enabled.</p>
+              <div className="payment-method-grid">
+                <span><CreditCard size={17} /> Khalti</span>
+                <span><CreditCard size={17} /> eSewa</span>
+                <span><ShieldCheck size={17} /> Manual confirmation</span>
+              </div>
+            </fieldset>
+
+            <fieldset className="cart-checkout-group">
               <legend>Order-level coupon</legend>
               <div className="cart-coupon-row">
                 <input
@@ -2777,6 +3502,14 @@ export function CartCheckoutModal({
                 </div>
                 ) : null}
             </fieldset>
+            <label className="terms-check">
+              <input
+                checked={acceptedTerms}
+                type="checkbox"
+                onChange={(event) => setAcceptedTerms(event.target.checked)}
+              />
+              <span>I agree to the ticket purchase terms and refund policy.</span>
+            </label>
           </div>
           <aside className="cart-checkout-summary">
             <div className="cart-summary-card">
@@ -2800,7 +3533,7 @@ export function CartCheckoutModal({
             <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
             <button
               className="khalti-pay-button"
-              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady}
+              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady || !acceptedTerms}
               type="button"
               onClick={onPayWithKhalti}
             >
@@ -2809,14 +3542,14 @@ export function CartCheckoutModal({
             </button>
             <button
               className="esewa-pay-button"
-              disabled={isSubmitting || cartGroups.length === 0 || !esewaReady}
+              disabled={isSubmitting || cartGroups.length === 0 || !esewaReady || !acceptedTerms}
               type="button"
               onClick={onPayWithEsewa}
             >
               <CreditCard size={17} />
               {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
             </button>
-            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0} type="button" onClick={onPlaceOrder}>
+            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0 || !acceptedTerms} type="button" onClick={onPlaceOrder}>
               {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
               {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
             </button>

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
 import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
-import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
+import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
+import { HeroSettingsForm } from "./HeroSettingsForm";
 
 function readAdminResourceFromPath() {
   if (typeof window === 'undefined') return DASHBOARD_VIEW
@@ -111,12 +112,16 @@ export default function AdminApp({
   const [isSettingsLoading, setIsSettingsLoading] = useState(false)
   const [isSettingsSaving, setIsSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
-  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'cart' | 'payments' | 'appearance' | 'grid' | 'ads'>('storage')
+  const [settingsSection, setSettingsSection] = useState<'storage' | 'rails' | 'hero' | 'cart' | 'payments' | 'appearance' | 'grid' | 'ads'>('storage')
   const [railsSettingsData, setRailsSettingsData] = useState<AdminRailsSettingsData>(defaultRailsSettingsData)
   const [isRailsSettingsLoading, setIsRailsSettingsLoading] = useState(false)
   const [isRailsSettingsSaving, setIsRailsSettingsSaving] = useState(false)
   const [railsSettingsError, setRailsSettingsError] = useState('')
   const [railEventSearchByRailId, setRailEventSearchByRailId] = useState<Record<string, string>>({})
+  const [heroSettingsData, setHeroSettingsData] = useState<HeroSettingsData>(defaultHeroSettingsData)
+  const [isHeroSettingsLoading, setIsHeroSettingsLoading] = useState(false)
+  const [isHeroSettingsSaving, setIsHeroSettingsSaving] = useState(false)
+  const [heroSettingsError, setHeroSettingsError] = useState('')
   const [paymentSettingsData, setPaymentSettingsData] = useState<AdminPaymentSettingsData>(defaultAdminPaymentSettings)
   const [isPaymentSettingsLoading, setIsPaymentSettingsLoading] = useState(false)
   const [isPaymentSettingsSaving, setIsPaymentSettingsSaving] = useState(false)
@@ -460,6 +465,7 @@ export default function AdminApp({
     if (!(isSettingsView && isAdminUser && selectedWebRole === 'Admin')) return
     void loadR2Settings()
     void loadRailsSettings()
+    void loadHeroSettings()
     void loadCartSettings()
     void loadPaymentSettings()
     void loadAdSettings()
@@ -637,6 +643,54 @@ export default function AdminApp({
       setStatus(message)
     } finally {
       setIsRailsSettingsSaving(false)
+    }
+  }
+
+  async function loadHeroSettings() {
+    setIsHeroSettingsLoading(true)
+    setHeroSettingsError('')
+
+    try {
+      const { data } = await fetchJson<{ data: HeroSettingsData }>('/api/settings/hero')
+      setHeroSettingsData(normalizeHeroSettings(data.data))
+      setStatus('Loaded hero settings')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setHeroSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsHeroSettingsLoading(false)
+    }
+  }
+
+  async function saveHeroSettings() {
+    const speedSeconds = Number(heroSettingsData.slider_speed_seconds ?? 6)
+    if (!Number.isFinite(speedSeconds) || speedSeconds <= 0) {
+      const message = 'Slider speed must be a positive number.'
+      setHeroSettingsError(message)
+      setStatus(message)
+      return
+    }
+
+    setIsHeroSettingsSaving(true)
+    setHeroSettingsError('')
+    try {
+      const { data } = await fetchJson<{ data: HeroSettingsData }>('/api/settings/hero', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...heroSettingsData,
+          slider_speed_seconds: speedSeconds
+        })
+      })
+      setHeroSettingsData(normalizeHeroSettings(data.data))
+      setStatus('Hero settings saved')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setHeroSettingsError(message)
+      setStatus(message)
+    } finally {
+      setIsHeroSettingsSaving(false)
     }
   }
 
@@ -2241,6 +2295,13 @@ export default function AdminApp({
                   Rails
                 </button>
                 <button
+                  className={settingsSection === 'hero' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setSettingsSection('hero')}
+                >
+                  Hero
+                </button>
+                <button
                   className={settingsSection === 'cart' ? 'active' : ''}
                   type="button"
                   onClick={() => setSettingsSection('cart')}
@@ -2658,6 +2719,25 @@ export default function AdminApp({
                 </button>
               </footer>
             </section>
+            ) : null}
+
+            {settingsSection === 'hero' ? (
+              <HeroSettingsForm
+                error={heroSettingsError}
+                isLoading={isHeroSettingsLoading}
+                isSaving={isHeroSettingsSaving}
+                settings={heroSettingsData}
+                onChange={(patch) =>
+                  setHeroSettingsData((current) => ({
+                    ...current,
+                    ...patch
+                  }))
+                }
+                onReload={() => {
+                  void loadHeroSettings()
+                }}
+                onSave={() => void saveHeroSettings()}
+              />
             ) : null}
 
             {settingsSection === 'cart' ? (

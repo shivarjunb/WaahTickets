@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEventHandler, type MouseEvent } from 'react'
 import type { AdPlacement, AdRecord, AdSettings } from '@waahtickets/shared-types'
+import { shouldShowAd } from './shared/utils'
 
 export const adPlacementOptions: AdPlacement[] = [
   'HOME_BETWEEN_RAILS',
@@ -15,13 +16,15 @@ export const adDeviceTargetOptions = ['web', 'mobile', 'both'] as const
 export const adStatusOptions = ['draft', 'active', 'paused', 'expired'] as const
 
 type AdSlotProps = {
-  placement: AdPlacement
+  placementKey?: AdPlacement
+  placement?: AdPlacement
   device?: 'web' | 'mobile'
   pageUrl?: string
   railIndex?: number
   adsServed?: number
-  variant?: 'rail' | 'sidebar'
+  variant?: 'card' | 'banner' | 'rail' | 'sidebar'
   className?: string
+  fallbackHidden?: boolean
 }
 
 type AdsSettingsFormProps = {
@@ -86,8 +89,173 @@ type AdPreviewProps = {
   variant: 'desktop-banner' | 'mobile-banner' | 'sidebar'
 }
 
+type SponsoredAdProps = {
+  ad: AdRecord | null
+  className?: string
+  fallbackHidden?: boolean
+}
+
 const previewPlaceholder =
   'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=1200&q=80'
+
+function SafeImage({
+  src,
+  alt,
+  className = '',
+  fallbackClassName = '',
+  imageClassName = ''
+}: {
+  src?: string | null
+  alt: string
+  className?: string
+  fallbackClassName?: string
+  imageClassName?: string
+}) {
+  const [hasFailed, setHasFailed] = useState(false)
+  const cleanSrc = typeof src === 'string' ? src.trim() : ''
+
+  useEffect(() => {
+    setHasFailed(false)
+  }, [cleanSrc])
+
+  if (!cleanSrc || hasFailed) {
+    return <div aria-hidden="true" className={fallbackClassName || `tw-bg-gradient-to-br tw-from-violet-100 tw-via-fuchsia-50 tw-to-slate-100 ${className}`.trim()} />
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={imageClassName || className}
+      loading="lazy"
+      src={cleanSrc}
+      onError={() => setHasFailed(true)}
+    />
+  )
+}
+
+function SponsoredLabel({ placement }: { placement?: AdPlacement }) {
+  return (
+    <div className="tw-inline-flex tw-items-center tw-gap-2">
+      <span className="tw-inline-flex tw-w-fit tw-items-center tw-rounded-full tw-border tw-border-violet-200 tw-bg-violet-50 tw-px-2.5 tw-py-1 tw-text-[10px] tw-font-semibold tw-uppercase tw-tracking-[0.22em] tw-text-violet-700">
+        Sponsored
+      </span>
+      {placement ? (
+        <span className="tw-text-[11px] tw-font-medium tw-text-slate-400">{formatPlacementLabel(placement)}</span>
+      ) : null}
+    </div>
+  )
+}
+
+function SponsoredAction() {
+  return (
+    <div className="tw-inline-flex tw-w-fit tw-items-center tw-gap-2 tw-rounded-full tw-bg-violet-600 tw-px-3 tw-py-2 tw-text-sm tw-font-semibold tw-text-white tw-shadow-[0_10px_20px_rgba(124,58,237,0.18)]">
+      Explore offer
+    </div>
+  )
+}
+
+function SponsoredAdShell({
+  ad,
+  placement,
+  variant,
+  className = '',
+  onActivate
+}: {
+  ad: AdRecord
+  placement?: AdPlacement
+  variant: 'card' | 'banner' | 'rail' | 'sidebar'
+  className?: string
+  onActivate?: (event: MouseEvent<HTMLAnchorElement>) => void
+}) {
+  const isBanner = variant === 'banner'
+  const isSidebar = variant === 'sidebar'
+  const isRail = variant === 'rail'
+  const outerClass =
+    isSidebar || isRail
+      ? 'tw-group tw-relative tw-overflow-hidden tw-rounded-[22px] tw-border tw-border-slate-200 tw-bg-white tw-shadow-[0_18px_40px_rgba(15,23,42,0.08)]'
+      : 'tw-group tw-relative tw-overflow-hidden tw-rounded-[24px] tw-border tw-border-slate-200 tw-bg-white tw-shadow-[0_16px_34px_rgba(15,23,42,0.07)]'
+
+  const imageClass =
+    isSidebar
+      ? 'tw-h-56 tw-w-full tw-rounded-2xl tw-object-cover'
+      : isBanner
+        ? 'tw-h-40 tw-w-full tw-rounded-2xl tw-object-cover md:tw-h-full'
+        : isRail
+          ? 'tw-h-44 tw-w-full tw-rounded-2xl tw-object-cover'
+          : 'tw-h-36 tw-w-full tw-rounded-2xl tw-object-cover'
+
+  const contentClass =
+    isBanner
+      ? 'tw-flex tw-min-w-0 tw-flex-col tw-gap-2 tw-px-1'
+      : isSidebar || isRail
+        ? 'tw-flex tw-min-w-0 tw-flex-col tw-gap-2 tw-px-1'
+        : 'tw-flex tw-min-w-0 tw-flex-col tw-gap-2 tw-px-1'
+
+  const layoutClass = isBanner
+    ? 'tw-grid tw-gap-3 tw-p-4 md:tw-grid-cols-[minmax(0,176px)_minmax(0,1fr)] md:tw-items-center'
+    : isSidebar
+      ? 'tw-p-3'
+      : 'tw-grid tw-gap-3 tw-p-4 md:tw-grid-cols-[176px_minmax(0,1fr)] md:tw-items-center'
+
+  const inner = (
+    <div className={layoutClass}>
+      <SafeImage
+        alt={ad.name}
+        className="tw-w-full"
+        fallbackClassName={
+          isSidebar
+            ? 'tw-h-56 tw-w-full tw-rounded-2xl tw-bg-gradient-to-br tw-from-violet-100 tw-via-fuchsia-50 tw-to-slate-100'
+            : isBanner
+              ? 'tw-h-40 tw-w-full tw-rounded-2xl tw-bg-gradient-to-br tw-from-violet-100 tw-via-fuchsia-50 tw-to-slate-100'
+              : isRail
+                ? 'tw-h-44 tw-w-full tw-rounded-2xl tw-bg-gradient-to-br tw-from-violet-100 tw-via-fuchsia-50 tw-to-slate-100'
+                : 'tw-h-36 tw-w-full tw-rounded-2xl tw-bg-gradient-to-br tw-from-violet-100 tw-via-fuchsia-50 tw-to-slate-100'
+        }
+        imageClassName={imageClass}
+        src={ad.image_url}
+      />
+      <div className={contentClass}>
+        <div className="tw-flex tw-items-center tw-justify-between tw-gap-3">
+          <SponsoredLabel placement={placement ?? ad.placement} />
+        </div>
+        <div className="tw-min-w-0">
+          <p className="tw-m-0 tw-text-xs tw-font-semibold tw-uppercase tw-tracking-[0.16em] tw-text-violet-700">
+            {ad.advertiser_name}
+          </p>
+          <h3 className="tw-mt-1 tw-line-clamp-2 tw-text-lg tw-font-semibold tw-leading-tight tw-text-slate-900">
+            {ad.name}
+          </h3>
+        </div>
+        <SponsoredAction />
+      </div>
+    </div>
+  )
+
+  return (
+    <aside className={`${outerClass} ${className}`.trim()} data-ad-placement={placement ?? ad.placement}>
+      {onActivate ? (
+        <a
+          className="tw-block tw-text-inherit tw-no-underline"
+          href={ad.destination_url}
+          onClick={onActivate}
+          rel={ad.open_in_new_tab ? 'noreferrer noopener' : undefined}
+          target={ad.open_in_new_tab ? '_blank' : undefined}
+        >
+          {inner}
+        </a>
+      ) : (
+        <a
+          className="tw-block tw-text-inherit tw-no-underline"
+          href={ad.destination_url}
+          rel={ad.open_in_new_tab ? 'noreferrer noopener' : undefined}
+          target={ad.open_in_new_tab ? '_blank' : undefined}
+        >
+          {inner}
+        </a>
+      )}
+    </aside>
+  )
+}
 
 export function createEmptyAdDraft(): AdDraft {
   return {
@@ -155,7 +323,7 @@ export function RailAd({ placement, railIndex, adsServed = 0, className = '' }: 
       className={className}
       device={device}
       pageUrl={typeof window !== 'undefined' ? window.location.href : ''}
-      placement={placement}
+      placementKey={placement}
       railIndex={railIndex}
       variant="rail"
     />
@@ -172,27 +340,37 @@ export function SidebarAd({ placement, adsServed = 0 }: { placement: AdPlacement
       className="waah-sidebar-ad-shell"
       device="web"
       pageUrl={typeof window !== 'undefined' ? window.location.href : ''}
-      placement={placement}
+      placementKey={placement}
       variant="sidebar"
     />
   )
 }
 
 export function AdSlot({
+  placementKey,
   placement,
   device,
   pageUrl = '',
   railIndex,
   adsServed = 0,
   variant = 'rail',
-  className = ''
+  className = '',
+  fallbackHidden = true
 }: AdSlotProps) {
   const responsiveDevice = useResponsiveAdDevice()
   const resolvedDevice = device ?? responsiveDevice
+  const resolvedPlacement = placementKey ?? placement
   const [ad, setAd] = useState<AdRecord | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [hasImageError, setHasImageError] = useState(false)
 
   useEffect(() => {
+    if (!resolvedPlacement) {
+      setAd(null)
+      setIsLoading(false)
+      return
+    }
+
     let cancelled = false
     async function load() {
       setIsLoading(true)
@@ -203,14 +381,16 @@ export function AdSlot({
         })
         if (pageUrl) params.set('page_url', pageUrl)
         if (typeof railIndex === 'number') params.set('rail_index', String(railIndex))
-        const response = await fetch(`/api/ads/placement/${encodeURIComponent(placement)}?${params.toString()}`)
+        const response = await fetch(`/api/ads/placement/${encodeURIComponent(resolvedPlacement)}?${params.toString()}`)
         const json = (await response.json()) as { data?: AdRecord | null }
         if (!cancelled) {
           setAd(json.data ?? null)
+          setHasImageError(false)
         }
       } catch {
         if (!cancelled) {
           setAd(null)
+          setHasImageError(false)
         }
       } finally {
         if (!cancelled) {
@@ -222,7 +402,7 @@ export function AdSlot({
     return () => {
       cancelled = true
     }
-  }, [adsServed, pageUrl, placement, railIndex, resolvedDevice])
+  }, [adsServed, pageUrl, railIndex, resolvedDevice, resolvedPlacement])
 
   useEffect(() => {
     if (!ad?.id) return
@@ -230,13 +410,23 @@ export function AdSlot({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        placement,
+        placement: resolvedPlacement,
         device_type: resolvedDevice,
         page_url: pageUrl
       }),
       keepalive: true
     }).catch(() => null)
-  }, [ad?.id, pageUrl, placement, resolvedDevice])
+  }, [ad?.id, pageUrl, resolvedDevice, resolvedPlacement])
+
+  const isRenderableAd = Boolean(
+    ad &&
+      !hasImageError &&
+      shouldShowAd(ad, {
+        placement: resolvedPlacement,
+        device: resolvedDevice,
+        nowIso: new Date().toISOString()
+      })
+  )
 
   async function onActivate(event: MouseEvent<HTMLAnchorElement>) {
     if (!ad) return
@@ -256,7 +446,7 @@ export function AdSlot({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          placement,
+          placement: resolvedPlacement,
           device_type: resolvedDevice,
           page_url: pageUrl
         }),
@@ -270,57 +460,58 @@ export function AdSlot({
     }
   }
 
-  if (isLoading || !ad) {
+  if (isLoading || !isRenderableAd || (!ad && fallbackHidden)) {
     return null
   }
 
-  const wrapperClass =
-    variant === 'sidebar'
-      ? 'tw-group tw-relative tw-overflow-hidden tw-rounded-[22px] tw-border tw-border-slate-200 tw-bg-white tw-shadow-[0_18px_40px_rgba(15,23,42,0.08)]'
-      : 'tw-group tw-relative tw-overflow-hidden tw-rounded-[24px] tw-border tw-border-slate-200 tw-bg-white tw-shadow-[0_16px_34px_rgba(15,23,42,0.07)]'
+  return (
+    <SponsoredAdShell
+      ad={ad}
+      className={className}
+      onActivate={onActivate}
+      placement={resolvedPlacement}
+      variant={variant}
+    />
+  )
+}
+
+export function SponsoredCard({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+  if (!ad) return null
+  return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="card" />
+}
+
+export function SponsoredBanner({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+  if (!ad) return null
+  return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="banner" />
+}
+
+export function SponsoredRail({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+  if (!ad) return null
+  return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="rail" />
+}
+
+export function RightRailAds({
+  placementKey = 'WEB_RIGHT_SIDEBAR',
+  adsServed = 0,
+  className = ''
+}: {
+  placementKey?: AdPlacement
+  adsServed?: number
+  className?: string
+}) {
+  const isDesktop = useIsDesktopViewport()
+  if (!isDesktop) return null
 
   return (
-    <aside className={`${wrapperClass} ${className}`.trim()} data-ad-placement={placement}>
-      <a
-        className="tw-block tw-text-inherit tw-no-underline"
-        href={ad.destination_url}
-        onClick={onActivate}
-        rel={ad.open_in_new_tab ? 'noreferrer noopener' : undefined}
-        target={ad.open_in_new_tab ? '_blank' : undefined}
-      >
-        <div className={variant === 'sidebar' ? 'tw-p-3' : 'tw-grid tw-gap-3 tw-p-4 md:tw-grid-cols-[176px_minmax(0,1fr)] md:tw-items-center'}>
-          <img
-            alt={ad.name}
-            className={
-              variant === 'sidebar'
-                ? 'tw-h-56 tw-w-full tw-rounded-2xl tw-object-cover'
-                : 'tw-h-36 tw-w-full tw-rounded-2xl tw-object-cover'
-            }
-            loading="lazy"
-            src={ad.image_url || previewPlaceholder}
-          />
-          <div className="tw-flex tw-min-w-0 tw-flex-col tw-gap-2 tw-px-1">
-            <div className="tw-flex tw-items-center tw-justify-between tw-gap-3">
-              <span className="tw-inline-flex tw-w-fit tw-rounded-full tw-bg-slate-100 tw-px-2.5 tw-py-1 tw-text-[10px] tw-font-semibold tw-uppercase tw-tracking-[0.22em] tw-text-slate-500">
-                Sponsored
-              </span>
-              <span className="tw-text-[11px] tw-font-medium tw-text-slate-400">{formatPlacementLabel(ad.placement)}</span>
-            </div>
-            <div className="tw-min-w-0">
-              <p className="tw-m-0 tw-text-xs tw-font-semibold tw-uppercase tw-tracking-[0.16em] tw-text-slate-500">
-                {ad.advertiser_name}
-              </p>
-              <h3 className="tw-mt-1 tw-line-clamp-2 tw-text-lg tw-font-semibold tw-leading-tight tw-text-slate-900">
-                {ad.name}
-              </h3>
-            </div>
-            <div className="tw-inline-flex tw-w-fit tw-items-center tw-gap-2 tw-rounded-full tw-bg-slate-900 tw-px-3 tw-py-2 tw-text-sm tw-font-semibold tw-text-white transition group-hover:tw-bg-sky-600">
-              Explore offer
-            </div>
-          </div>
-        </div>
-      </a>
-    </aside>
+    <AdSlot
+      adsServed={adsServed}
+      className={className}
+      device="web"
+      fallbackHidden
+      pageUrl={typeof window !== 'undefined' ? window.location.href : ''}
+      placementKey={placementKey}
+      variant="sidebar"
+    />
   )
 }
 

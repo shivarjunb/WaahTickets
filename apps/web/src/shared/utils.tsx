@@ -1,5 +1,5 @@
-import { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "./types";
-import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "./constants";
+import { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, HeroSlideData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "./types";
+import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "./constants";
 import { formatNpr, nprToPaisa, paisaToNpr, AdPlacement, AdRecord, AdSettings } from "@waahtickets/shared-types";
 import { Users, UserCog, ShieldCheck, SquarePlus, SquareMinus, Building2, LayoutDashboard, FileText, CalendarDays, Home, Ticket, ShoppingCart, BarChart3, CreditCard, Eye, Mail, Bell, ScanLine, Star, Activity, Database } from "lucide-react";
 
@@ -472,9 +472,190 @@ export function normalizeCartSettings(value: unknown): CartSettingsData {
   }
 }
 
+type AdVisibilityOptions = {
+  placement?: AdPlacement
+  device?: 'web' | 'mobile'
+  nowIso?: string
+  settings?: Partial<Pick<AdSettings, 'ads_enabled' | 'web_ads_enabled' | 'mobile_ads_enabled'>>
+}
+
+function resolveCurrentIso(nowIso?: string) {
+  return typeof nowIso === 'string' && nowIso.trim() ? nowIso.trim() : new Date().toISOString()
+}
+
+function isSidebarPlacement(placement: AdPlacement) {
+  return placement === 'WEB_LEFT_SIDEBAR' || placement === 'WEB_RIGHT_SIDEBAR'
+}
+
+export function shouldShowAd(ad: Partial<AdRecord> | null | undefined, options: AdVisibilityOptions = {}) {
+  if (!ad || typeof ad !== 'object') return false
+
+  const device = options.device ?? 'web'
+  const nowIso = resolveCurrentIso(options.nowIso)
+  const settings = options.settings
+
+  if (settings) {
+    if (!normalizeBoolean(settings.ads_enabled, true)) return false
+    if (device === 'web' && !normalizeBoolean(settings.web_ads_enabled, true)) return false
+    if (device === 'mobile' && !normalizeBoolean(settings.mobile_ads_enabled, true)) return false
+  }
+
+  const adPlacement = String(ad.placement ?? '').trim() as AdPlacement
+  if (options.placement && adPlacement !== options.placement) return false
+  if (device === 'mobile' && isSidebarPlacement(adPlacement)) return false
+
+  if (String(ad.status ?? '').trim().toLowerCase() !== 'active') return false
+
+  const imageUrl = String(ad.image_url ?? '').trim()
+  const destinationUrl = String(ad.destination_url ?? '').trim()
+  if (!imageUrl || !isValidHttpUrl(imageUrl)) return false
+  if (!destinationUrl || !isValidHttpUrl(destinationUrl)) return false
+
+  const target = String(ad.device_target ?? '').trim().toLowerCase()
+  if (target !== 'both' && target !== device) return false
+
+  const startDate = String(ad.start_date ?? '').trim()
+  if (!startDate || Date.parse(startDate) > Date.parse(nowIso)) return false
+
+  const endDate = String(ad.end_date ?? '').trim()
+  if (endDate) {
+    const endTime = Date.parse(endDate)
+    if (!Number.isFinite(endTime) || endTime < Date.parse(nowIso)) return false
+  }
+
+  return true
+}
+
+export function getActiveAdsForPlacement(ads: AdRecord[], placement: AdPlacement, options: AdVisibilityOptions = {}) {
+  if (!Array.isArray(ads) || ads.length === 0) return []
+  const nowIso = resolveCurrentIso(options.nowIso)
+  return ads
+    .filter((ad) =>
+      shouldShowAd(ad, {
+        ...options,
+        placement,
+        nowIso
+      })
+    )
+    .sort((left, right) => {
+      const priorityDelta = Number(right.priority ?? 0) - Number(left.priority ?? 0)
+      if (priorityDelta !== 0) return priorityDelta
+      const leftCreatedAt = String(left.created_at ?? '')
+      const rightCreatedAt = String(right.created_at ?? '')
+      if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt.localeCompare(rightCreatedAt)
+      return String(left.id ?? '').localeCompare(String(right.id ?? ''))
+    })
+}
+
+function normalizeHeroTextAlignment(value: unknown) {
+  const alignment = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return alignment === 'center' || alignment === 'right' ? alignment : 'left'
+}
+
+function normalizeHeroSlide(value: unknown, fallbackIndex: number): HeroSlideData | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value as Partial<HeroSlideData>
+  const sortOrderRaw = Number(source.sort_order ?? fallbackIndex + 1)
+  return {
+    id: String(source.id ?? `hero-${fallbackIndex + 1}`).trim() || `hero-${fallbackIndex + 1}`,
+    is_active: typeof source.is_active === 'boolean' ? source.is_active : true,
+    sort_order: Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : fallbackIndex + 1,
+    eyebrow_text: String(source.eyebrow_text ?? '').trim().slice(0, 64),
+    badge_text: String(source.badge_text ?? '').trim().slice(0, 48),
+    title: String(source.title ?? '').trim().slice(0, 120),
+    subtitle: String(source.subtitle ?? '').trim().slice(0, 260),
+    primary_button_text: String(source.primary_button_text ?? '').trim().slice(0, 48),
+    primary_button_url: String(source.primary_button_url ?? '').trim().slice(0, 300),
+    secondary_button_text: String(source.secondary_button_text ?? '').trim().slice(0, 48),
+    secondary_button_url: String(source.secondary_button_url ?? '').trim().slice(0, 300),
+    background_image_url: String(source.background_image_url ?? '').trim().slice(0, 500),
+    overlay_intensity: Math.max(0, Math.min(100, Math.floor(Number(source.overlay_intensity ?? 70) || 70))),
+    text_alignment: normalizeHeroTextAlignment(source.text_alignment)
+  }
+}
+
+export function normalizeHeroSettings(value: unknown): HeroSettingsData {
+  const source = value && typeof value === 'object' ? (value as Partial<HeroSettingsData>) : {}
+  const sliderSpeedRaw = Number(source.slider_speed_seconds ?? defaultHeroSettingsData.slider_speed_seconds)
+  const slides = Array.isArray(source.slides)
+    ? source.slides
+        .map((slide, index) => normalizeHeroSlide(slide, index))
+        .filter((slide): slide is HeroSlideData => Boolean(slide))
+    : []
+
+  return {
+    slider_enabled: typeof source.slider_enabled === 'boolean' ? source.slider_enabled : defaultHeroSettingsData.slider_enabled,
+    autoplay: typeof source.autoplay === 'boolean' ? source.autoplay : defaultHeroSettingsData.autoplay,
+    slider_speed_seconds: Number.isFinite(sliderSpeedRaw)
+      ? Math.max(1, Math.floor(sliderSpeedRaw))
+      : defaultHeroSettingsData.slider_speed_seconds,
+    pause_on_hover:
+      typeof source.pause_on_hover === 'boolean' ? source.pause_on_hover : defaultHeroSettingsData.pause_on_hover,
+    show_arrows: typeof source.show_arrows === 'boolean' ? source.show_arrows : defaultHeroSettingsData.show_arrows,
+    show_dots: typeof source.show_dots === 'boolean' ? source.show_dots : defaultHeroSettingsData.show_dots,
+    eyebrow_text: String(source.eyebrow_text ?? defaultHeroSettingsData.eyebrow_text).trim().slice(0, 64),
+    badge_text: String(source.badge_text ?? defaultHeroSettingsData.badge_text).trim().slice(0, 48),
+    headline: String(source.headline ?? defaultHeroSettingsData.headline).trim().slice(0, 120),
+    subtitle: String(source.subtitle ?? defaultHeroSettingsData.subtitle).trim().slice(0, 260),
+    primary_cta_text: String(source.primary_cta_text ?? defaultHeroSettingsData.primary_cta_text).trim().slice(0, 48),
+    primary_cta_url: String(source.primary_cta_url ?? defaultHeroSettingsData.primary_cta_url).trim().slice(0, 300),
+    secondary_cta_text: String(source.secondary_cta_text ?? defaultHeroSettingsData.secondary_cta_text).trim().slice(0, 48),
+    secondary_cta_url: String(source.secondary_cta_url ?? defaultHeroSettingsData.secondary_cta_url).trim().slice(0, 300),
+    slides: slides.sort((left, right) => left.sort_order - right.sort_order)
+  }
+}
+
+export function getEnabledRails(configRails: RailConfigItem[]) {
+  if (!Array.isArray(configRails) || configRails.length === 0) {
+    return [] as RailConfigItem[]
+  }
+
+  const seenRailIds = new Set<string>()
+  return configRails.filter((rail) => {
+    const id = String(rail.id ?? '').trim()
+    const label = String(rail.label ?? '').trim()
+    const eventIds = Array.isArray(rail.event_ids)
+      ? rail.event_ids
+          .map((eventId) => String(eventId ?? '').trim())
+          .filter((eventId) => eventId.length > 0)
+      : []
+
+    if (!id || !label || eventIds.length === 0) return false
+    if (seenRailIds.has(id)) return false
+    seenRailIds.add(id)
+    return true
+  })
+}
+
+export function getRailItems(events: PublicEvent[], configRails: RailConfigItem[]) {
+  const enabledRails = getEnabledRails(configRails)
+  return enabledRails.length > 0 ? buildConfiguredRails(events, enabledRails) : buildDefaultEventRails(events)
+}
+
+export function injectSponsoredItems<T>(items: T[], sponsoredItems: AdRecord[], interval = 3) {
+  if (!Array.isArray(items) || items.length === 0) return items
+  if (!Array.isArray(sponsoredItems) || sponsoredItems.length === 0) return items
+
+  const safeInterval = Math.max(1, Math.floor(interval))
+  const output: Array<T | { kind: 'sponsored'; ad: AdRecord }> = []
+  let sponsoredIndex = 0
+
+  for (let index = 0; index < items.length; index += 1) {
+    output.push(items[index])
+    if ((index + 1) % safeInterval !== 0 || sponsoredIndex >= sponsoredItems.length) continue
+    output.push({
+      kind: 'sponsored',
+      ad: sponsoredItems[sponsoredIndex]
+    })
+    sponsoredIndex += 1
+  }
+
+  return output
+}
 
 export function buildConfiguredRails(events: PublicEvent[], configRails: RailConfigItem[]) {
-  if (!Array.isArray(configRails) || configRails.length === 0) {
+  const enabledRails = getEnabledRails(configRails)
+  if (enabledRails.length === 0) {
     return [] as Array<{
       id: string
       label: string
@@ -498,7 +679,7 @@ export function buildConfiguredRails(events: PublicEvent[], configRails: RailCon
     events: PublicEvent[]
   }> = []
 
-  for (const rail of configRails) {
+  for (const rail of enabledRails) {
     const eventList = (rail.event_ids ?? [])
       .map((eventId) => eventsById.get(String(eventId ?? '').trim()))
       .filter((event): event is PublicEvent => Boolean(event))

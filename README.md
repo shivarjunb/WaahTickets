@@ -158,6 +158,12 @@ Important note:
 
 That is temporary and intentional. It lets us move files without breaking the current web build on day one.
 
+## Settings Surface Notes
+
+- Admin settings now includes a dedicated `Hero` tab for configuring the public homepage hero.
+- Hero configuration is stored in the shared `app_settings` table and exposed to the storefront through `GET /api/public/hero/settings`.
+- The public homepage hero reads slider behavior, slide content, CTA links, and fallback overlay text from that saved hero configuration.
+
 ## Mobile App Notes
 
 The mobile app scaffold lives in `apps/mobile/` and is intended for Expo / React Native.

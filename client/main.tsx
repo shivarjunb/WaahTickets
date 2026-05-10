@@ -1,4 +1,5 @@
 import '../apps/web/src/main'
+import { AdSlot, RightRailAds } from '../apps/web/src/ads-ui'
 
 const buttonColorPresets: ButtonColorPreset[] = [
   { id: 'terracotta-sage', name: 'Terracotta Sage', primary: '#b56d4a', secondary: '#8a4930', text: '#fff7ef' },
@@ -994,6 +995,7 @@ function PublicApp({
     if (configuredRails.length > 0) return configuredRails
     return buildDefaultEventRails(filteredEvents)
   }, [filteredEvents, railsSettings.rails])
+  const eventListPageUrl = typeof window !== 'undefined' ? window.location.href : ''
   const featuredImages = useMemo(
     () =>
       featuredEvents.length > 0
@@ -1919,6 +1921,16 @@ function PublicApp({
               </aside>
 
               <div className="events-rails-column">
+                <div className="event-list-banner-slot">
+                  <AdSlot
+                    adsServed={0}
+                    fallbackHidden
+                    pageUrl={eventListPageUrl}
+                    placementKey="EVENT_LIST_BETWEEN_RAILS"
+                    railIndex={1}
+                    variant="banner"
+                  />
+                </div>
                 {eventRails.length === 0 ? (
                   <section className="panel events-panel">
                     <div className="public-empty">
@@ -2023,11 +2035,11 @@ function PublicApp({
                                 : 'Price announced soon'}
                             </div>
                           </div>
-                          <div className="event-card-actions">
-                            <button
-                              aria-label="Choose tickets"
-                              className="event-icon-button"
-                              title="Choose tickets"
+                        <div className="event-card-actions">
+                          <button
+                            aria-label="Choose tickets"
+                            className="event-icon-button"
+                            title="Choose tickets"
                               type="button"
                               onClick={() => {
                                 setSelectedEventId(event.id ?? null)
@@ -2047,6 +2059,18 @@ function PublicApp({
                             </button>
                           </div>
                         </div>
+                        {index < rail.events.length - 1 ? (
+                          <div className="event-inline-sponsored-slot">
+                            <AdSlot
+                              adsServed={index + 1}
+                              fallbackHidden
+                              pageUrl={eventListPageUrl}
+                              placementKey="EVENT_LIST_BETWEEN_RAILS"
+                              railIndex={index + 2}
+                              variant="card"
+                            />
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -2054,6 +2078,10 @@ function PublicApp({
                   ))
                 )}
               </div>
+
+              <aside className="events-right-rail" aria-label="Sponsored content">
+                <RightRailAds className="events-right-rail-ad" />
+              </aside>
             </div>
           </div>
         )}
@@ -2790,6 +2818,7 @@ function EventDetailsModal({
   onClose: () => void
   onViewTickets: () => void
 }) {
+  const pageUrl = typeof window !== 'undefined' ? window.location.href : ''
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal event-details-modal" role="dialog" aria-modal="true">
@@ -2802,33 +2831,72 @@ function EventDetailsModal({
             <X size={18} />
           </button>
         </header>
-        <div className="event-details-media">
-          <img
-            alt={event.name ? `${event.name} banner` : 'Event'}
-            src={imageUrl}
-            onError={(event) => {
-              if (event.currentTarget.dataset.fallbackApplied === '1') return
-              event.currentTarget.dataset.fallbackApplied = '1'
-              event.currentTarget.src = eventImagePlaceholder
-            }}
-          />
-        </div>
-        <div className="event-details-content">
-          <div className="event-details-meta">
-            <span>{formatEventDate(event.start_datetime)}</span>
-            <span>{formatEventTime(event.start_datetime)}</span>
-            <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General event'}</span>
-            <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
+        <div className="event-details-layout">
+          <div className="event-details-main">
+            <div className="event-details-media">
+              <img
+                alt={event.name ? `${event.name} banner` : 'Event'}
+                src={imageUrl}
+                onError={(event) => {
+                  if (event.currentTarget.dataset.fallbackApplied === '1') return
+                  event.currentTarget.dataset.fallbackApplied = '1'
+                  event.currentTarget.src = eventImagePlaceholder
+                }}
+              />
+            </div>
+
+            <div className="event-details-sponsored-slot">
+              <AdSlot
+                adsServed={0}
+                fallbackHidden
+                pageUrl={pageUrl}
+                placementKey="EVENT_DETAIL_BETWEEN_RAILS"
+                railIndex={1}
+                variant="card"
+              />
+            </div>
+
+            <div className="event-details-content">
+              <div className="event-details-meta">
+                <span>{formatEventDate(event.start_datetime)}</span>
+                <span>{formatEventTime(event.start_datetime)}</span>
+                <span>{event.event_type ? formatResourceName(String(event.event_type)) : 'General event'}</span>
+                <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
+              </div>
+              <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
+            </div>
+
+            <div className="event-details-bottom-sponsored">
+              <AdSlot
+                adsServed={1}
+                fallbackHidden
+                pageUrl={pageUrl}
+                placementKey="EVENT_DETAIL_BETWEEN_RAILS"
+                railIndex={2}
+                variant="rail"
+              />
+            </div>
+
+            <footer className="record-modal-actions">
+              <button type="button" onClick={onClose}>Close</button>
+              <button className="primary-admin-button" type="button" onClick={onViewTickets}>
+                <Ticket size={17} />
+                Buy tickets
+              </button>
+            </footer>
           </div>
-          <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
+
+          <aside className="event-details-right-rail" aria-label="Sponsored content">
+            <AdSlot
+              adsServed={2}
+              fallbackHidden
+              pageUrl={pageUrl}
+              placementKey="EVENT_DETAIL_BETWEEN_RAILS"
+              railIndex={3}
+              variant="sidebar"
+            />
+          </aside>
         </div>
-        <footer className="record-modal-actions">
-          <button type="button" onClick={onClose}>Close</button>
-          <button className="primary-admin-button" type="button" onClick={onViewTickets}>
-            <Ticket size={17} />
-            Buy tickets
-          </button>
-        </footer>
       </section>
     </div>
   )
@@ -3166,6 +3234,7 @@ function CartCheckoutModal({
   esewaMode: 'test' | 'live'
   esewaNote: string
 }) {
+  const pageUrl = typeof window !== 'undefined' ? window.location.href : ''
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal checkout-modal cart-checkout-modern" role="dialog" aria-modal="true">
@@ -3330,6 +3399,16 @@ function CartCheckoutModal({
               {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
               {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
             </button>
+            <div className="cart-checkout-sponsored-slot">
+              <AdSlot
+                adsServed={0}
+                fallbackHidden
+                pageUrl={pageUrl}
+                placementKey="CHECKOUT_BETWEEN_RAILS"
+                railIndex={1}
+                variant="card"
+              />
+            </div>
           </aside>
         </div>
         <div className="cart-checkout-note">

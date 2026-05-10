@@ -1,7 +1,7 @@
 
 
 
-import type { ButtonColorPreset, ButtonColorTheme, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, ResourceUiConfig, WebRoleName, EventLocationDraft, AdminDashboardMetrics } from './types';
+import type { ButtonColorPreset, ButtonColorTheme, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, ResourceUiConfig, WebRoleName, EventLocationDraft, AdminDashboardMetrics } from './types';
 import type { AdSettings } from '@waahtickets/shared-types';
 import { buildLastMonthLabels } from "./date-utils";
 
@@ -147,6 +147,24 @@ export const defaultAdminPaymentSettings: AdminPaymentSettingsData = {
 
 export const defaultCartSettingsData: CartSettingsData = {
   allow_multiple_events: true
+}
+
+export const defaultHeroSettingsData: HeroSettingsData = {
+  slider_enabled: true,
+  autoplay: true,
+  slider_speed_seconds: 6,
+  pause_on_hover: true,
+  show_arrows: true,
+  show_dots: true,
+  eyebrow_text: 'Discover local events',
+  badge_text: '',
+  headline: 'Your next experience starts here',
+  subtitle: 'Book concerts, restaurants, venues, festivals, theatre, and food events near you.',
+  primary_cta_text: 'Browse Events',
+  primary_cta_url: '#events',
+  secondary_cta_text: 'Create Event',
+  secondary_cta_url: '/admin/events/create',
+  slides: []
 }
 
 export const defaultAdSettingsData: AdSettings = {

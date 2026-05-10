@@ -15,6 +15,43 @@ export type ButtonColorTheme = {
   text: string
 }
 
+export type HeroTextAlignment = 'left' | 'center' | 'right'
+
+export type HeroSlideData = {
+  id: string
+  is_active: boolean
+  sort_order: number
+  eyebrow_text: string
+  badge_text: string
+  title: string
+  subtitle: string
+  primary_button_text: string
+  primary_button_url: string
+  secondary_button_text: string
+  secondary_button_url: string
+  background_image_url: string
+  overlay_intensity: number
+  text_alignment: HeroTextAlignment
+}
+
+export type HeroSettingsData = {
+  slider_enabled: boolean
+  autoplay: boolean
+  slider_speed_seconds: number
+  pause_on_hover: boolean
+  show_arrows: boolean
+  show_dots: boolean
+  eyebrow_text: string
+  badge_text: string
+  headline: string
+  subtitle: string
+  primary_cta_text: string
+  primary_cta_url: string
+  secondary_cta_text: string
+  secondary_cta_url: string
+  slides: HeroSlideData[]
+}
+
 
 export type ApiRecord = Record<string, unknown> & {
   id?: string
