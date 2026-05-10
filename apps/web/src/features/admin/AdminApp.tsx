@@ -2,10 +2,44 @@ import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "
 import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
+
+function readAdminResourceFromPath() {
+  if (typeof window === 'undefined') return DASHBOARD_VIEW
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  if (segments[0] !== 'admin') return DASHBOARD_VIEW
+  const page = segments[1] ? decodeURIComponent(segments[1]) : ''
+  if (!page || page === 'dashboard') return DASHBOARD_VIEW
+  if (page === 'settings') return SETTINGS_VIEW
+  if (page === 'ads') return ADS_VIEW
+  return page
+}
+
+function getAdminResourcePath(resource: string) {
+  if (resource === DASHBOARD_VIEW) return '/admin/dashboard'
+  if (resource === SETTINGS_VIEW) return '/admin/settings'
+  if (resource === ADS_VIEW) return '/admin/ads'
+  return `/admin/${encodeURIComponent(resource)}`
+}
+
+function inferSearchResource(query: string, fallbackResource: string, availableResources: string[]) {
+  const normalizedQuery = query.trim().toLowerCase()
+  const searchableResource =
+    fallbackResource !== DASHBOARD_VIEW && fallbackResource !== SETTINGS_VIEW && fallbackResource !== ADS_VIEW
+      ? fallbackResource
+      : ''
+  if (!normalizedQuery) return searchableResource || availableResources[0] || 'events'
+
+  const match = availableResources.find((resource) => {
+    const label = formatResourceName(resource).toLowerCase()
+    return label.includes(normalizedQuery) || normalizedQuery.includes(label) || resource.includes(normalizedQuery)
+  })
+
+  return match || searchableResource || availableResources[0] || 'events'
+}
 
 export default function AdminApp({
   user,
@@ -28,7 +62,7 @@ export default function AdminApp({
   const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
   const isAdminUser = user?.webrole === 'Admin'
   const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(getDefaultWebRoleView(user))
-  const [selectedResource, setSelectedResource] = useState(DASHBOARD_VIEW)
+  const [selectedResource, setSelectedResource] = useState(readAdminResourceFromPath)
   const [records, setRecords] = useState<ApiRecord[]>([])
   const [webRoleUsers, setWebRoleUsers] = useState<ApiRecord[]>([])
   const [webRoleMenuItems, setWebRoleMenuItems] = useState<ApiRecord[]>([])
@@ -109,7 +143,6 @@ export default function AdminApp({
   const isDashboardView = selectedResource === DASHBOARD_VIEW
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const isAdsView = selectedResource === ADS_VIEW
-  const reportsPath = resolveReportsPathForUser(user, isAdminUser ? selectedWebRole : undefined)
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
 
@@ -178,7 +211,6 @@ export default function AdminApp({
     return webRoleMenuItemsForSelectedRole.slice(startIndex, startIndex + subgridRowsPerPage)
   }, [subgridPage.menuItems, subgridRowsPerPage, totalMenuSubgridPages, webRoleMenuItemsForSelectedRole])
   const totalRecords = records.length
-  const isCustomerRoleView = selectedWebRole === 'Customers'
   const monthlyTicketSalesMax = useMemo(
     () => Math.max(1, ...dashboardMetrics.monthlyTicketSales.map((item) => item.count)),
     [dashboardMetrics.monthlyTicketSales]
@@ -213,18 +245,41 @@ export default function AdminApp({
     [visibleResources]
   )
   const visibleResourceGroups = useMemo(() => {
+    const resourcesShownInPrimary = new Set(sidebarPrimaryItems.map((item) => item.id))
     const sections = adminResourceGroups
       .map((group) => ({
         ...group,
-        resources: group.resources.filter((resource) => visibleResources.includes(resource))
+        resources: group.resources.filter(
+          (resource) => visibleResources.includes(resource) && !resourcesShownInPrimary.has(resource)
+        )
       }))
       .filter((group) => group.resources.length > 0)
-    const ungroupedResources = visibleResources.filter((resource) => !groupedAdminResources.has(resource))
+    const ungroupedResources = visibleResources.filter(
+      (resource) => !groupedAdminResources.has(resource) && !resourcesShownInPrimary.has(resource)
+    )
 
     return ungroupedResources.length > 0
       ? [...sections, { label: 'More', resources: ungroupedResources }]
       : sections
-  }, [visibleResources])
+  }, [sidebarPrimaryItems, visibleResources])
+
+  useEffect(() => {
+    setCollapsedMenuGroups(new Set(visibleResourceGroups.map((group) => group.label)))
+  }, [selectedWebRole, visibleResourceGroups])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPopState = () => setSelectedResource(readAdminResourceFromPath())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const nextPath = getAdminResourcePath(selectedResource)
+    if (window.location.pathname === nextPath) return
+    window.history.replaceState({}, '', `${nextPath}${window.location.search}`)
+  }, [selectedResource])
   const selectedPermissions =
     isDashboardView
       ? { can_create: false, can_edit: false, can_delete: false }
@@ -1784,6 +1839,23 @@ export default function AdminApp({
     await loadRecords()
   }
 
+  function runGlobalSearch(query: string) {
+    const nextQuery = query.trim()
+    setFilter(nextQuery)
+    setOrderCustomerFilter('')
+    setTablePageByResource((current) => ({
+      ...current,
+      [selectedResource]: 1
+    }))
+
+    if (!nextQuery) return
+
+    const targetResource = inferSearchResource(nextQuery, selectedResource, visibleResources)
+    if (targetResource !== selectedResource) {
+      setSelectedResource(targetResource)
+    }
+  }
+
   let adminMenuItemIndex = 0
   const viewLabel = isDashboardView ? 'Dashboard' : isSettingsView ? 'Settings' : isAdsView ? 'Ads' : resourceConfig.title
 
@@ -1886,43 +1958,6 @@ export default function AdminApp({
               </div>
             </section>
           ))}
-          {isAdminUser && selectedWebRole === 'Admin' ? (
-            <section className="admin-menu-section" aria-label="Settings">
-              <div className="admin-menu-items" style={{ maxHeight: '92px' }}>
-                <button
-                  className={isAdsView ? 'active' : ''}
-                  data-label="Ads"
-                  type="button"
-                  onClick={() => setSelectedResource(ADS_VIEW)}
-                >
-                  <LayoutDashboard size={17} />
-                  <span>Ads</span>
-                </button>
-                <button
-                  className={isSettingsView ? 'active' : ''}
-                  data-label="Settings"
-                  type="button"
-                  onClick={() => setSelectedResource(SETTINGS_VIEW)}
-                >
-                  <Settings2 size={17} />
-                  <span>Settings</span>
-                </button>
-              </div>
-            </section>
-          ) : null}
-          {reportsPath ? (
-            <section className="admin-menu-section" aria-label="Reports">
-              <button className="admin-menu-heading" type="button">
-                <span>Reports</span>
-              </button>
-              <div className="admin-menu-items" style={{ maxHeight: '46px' }}>
-                <a data-label="Reports" href={reportsPath}>
-                  <FileText size={17} />
-                  <span>Open reports</span>
-                </a>
-              </div>
-            </section>
-          ) : null}
         </nav>
       </aside>
 
@@ -1941,10 +1976,22 @@ export default function AdminApp({
                     : resourceConfig.description}
             </p>
           </div>
-          <label className="admin-global-search">
+          <form
+            className="admin-global-search"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault()
+              runGlobalSearch(filter)
+            }}
+          >
             <Search size={17} />
-            <input aria-label="Global admin search" placeholder="Search events, orders, partners..." />
-          </label>
+            <input
+              aria-label="Global admin search"
+              placeholder="Search events, orders, partners..."
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          </form>
           <div className="admin-header-actions">
             {user ? null : (
               <button type="button" onClick={onLoginClick}>
@@ -2006,11 +2053,116 @@ export default function AdminApp({
             <div className="admin-summary-grid admin-metric-grid">
               <StatCard icon={Banknote} label="Gross Sales" value={formatMoney(dashboardMetrics.currentTotalPaisa)} helperText="Loaded order value" />
               <StatCard icon={Ticket} label="Tickets Sold" value={dashboardMetrics.ticketsSoldLast30Days} helperText="Last 30 days" />
+              <StatCard icon={Users} label="Active Users" value={dashboardMetrics.activeUsersLast30Days} helperText="Last 30 days" />
+              <StatCard icon={CreditCard} label="Payment Success" value={`${dashboardMetrics.paymentSuccessRate}%`} helperText="Last 30 days" />
               <StatCard icon={CalendarDays} label="Active Events" value={dashboardMetrics.eventsLoaded} helperText="Currently loaded" />
               <StatCard icon={CreditCard} label="Pending Payouts" value="Review" helperText="Open settlements" />
               <StatCard icon={HandCoins} label="Partner Commissions" value="Ledger" helperText="Track commission entries" />
-              <StatCard icon={AlertTriangle} label="Refunds" value={dashboardMetrics.queueFailureCountLast30Days} helperText="Queue failures proxy" />
+              <StatCard icon={AlertTriangle} label="Queue Failures" value={dashboardMetrics.queueFailureCountLast30Days} helperText="Last 30 days" />
             </div>
+            <section className="admin-analytics-grid" aria-label="Admin insights charts">
+              <article className="admin-chart-card">
+                <header>
+                  <h2>
+                    <BarChart3 size={18} />
+                    Ticket Sales (Last 6 Months)
+                  </h2>
+                  <p>Month-on-month sold ticket volume.</p>
+                </header>
+                <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
+                  {dashboardMetrics.monthlyTicketSales.map((point) => (
+                    <div className="admin-insight-bar-group" key={point.label}>
+                      <div
+                        className="admin-insight-bar"
+                        style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
+                        title={`${point.label}: ${point.count} tickets`}
+                      />
+                      <span>{point.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="admin-chart-card">
+                <header>
+                  <h2>
+                    <Activity size={18} />
+                    Activity Mix (30d)
+                  </h2>
+                  <p>Orders, scans, queue processing, and payments.</p>
+                </header>
+                <div className="admin-activity-list">
+                  {dashboardMetrics.activityMix.map((item) => (
+                    <div className="admin-activity-row" key={item.label}>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <span>{item.count} actions</span>
+                      </div>
+                      <div className="admin-status-meter">
+                        <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="admin-chart-card">
+                <header>
+                  <h2>
+                    <Bell size={18} />
+                    Delivery Reliability
+                  </h2>
+                  <p>Queue health and payment status distribution for the last 30 days.</p>
+                </header>
+                <div className="admin-reliability-grid">
+                  <div className="admin-reliability-stat">
+                    <span>Queue success rate</span>
+                    <strong>
+                      {dashboardMetrics.queueJobsProcessedLast30Days > 0
+                        ? `${Math.max(
+                            0,
+                            Math.round(
+                              ((dashboardMetrics.queueJobsProcessedLast30Days -
+                                dashboardMetrics.queueFailureCountLast30Days) /
+                                dashboardMetrics.queueJobsProcessedLast30Days) *
+                                100
+                            )
+                          )}%`
+                        : '0%'}
+                    </strong>
+                    <p>
+                      {dashboardMetrics.queueJobsProcessedLast30Days -
+                        dashboardMetrics.queueFailureCountLast30Days}{' '}
+                      successful out of {dashboardMetrics.queueJobsProcessedLast30Days} queue jobs
+                    </p>
+                  </div>
+                  <div className="admin-payment-status-list">
+                    {dashboardMetrics.paymentStatusMix.length === 0 ? (
+                      <p className="admin-chart-empty">No payment status data found yet.</p>
+                    ) : (
+                      dashboardMetrics.paymentStatusMix.map((item) => (
+                        <div className="admin-status-row" key={item.label}>
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span>{item.count} payments</span>
+                          </div>
+                          <div className="admin-status-meter">
+                            <span
+                              style={{
+                                width: `${Math.max(
+                                  6,
+                                  Math.round((item.count / Math.max(1, paymentStatusTotal)) * 100)
+                                )}%`
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </article>
+            </section>
             <section className="admin-dashboard-panels">
               <article className="admin-chart-card">
                 <header><h2><Receipt size={18} /> Recent orders</h2><p>Open the Orders grid for detailed payment context.</p></header>
@@ -2842,145 +2994,6 @@ export default function AdminApp({
           </div>
         ) : (
           <>
-            {!isCustomerRoleView ? (
-              <>
-                <div className="admin-summary-grid">
-                  <div className="info-box">
-                    <Ticket size={24} />
-                    <div>
-                      <span>Tickets sold (30d)</span>
-                      <strong>{dashboardMetrics.ticketsSoldLast30Days}</strong>
-                    </div>
-                  </div>
-                  <div className="info-box">
-                    <Users size={24} />
-                    <div>
-                      <span>Active users (30d)</span>
-                      <strong>{dashboardMetrics.activeUsersLast30Days}</strong>
-                    </div>
-                  </div>
-                  <div className="info-box">
-                    <CreditCard size={24} />
-                    <div>
-                      <span>Payment success (30d)</span>
-                      <strong>{dashboardMetrics.paymentSuccessRate}%</strong>
-                    </div>
-                  </div>
-                  <div className="info-box">
-                    <AlertTriangle size={24} />
-                    <div>
-                      <span>Queue failures (30d)</span>
-                      <strong>{dashboardMetrics.queueFailureCountLast30Days}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                <section className="admin-analytics-grid" aria-label="Admin insights charts">
-                  <article className="admin-chart-card">
-                    <header>
-                      <h2>
-                        <BarChart3 size={18} />
-                        Ticket Sales (Last 6 Months)
-                      </h2>
-                      <p>Month-on-month sold ticket volume.</p>
-                    </header>
-                    <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
-                      {dashboardMetrics.monthlyTicketSales.map((point) => (
-                        <div className="admin-insight-bar-group" key={point.label}>
-                          <div
-                            className="admin-insight-bar"
-                            style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
-                            title={`${point.label}: ${point.count} tickets`}
-                          />
-                          <span>{point.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-
-                  <article className="admin-chart-card">
-                    <header>
-                      <h2>
-                        <Activity size={18} />
-                        Activity Mix (30d)
-                      </h2>
-                      <p>Orders, scans, queue processing, and payments.</p>
-                    </header>
-                    <div className="admin-activity-list">
-                      {dashboardMetrics.activityMix.map((item) => (
-                        <div className="admin-activity-row" key={item.label}>
-                          <div>
-                            <strong>{item.label}</strong>
-                            <span>{item.count} actions</span>
-                          </div>
-                          <div className="admin-status-meter">
-                            <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-
-                  <article className="admin-chart-card">
-                    <header>
-                      <h2>
-                        <Bell size={18} />
-                        Delivery Reliability
-                      </h2>
-                      <p>Queue health and payment status distribution for the last 30 days.</p>
-                    </header>
-                    <div className="admin-reliability-grid">
-                      <div className="admin-reliability-stat">
-                        <span>Queue success rate</span>
-                        <strong>
-                          {dashboardMetrics.queueJobsProcessedLast30Days > 0
-                            ? `${Math.max(
-                                0,
-                                Math.round(
-                                  ((dashboardMetrics.queueJobsProcessedLast30Days -
-                                    dashboardMetrics.queueFailureCountLast30Days) /
-                                    dashboardMetrics.queueJobsProcessedLast30Days) *
-                                    100
-                                )
-                              )}%`
-                            : '0%'}
-                        </strong>
-                        <p>
-                          {dashboardMetrics.queueJobsProcessedLast30Days -
-                            dashboardMetrics.queueFailureCountLast30Days}{' '}
-                          successful out of {dashboardMetrics.queueJobsProcessedLast30Days} queue jobs
-                        </p>
-                      </div>
-                      <div className="admin-payment-status-list">
-                        {dashboardMetrics.paymentStatusMix.length === 0 ? (
-                          <p className="admin-chart-empty">No payment status data found yet.</p>
-                        ) : (
-                          dashboardMetrics.paymentStatusMix.map((item) => (
-                            <div className="admin-status-row" key={item.label}>
-                              <div>
-                                <strong>{item.label}</strong>
-                                <span>{item.count} payments</span>
-                              </div>
-                              <div className="admin-status-meter">
-                                <span
-                                  style={{
-                                    width: `${Math.max(
-                                      6,
-                                      Math.round((item.count / Math.max(1, paymentStatusTotal)) * 100)
-                                    )}%`
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                </section>
-              </>
-            ) : null}
-
             <section className="admin-card">
               <div className="admin-card-header">
                 <div>
