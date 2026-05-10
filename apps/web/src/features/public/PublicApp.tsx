@@ -1118,8 +1118,15 @@ export default function PublicApp({
                 {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
                 <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
               </button>
-              <button className="nav-action" type="button" onClick={requestLoginWithGuestCartConfirmation}>
-                Login
+              <button
+                aria-label="Login"
+                className="nav-action mobile-icon-action"
+                title="Login"
+                type="button"
+                onClick={requestLoginWithGuestCartConfirmation}
+              >
+                <LogIn size={16} />
+                <span>Login</span>
               </button>
             </div>
           )}
@@ -1383,6 +1390,11 @@ export default function PublicApp({
                               Featured
                             </span>
                           ) : null}
+                          <span className="event-card-price">
+                            {typeof event.starting_price_paisa === 'number'
+                              ? `From ${formatMoney(event.starting_price_paisa)}`
+                              : 'Price announced soon'}
+                          </span>
                         </div>
                         <div className="event-card-body">
                           <div className="event-card-copy">
@@ -1391,11 +1403,6 @@ export default function PublicApp({
                               <span className="event-date">{formatEventDate(event.start_datetime)}</span>
                               <span>{formatEventTime(event.start_datetime)}</span>
                               <span>{event.location_name ?? event.organization_name ?? 'Venue pending'}</span>
-                            </div>
-                            <div className="event-card-price">
-                              {typeof event.starting_price_paisa === 'number'
-                                ? `From ${formatMoney(event.starting_price_paisa)}`
-                                : 'Price announced soon'}
                             </div>
                           </div>
                           <div className="event-card-actions">
