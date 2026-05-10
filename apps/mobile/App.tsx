@@ -3163,7 +3163,10 @@ function formatCountdown(milliseconds: number) {
 
 function formatPrice(value?: number) {
   if (!value && value !== 0) return 'Price soon'
-  return `NPR ${(value / 100).toFixed(2)}`
+  return `NPR ${new Intl.NumberFormat('en-NP', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value / 100)}`
 }
 
 function normalizePurchasedTicket(row: Record<string, unknown>): PurchasedTicket | null {

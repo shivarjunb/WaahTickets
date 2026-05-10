@@ -43,12 +43,19 @@ import {
   Trash2,
   Upload,
   AlertTriangle,
+  Banknote,
+  HandCoins,
+  Megaphone,
+  MoreHorizontal,
+  Receipt,
+  SlidersHorizontal,
   UserCog,
   Users,
   X
 } from 'lucide-react'
 import jsQR from 'jsqr'
-import type { AdPlacement, AdRecord, AdSettings } from '@waahtickets/shared-types'
+import { formatNpr, nprToPaisa, paisaToNpr, type AdPlacement, type AdRecord, type AdSettings } from '@waahtickets/shared-types'
+import { ReportsApp, isReportsRoute } from './reports'
 import {
   AdCampaignForm,
   AdsSettingsForm,
@@ -83,7 +90,17 @@ const fallbackResources = [
   'notification_queue',
   'ticket_scans',
   'coupons',
-  'coupon_redemptions'
+  'coupon_redemptions',
+  'partners',
+  'partner_users',
+  'referral_codes',
+  'commission_rules',
+  'commission_ledger',
+  'refunds',
+  'payout_batches',
+  'payout_items',
+  'partner_reporting_permissions',
+  'report_exports'
 ]
 
 const adminResourceGroups = [
@@ -101,7 +118,21 @@ const adminResourceGroups = [
   },
   {
     label: 'Sales',
-    resources: ['orders', 'order_items', 'payments', 'coupons', 'coupon_redemptions']
+    resources: ['orders', 'order_items', 'payments', 'refunds', 'coupons', 'coupon_redemptions']
+  },
+  {
+    label: 'Commissions',
+    resources: [
+      'partners',
+      'partner_users',
+      'referral_codes',
+      'commission_rules',
+      'commission_ledger',
+      'payout_batches',
+      'payout_items',
+      'partner_reporting_permissions',
+      'report_exports'
+    ]
   },
   {
     label: 'Content & messaging',
@@ -110,6 +141,7 @@ const adminResourceGroups = [
 ]
 
 const groupedAdminResources = new Set(adminResourceGroups.flatMap((group) => group.resources))
+const DASHBOARD_VIEW = '__dashboard__'
 const SETTINGS_VIEW = '__settings__'
 const ADS_VIEW = '__ads__'
 
@@ -485,6 +517,50 @@ type ResourceSort = {
   direction: SortDirection
 }
 
+type PaginationMetadata = {
+  page?: number
+  pageSize?: number
+  totalRecords?: number
+  totalPages?: number
+  hasPreviousPage?: boolean
+  hasNextPage?: boolean
+  from?: number
+  to?: number
+  limit?: number
+  offset?: number
+  has_more?: boolean
+}
+
+type ResourceUiConfig = {
+  title: string
+  description: string
+  columns: string[]
+  createLabel?: string
+  searchPlaceholder?: string
+  emptyState?: string
+}
+
+const resourceUiConfig: Record<string, ResourceUiConfig> = {
+  users: { title: 'Users', description: 'Manage accounts, contact details, role labels, and activation state.', columns: ['name', 'email', 'webrole', 'status', 'created_at'], createLabel: 'Create user', searchPlaceholder: 'Search users' },
+  web_roles: { title: 'Web Roles', description: 'Control admin console roles and permission groups.', columns: ['name', 'description', 'status', 'created_at'], createLabel: 'Create role' },
+  user_web_roles: { title: 'User Web Roles', description: 'Assign users to web roles with readable account and role context.', columns: ['user_name', 'user_email', 'web_role_name', 'organization_name', 'created_at'], emptyState: 'No web roles assigned yet.' },
+  organizations: { title: 'Organizers', description: 'Manage event organizers, business profiles, and account status.', columns: ['name', 'contact_email', 'status', 'created_at'], createLabel: 'Create organizer' },
+  organization_users: { title: 'Organizer Users', description: 'Manage organizer team members and access levels.', columns: ['organization_name', 'user_name', 'user_email', 'role', 'created_at'] },
+  events: { title: 'Events', description: 'Manage event listings, schedules, ticket inventory, and publishing status.', columns: ['name', 'organization_name', 'start_datetime', 'status', 'tickets_sold', 'revenue_paisa', 'created_at'], createLabel: 'Create event', searchPlaceholder: 'Search events', emptyState: 'No events created yet.' },
+  ticket_types: { title: 'Tickets', description: 'Configure ticket inventory, pricing, sales windows, and availability.', columns: ['event_title', 'name', 'price_paisa', 'quantity_available', 'quantity_sold', 'is_active'] },
+  tickets: { title: 'Issued Tickets', description: 'Review issued tickets, payment state, redemption, and customer ownership.', columns: ['event_title', 'ticket_type_name', 'ticket_number', 'customer_name', 'status', 'is_paid', 'created_at'] },
+  orders: { title: 'Orders', description: 'Track purchases, payment state, order value, and customer activity.', columns: ['order_number', 'event_title', 'customer_name', 'total_amount_paisa', 'status', 'created_at'], searchPlaceholder: 'Search orders' },
+  partners: { title: 'Partners', description: 'Manage influencers, affiliates, promoters, and sales partners.', columns: ['name', 'partner_type', 'parent_partner_name', 'status', 'created_at'], createLabel: 'Create partner', searchPlaceholder: 'Search partners', emptyState: 'No partners created yet.' },
+  referral_codes: { title: 'Referral Codes', description: 'Track influencer and partner attribution codes.', columns: ['code', 'partner_name', 'event_title', 'status', 'used_count', 'created_at'], createLabel: 'Create referral code', searchPlaceholder: 'Search referral codes', emptyState: 'No referral codes created yet.' },
+  commission_rules: { title: 'Commission Rules', description: 'Configure platform fees, partner commissions, and influencer payouts.', columns: ['name', 'event_title', 'partner_name', 'commission_type', 'commission_value', 'commission_source', 'status'] },
+  commission_ledger: { title: 'Commission Ledger', description: 'Audit commission entries by order, event, beneficiary, and status.', columns: ['order_number', 'event_title', 'beneficiary_name', 'commission_type', 'base_amount_paisa', 'commission_amount_paisa', 'status', 'created_at'] },
+  payout_batches: { title: 'Settlements', description: 'Review payout batches and settlement processing state.', columns: ['batch_type', 'event_title', 'beneficiary_name', 'total_amount_paisa', 'status', 'paid_at'] },
+  payout_items: { title: 'Payout Items', description: 'Inspect payout recipients, amounts, and processing status.', columns: ['beneficiary_name', 'beneficiary_type', 'amount_paisa', 'status', 'created_at'] },
+  refunds: { title: 'Refunds', description: 'Monitor refund requests, reasons, and returned amounts.', columns: ['order_number', 'event_title', 'status', 'refund_amount_paisa', 'created_at'] },
+  files: { title: 'Files', description: 'Manage uploaded event assets, PDFs, and storage metadata.', columns: ['file_name', 'file_type', 'mime_type', 'size_bytes', 'created_at'] },
+  ads: { title: 'Ads', description: 'Manage promotional placements across web and mobile.', columns: ['name', 'advertiser_name', 'placement', 'device_target', 'status', 'start_date', 'end_date'], createLabel: 'Create ad' }
+}
+
 const roleAccess: Record<
   WebRoleName,
   Record<string, { can_create: boolean; can_edit: boolean; can_delete: boolean }>
@@ -537,7 +613,16 @@ const lookupResourceByField: Record<string, string> = {
   coupon_id: 'coupons',
   web_role_id: 'web_roles',
   banner_file_id: 'files',
-  pdf_file_id: 'files'
+  pdf_file_id: 'files',
+  partner_id: 'partners',
+  parent_partner_id: 'partners',
+  referral_code_id: 'referral_codes',
+  commission_rule_id: 'commission_rules',
+  payout_batch_id: 'payout_batches',
+  commission_ledger_id: 'commission_ledger',
+  grantee_partner_id: 'partners',
+  subject_partner_id: 'partners',
+  requested_by_user_id: 'users'
 }
 
 const fieldSelectOptions: Record<string, Record<string, string[]>> = {
@@ -561,16 +646,22 @@ const requiredFieldsByResource: Record<string, string[]> = {
   web_roles: ['name'],
   user_web_roles: ['user_id', 'web_role_id'],
   web_role_menu_items: ['web_role_id', 'resource_name'],
-  payments: ['order_id', 'customer_id', 'amount_paisa']
+  payments: ['order_id', 'customer_id', 'amount_paisa'],
+  partners: ['name', 'partner_type'],
+  partner_users: ['partner_id', 'user_id', 'role'],
+  referral_codes: ['code', 'partner_id'],
+  commission_rules: ['name', 'applies_to', 'commission_type', 'stacking_behavior', 'commission_source'],
+  commission_ledger: ['order_id', 'event_id', 'beneficiary_type', 'beneficiary_id', 'commission_type', 'commission_amount_paisa', 'commission_source', 'status'],
+  refunds: ['order_id', 'status', 'refund_amount_paisa'],
+  payout_batches: ['batch_type', 'status', 'total_amount_paisa'],
+  payout_items: ['payout_batch_id', 'beneficiary_type', 'beneficiary_id', 'amount_paisa', 'status'],
+  partner_reporting_permissions: ['grantee_partner_id', 'subject_partner_id', 'permission_type'],
+  report_exports: ['report_type', 'requested_by_user_id', 'role', 'filters_json', 'status']
 }
 
 type ApiListResponse = {
   data?: ApiRecord[]
-  pagination?: {
-    limit?: number
-    offset?: number
-    has_more?: boolean
-  }
+  pagination?: PaginationMetadata
   error?: string
   message?: string
 }
@@ -638,6 +729,7 @@ type AdminRailsSettingsData = PublicRailsSettingsData & {
     name: string
     status?: string
     start_datetime?: string
+    event_type?: string
   }>
 }
 
@@ -744,6 +836,16 @@ const hiddenTableColumns = new Set([
   'web_role_id',
   'message_id',
   'coupon_id',
+  'payment_id',
+  'partner_id',
+  'parent_partner_id',
+  'referral_code_id',
+  'commission_rule_id',
+  'commission_ledger_id',
+  'payout_batch_id',
+  'grantee_partner_id',
+  'subject_partner_id',
+  'requested_by_user_id',
   'created_by',
   'redeemed_by',
   'banner_file_id',
@@ -924,13 +1026,30 @@ function App() {
 
   const isValidatorRoute = path === '/admin/validator' || path.startsWith('/admin/validator/')
   const isTicketVerifyRoute = path === '/ticket/verify'
+  const isReportsView = isReportsRoute(path)
   const canAccessValidator =
     user?.webrole === 'Admin' || user?.webrole === 'Organizations' || user?.webrole === 'TicketValidator'
   const qrVerifyToken = isTicketVerifyRoute ? new URLSearchParams(window.location.search).get('token') : null
 
   return (
     <>
-      {path.startsWith('/admin') ? (
+      {isReportsView ? (
+        isAuthLoading ? (
+          <main className="auth-gate">
+            <section className="auth-gate-panel admin-loading-panel" aria-label="Loading reports">
+              <div className="thin-spinner" role="status" aria-label="Loading" />
+            </section>
+          </main>
+        ) : user ? (
+          user.is_active === false || !user.is_email_verified ? (
+            <AccountAccessBlocked user={user} onLogout={logout} />
+          ) : (
+            <ReportsApp currentPath={path} user={user} onNavigate={navigate} onLogout={logout} />
+          )
+        ) : (
+          <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
+        )
+      ) : path.startsWith('/admin') ? (
         isAuthLoading ? (
           <main className="auth-gate">
             <section className="auth-gate-panel admin-loading-panel" aria-label="Loading admin dashboard">
@@ -4534,6 +4653,29 @@ function CustomerTicketModal({
   )
 }
 
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  helperText
+}: {
+  icon: typeof Activity
+  label: string
+  value: string | number
+  helperText?: string
+}) {
+  return (
+    <article className="info-box stat-card">
+      <Icon size={24} />
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        {helperText ? <small>{helperText}</small> : null}
+      </div>
+    </article>
+  )
+}
+
 function AdminApp({
   user,
   onLoginClick,
@@ -4555,7 +4697,7 @@ function AdminApp({
   const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
   const isAdminUser = user?.webrole === 'Admin'
   const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(getDefaultWebRoleView(user))
-  const [selectedResource, setSelectedResource] = useState('events')
+  const [selectedResource, setSelectedResource] = useState(DASHBOARD_VIEW)
   const [records, setRecords] = useState<ApiRecord[]>([])
   const [webRoleUsers, setWebRoleUsers] = useState<ApiRecord[]>([])
   const [webRoleMenuItems, setWebRoleMenuItems] = useState<ApiRecord[]>([])
@@ -4576,6 +4718,7 @@ function AdminApp({
   const [tableSortByResource, setTableSortByResource] = useState<Record<string, ResourceSort>>({})
   const [tablePageByResource, setTablePageByResource] = useState<Record<string, number>>({})
   const [tableHasMoreByResource, setTableHasMoreByResource] = useState<Record<string, boolean>>({})
+  const [tablePaginationByResource, setTablePaginationByResource] = useState<Record<string, PaginationMetadata>>({})
   const [orderCustomerFilter, setOrderCustomerFilter] = useState('')
   const [orderCustomerOptions, setOrderCustomerOptions] = useState<OrderCustomerOption[]>([])
   const [subgridRowsPerPage, setSubgridRowsPerPage] = useState<number>(() => loadAdminSubgridRowsPerPage())
@@ -4632,12 +4775,22 @@ function AdminApp({
   const [adFormError, setAdFormError] = useState('')
   const [ticketQrModalValue, setTicketQrModalValue] = useState('')
   const [ticketQrModalLabel, setTicketQrModalLabel] = useState('')
+  const isDashboardView = selectedResource === DASHBOARD_VIEW
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const isAdsView = selectedResource === ADS_VIEW
+  const reportsPath = resolveReportsPathForUser(user, isAdminUser ? selectedWebRole : undefined)
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
 
-  const defaultTableColumns = useMemo(() => getTableColumns(records), [records])
+  const resourceConfig = resourceUiConfig[selectedResource] ?? {
+    title: formatResourceName(selectedResource),
+    description: `Manage ${formatResourceName(selectedResource).toLowerCase()} records.`,
+    columns: []
+  }
+  const defaultTableColumns = useMemo(
+    () => getTableColumns(selectedResource, records),
+    [records, selectedResource]
+  )
   const availableColumns = useMemo(
     () => getAvailableColumns(resourceColumnsCatalog[selectedResource] ?? [], records),
     [records, resourceColumnsCatalog, selectedResource]
@@ -4668,7 +4821,9 @@ function AdminApp({
   const activeSort = tableSortByResource[selectedResource] ?? null
   const tableRowsPerPage = subgridRowsPerPage
   const currentTablePage = Math.max(1, tablePageByResource[selectedResource] ?? 1)
-  const currentTableHasMore = tableHasMoreByResource[selectedResource] ?? false
+  const currentPagination = tablePaginationByResource[selectedResource]
+  const currentTableHasMore = currentPagination?.hasNextPage ?? tableHasMoreByResource[selectedResource] ?? false
+  const currentTotalPages = currentPagination?.totalPages
   const isCustomerRoleOverride = user?.webrole === 'TicketValidator' && selectedWebRole === 'Customers'
   const canOpenTicketValidation = hasTicketValidationAccess(user)
   const webRoleUsersForSelectedRole = useMemo(
@@ -4709,6 +4864,23 @@ function AdminApp({
     () => resources.filter((resource) => roleAccess[selectedWebRole][resource]),
     [resources, selectedWebRole]
   )
+  const sidebarPrimaryItems = useMemo(
+    () => [
+      { id: DASHBOARD_VIEW, label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'events', label: 'Events', icon: CalendarDays },
+      { id: 'orders', label: 'Orders', icon: Receipt },
+      { id: 'ticket_types', label: 'Tickets', icon: Ticket },
+      { id: 'organizations', label: 'Organizers', icon: Building2 },
+      { id: 'partners', label: 'Partners', icon: HandCoins },
+      { id: 'referral_codes', label: 'Referral Codes', icon: Megaphone },
+      { id: 'commission_rules', label: 'Commissions', icon: Banknote },
+      { id: 'payout_batches', label: 'Settlements', icon: CreditCard },
+      { id: 'report_exports', label: 'Reports', icon: FileText },
+      { id: ADS_VIEW, label: 'Ads', icon: Megaphone },
+      { id: SETTINGS_VIEW, label: 'Settings', icon: Settings2 }
+    ].filter((item) => item.id === DASHBOARD_VIEW || item.id === ADS_VIEW || item.id === SETTINGS_VIEW || visibleResources.includes(item.id)),
+    [visibleResources]
+  )
   const visibleResourceGroups = useMemo(() => {
     const sections = adminResourceGroups
       .map((group) => ({
@@ -4723,7 +4895,9 @@ function AdminApp({
       : sections
   }, [visibleResources])
   const selectedPermissions =
-    isSettingsView && selectedWebRole === 'Admin'
+    isDashboardView
+      ? { can_create: false, can_edit: false, can_delete: false }
+      : isSettingsView && selectedWebRole === 'Admin'
       ? { can_create: true, can_edit: true, can_delete: false }
       : (roleAccess[selectedWebRole][selectedResource] ?? {
           can_create: false,
@@ -4758,6 +4932,11 @@ function AdminApp({
 
   useEffect(() => {
     setSelectedRecord(null)
+    if (isDashboardView) {
+      setRecords([])
+      setStatus('Dashboard')
+      return
+    }
     if (isSettingsView) {
       setRecords([])
       setStatus('R2 settings')
@@ -4772,6 +4951,7 @@ function AdminApp({
     void loadRecords(selectedResource, currentTablePage)
   }, [
     isSettingsView,
+    isDashboardView,
     isAdsView,
     selectedResource,
     currentTablePage,
@@ -4803,6 +4983,7 @@ function AdminApp({
   }, [records, selectedResource])
 
   useEffect(() => {
+    if (selectedResource === DASHBOARD_VIEW) return
     if (selectedResource === SETTINGS_VIEW || selectedResource === ADS_VIEW) {
       if (isAdminUser && selectedWebRole === 'Admin') {
         return
@@ -5528,9 +5709,14 @@ function AdminApp({
       const endpoint = `/api/${resource}?${query.toString()}`
       const { data } = await fetchJson<ApiListResponse>(endpoint)
       const loadedRecords = data.data ?? []
-      const hasMore = Boolean(data.pagination?.has_more)
+      const pagination = normalizePagination(data.pagination, page, tableRowsPerPage, loadedRecords.length)
+      const hasMore = Boolean(pagination.hasNextPage ?? pagination.has_more)
 
       setRecords(loadedRecords)
+      setTablePaginationByResource((current) => ({
+        ...current,
+        [resource]: pagination
+      }))
       setTableHasMoreByResource((current) => ({
         ...current,
         [resource]: hasMore
@@ -5540,12 +5726,16 @@ function AdminApp({
         setSelectedWebRoleId((current) => current || firstWebRoleId)
       }
 
-      setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded on page ${page}`)
+      setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded`)
     } catch (error) {
       setRecords([])
       setTableHasMoreByResource((current) => ({
         ...current,
         [resource]: false
+      }))
+      setTablePaginationByResource((current) => ({
+        ...current,
+        [resource]: normalizePagination(undefined, page, tableRowsPerPage, 0)
       }))
       setStatus(getErrorMessage(error))
     } finally {
@@ -6264,7 +6454,7 @@ function AdminApp({
   }
 
   let adminMenuItemIndex = 0
-  const viewLabel = isSettingsView ? 'Settings' : isAdsView ? 'Ads' : formatResourceName(selectedResource)
+  const viewLabel = isDashboardView ? 'Dashboard' : isSettingsView ? 'Settings' : isAdsView ? 'Ads' : resourceConfig.title
 
   return (
     <div className={isSidebarCollapsed ? 'admin-app sidebar-collapsed' : 'admin-app'}>
@@ -6305,6 +6495,26 @@ function AdminApp({
           </label>
         ) : null}
         <nav className="admin-menu" aria-label="Admin resources">
+          <section className="admin-menu-section admin-menu-primary" aria-label="Primary admin navigation">
+            <div className="admin-menu-items" style={{ maxHeight: `${sidebarPrimaryItems.length * 46}px` }}>
+              {sidebarPrimaryItems.map((item) => {
+                const ItemIcon = item.icon
+                const isActive = item.id === selectedResource
+                return (
+                  <button
+                    className={isActive ? 'active' : ''}
+                    data-label={item.label}
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedResource(item.id)}
+                  >
+                    <ItemIcon size={17} />
+                    <span>{item.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
           {visibleResourceGroups.map((group) => (
             <section
               className={collapsedMenuGroups.has(group.label) ? 'admin-menu-section collapsed' : 'admin-menu-section'}
@@ -6369,6 +6579,19 @@ function AdminApp({
               </div>
             </section>
           ) : null}
+          {reportsPath ? (
+            <section className="admin-menu-section" aria-label="Reports">
+              <button className="admin-menu-heading" type="button">
+                <span>Reports</span>
+              </button>
+              <div className="admin-menu-items" style={{ maxHeight: '46px' }}>
+                <a data-label="Reports" href={reportsPath}>
+                  <FileText size={17} />
+                  <span>Open reports</span>
+                </a>
+              </div>
+            </section>
+          ) : null}
         </nav>
       </aside>
 
@@ -6377,7 +6600,20 @@ function AdminApp({
           <div>
             <p className="admin-breadcrumb">Home / Admin / {viewLabel}</p>
             <h1>{viewLabel}</h1>
+            <p className="admin-page-subtitle">
+              {isDashboardView
+                ? 'Ticketing operations, revenue, payouts, and partner performance in one console.'
+                : isSettingsView
+                  ? 'Configure storage, payments, rails, appearance, and grid preferences.'
+                  : isAdsView
+                    ? resourceUiConfig.ads.description
+                    : resourceConfig.description}
+            </p>
           </div>
+          <label className="admin-global-search">
+            <Search size={17} />
+            <input aria-label="Global admin search" placeholder="Search events, orders, partners..." />
+          </label>
           <div className="admin-header-actions">
             {user ? null : (
               <button type="button" onClick={onLoginClick}>
@@ -6407,10 +6643,59 @@ function AdminApp({
               <Database size={17} />
               Seed
             </button>
+            <button className="admin-user-menu-button" type="button" aria-label="User menu" title={user?.email ?? 'User menu'}>
+              <MoreHorizontal size={17} />
+            </button>
           </div>
         </header>
 
-        {isSettingsView ? (
+        {isDashboardView ? (
+          <>
+            <section className="admin-dashboard-hero">
+              <div>
+                <p className="admin-kicker">Waah Tickets command center</p>
+                <h2>Event revenue, ticket flow, partner payouts, and platform health.</h2>
+                <p>Use the sidebar to manage events, orders, tickets, partners, referrals, settlements, ads, and reports.</p>
+              </div>
+              <div className="admin-quick-actions">
+                <button className="primary-admin-button" type="button" onClick={() => setSelectedResource('events')}>
+                  <Plus size={17} />
+                  Create event
+                </button>
+                <button type="button" onClick={() => setSelectedResource('orders')}>
+                  <Receipt size={17} />
+                  Review orders
+                </button>
+                <button type="button" onClick={() => setSelectedResource('payout_batches')}>
+                  <CreditCard size={17} />
+                  Settlements
+                </button>
+              </div>
+            </section>
+            <div className="admin-summary-grid admin-metric-grid">
+              <StatCard icon={Banknote} label="Gross Sales" value={formatMoney(dashboardMetrics.currentTotalPaisa)} helperText="Loaded order value" />
+              <StatCard icon={Ticket} label="Tickets Sold" value={dashboardMetrics.ticketsSoldLast30Days} helperText="Last 30 days" />
+              <StatCard icon={CalendarDays} label="Active Events" value={dashboardMetrics.eventsLoaded} helperText="Currently loaded" />
+              <StatCard icon={CreditCard} label="Pending Payouts" value="Review" helperText="Open settlements" />
+              <StatCard icon={HandCoins} label="Partner Commissions" value="Ledger" helperText="Track commission entries" />
+              <StatCard icon={AlertTriangle} label="Refunds" value={dashboardMetrics.queueFailureCountLast30Days} helperText="Queue failures proxy" />
+            </div>
+            <section className="admin-dashboard-panels">
+              <article className="admin-chart-card">
+                <header><h2><Receipt size={18} /> Recent orders</h2><p>Open the Orders grid for detailed payment context.</p></header>
+                <button type="button" onClick={() => setSelectedResource('orders')}>View orders</button>
+              </article>
+              <article className="admin-chart-card">
+                <header><h2><CalendarDays size={18} /> Upcoming events</h2><p>Manage schedules, ticket inventory, and publishing status.</p></header>
+                <button type="button" onClick={() => setSelectedResource('events')}>View events</button>
+              </article>
+              <article className="admin-chart-card">
+                <header><h2><HandCoins size={18} /> Partner commissions</h2><p>Review rules, referral attribution, and ledger entries.</p></header>
+                <button type="button" onClick={() => setSelectedResource('commission_ledger')}>View ledger</button>
+              </article>
+            </section>
+          </>
+        ) : isSettingsView ? (
           <>
             <section className="admin-card settings-card settings-nav-card">
               <div className="settings-subnav">
@@ -6600,12 +6885,24 @@ function AdminApp({
                     const searchQuery = (railEventSearchByRailId[railKey] ?? '').trim().toLowerCase()
                     const filteredEvents = railsSettingsData.available_events.filter((event) => {
                       if (!searchQuery) return true
-                      const haystack = `${event.name} ${event.status ?? ''} ${event.start_datetime ?? ''}`.toLowerCase()
+                      const haystack = `${event.name} ${event.event_type ?? ''} ${event.status ?? ''} ${event.start_datetime ?? ''}`.toLowerCase()
                       return haystack.includes(searchQuery)
                     })
-                    const selectedEvents = railsSettingsData.available_events.filter((event) =>
-                      (rail.event_ids ?? []).includes(event.id)
-                    )
+                    const availableEventsById = new Map(railsSettingsData.available_events.map((event) => [event.id, event]))
+                    const selectedEventIds = new Set(rail.event_ids ?? [])
+                    const selectedEvents = (rail.event_ids ?? [])
+                      .map((eventId) => {
+                        const matched = availableEventsById.get(eventId)
+                        if (matched) return matched
+                        return {
+                          id: eventId,
+                          name: eventId,
+                          status: '',
+                          start_datetime: '',
+                          event_type: ''
+                        }
+                      })
+                      .filter(Boolean)
                     const minInterval = Number(railsSettingsData.min_interval_seconds ?? 3)
                     const maxInterval = Number(railsSettingsData.max_interval_seconds ?? 30)
                     const railInterval = Math.max(
@@ -6717,21 +7014,27 @@ function AdminApp({
                           </label>
                           <div className="rails-events-select rails-events-picker">
                             <div className="rails-events-picker-header">
-                              <span>Events in this rail ({selectedEvents.length})</span>
-                              <input
-                                placeholder="Search events..."
-                                type="search"
-                                value={railEventSearchByRailId[railKey] ?? ''}
-                                onChange={(event) =>
-                                  setRailEventSearchByRailId((current) => ({
-                                    ...current,
-                                    [railKey]: event.target.value
-                                  }))
-                                }
-                              />
+                              <div>
+                                <span>Events in this rail</span>
+                                <small>{selectedEvents.length} selected</small>
+                              </div>
+                              <label className="rails-events-search">
+                                <Search size={16} />
+                                <input
+                                  placeholder="Search by name, type, or date..."
+                                  type="search"
+                                  value={railEventSearchByRailId[railKey] ?? ''}
+                                  onChange={(event) =>
+                                    setRailEventSearchByRailId((current) => ({
+                                      ...current,
+                                      [railKey]: event.target.value
+                                    }))
+                                  }
+                                />
+                              </label>
                             </div>
                             {selectedEvents.length > 0 ? (
-                              <div className="rails-selected-chips">
+                              <div className="rails-selected-chips" aria-label={`Selected events for ${rail.label || `rail ${index + 1}`}`}>
                                 {selectedEvents.map((event) => (
                                   <button
                                     className="rails-selected-chip"
@@ -6744,23 +7047,51 @@ function AdminApp({
                                   </button>
                                 ))}
                               </div>
-                            ) : null}
-                            <div className="rails-event-checkbox-list">
+                            ) : (
+                              <p className="upload-hint">No events selected yet. Choose events from the list below.</p>
+                            )}
+                            <div className="rails-event-option-list">
                               {filteredEvents.length === 0 ? (
                                 <p className="upload-hint">No events match your search.</p>
                               ) : (
                                 filteredEvents.map((event) => (
-                                  <label className="rails-event-checkbox-row" key={`event-${railKey}-${event.id}`}>
-                                    <input
-                                      checked={(rail.event_ids ?? []).includes(event.id)}
-                                      type="checkbox"
-                                      onChange={() => toggleRailEventSelection(index, event.id)}
-                                    />
-                                    <span>
-                                      {event.name}
-                                      {event.start_datetime ? ` • ${formatEventDate(event.start_datetime)}` : ''}
+                                  <button
+                                    aria-pressed={selectedEventIds.has(event.id)}
+                                    className={`rails-event-option${selectedEventIds.has(event.id) ? ' selected' : ''}`}
+                                    key={`event-${railKey}-${event.id}`}
+                                    type="button"
+                                    onClick={() => toggleRailEventSelection(index, event.id)}
+                                  >
+                                    <div className="rails-event-option-copy">
+                                      <strong>{event.name}</strong>
+                                      <div className="rails-event-option-meta">
+                                        {event.event_type ? (
+                                          <span>{formatResourceName(event.event_type)}</span>
+                                        ) : null}
+                                        {event.start_datetime ? (
+                                          <span>
+                                            {formatEventDate(event.start_datetime)} at {formatEventTime(event.start_datetime)}
+                                          </span>
+                                        ) : (
+                                          <span>Date TBA</span>
+                                        )}
+                                        {event.status ? <span>{event.status}</span> : null}
+                                      </div>
+                                    </div>
+                                    <span className="rails-event-option-action">
+                                      {selectedEventIds.has(event.id) ? (
+                                        <>
+                                          <CheckCircle2 size={16} />
+                                          Added
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Plus size={16} />
+                                          Add
+                                        </>
+                                      )}
                                     </span>
-                                  </label>
+                                  </button>
                                 ))
                               )}
                             </div>
@@ -7322,15 +7653,15 @@ function AdminApp({
             <section className="admin-card">
               <div className="admin-card-header">
                 <div>
-                  <h2>Records</h2>
-                  <p>{isLoading ? 'Working...' : status}</p>
+                  <h2>{resourceConfig.title}</h2>
+                  <p>{resourceConfig.description}</p>
                 </div>
                 <div className="admin-table-actions">
                   <label className="admin-search">
                     <Search size={17} />
                     <input
-                      aria-label="Search records"
-                      placeholder="Search records"
+                      aria-label={resourceConfig.searchPlaceholder ?? `Search ${resourceConfig.title.toLowerCase()}`}
+                      placeholder={resourceConfig.searchPlaceholder ?? `Search ${resourceConfig.title.toLowerCase()}`}
                       value={filter}
                       onChange={(event) => setFilter(event.target.value)}
                     />
@@ -7370,8 +7701,8 @@ function AdminApp({
                   {isAdminUser && selectedWebRole === 'Admin' ? (
                     <div className="column-picker">
                       <button type="button" onClick={() => setIsColumnPickerOpen((current) => !current)}>
-                        {isColumnPickerOpen ? <SquareMinus size={17} /> : <SquarePlus size={17} />}
-                        Columns
+                        <SlidersHorizontal size={17} />
+                        Manage columns
                       </button>
                       {isColumnPickerOpen ? (
                         <div className="column-picker-panel">
@@ -7400,10 +7731,11 @@ function AdminApp({
                     onClick={openCreateModal}
                   >
                     <Plus size={17} />
-                    Create
+                    {resourceConfig.createLabel ?? `Create ${resourceConfig.title.replace(/s$/, '').toLowerCase()}`}
                   </button>
                 </div>
               </div>
+              {recordError ? <div className="admin-table-alert" role="alert">{recordError}</div> : null}
 
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -7446,16 +7778,30 @@ function AdminApp({
                     </tr>
                   </thead>
                   <tbody>
-                    {records.length === 0 ? (
+                    {isLoading ? (
+                      Array.from({ length: Math.min(5, tableRowsPerPage) }).map((_, rowIndex) => (
+                        <tr className="admin-skeleton-row" key={`loading-${rowIndex}`}>
+                          {tableColumns.map((column) => (
+                            <td key={`${rowIndex}-${column}`}><span className="admin-skeleton-cell" /></td>
+                          ))}
+                          <td><span className="admin-skeleton-cell short" /></td>
+                        </tr>
+                      ))
+                    ) : records.length === 0 ? (
                       <tr>
                         <td colSpan={tableColumns.length + 1}>
-                          <div className="table-empty">No records found</div>
+                          <div className="table-empty">
+                            <strong>{resourceConfig.emptyState ?? 'No records found.'}</strong>
+                            <span>Try changing search or filters.</span>
+                          </div>
                         </td>
                       </tr>
                     ) : (
                       records.map((record) => (
                         <tr
+                          className={String(selectedRecord?.id ?? '') === String(record.id ?? '') ? 'selected-row' : ''}
                           key={String(record.id ?? JSON.stringify(record))}
+                          onClick={() => setSelectedRecord(record)}
                           onDoubleClick={() => {
                             if (!selectedPermissions.can_edit) return
                             openEditModal(record)
@@ -7547,8 +7893,9 @@ function AdminApp({
                 </table>
               </div>
               <div className="admin-pagination">
+                <span>{formatPaginationSummary(currentPagination, records.length)}</span>
                 <span>
-                  Page {currentTablePage}
+                  Page {currentTablePage}{currentTotalPages ? ` of ${currentTotalPages}` : ''}
                 </span>
                 <div className="admin-pagination-actions">
                   <button
@@ -8022,18 +8369,31 @@ function RecordModal({
                       {isTruthyValue(formValues[field]) ? 'True' : 'False'}
                     </button>
                   ) : (
-                    <input
-                      disabled={isSaving || !canEditField(field)}
-                      step={isDateTimeField(field) ? 60 : undefined}
-                      type={isDateTimeField(field) ? 'datetime-local' : 'text'}
-                      value={formValues[field] ?? ''}
-                      onChange={(event) =>
-                        setFormValues((current) => ({
-                          ...current,
-                          [field]: event.target.value
-                        }))
-                      }
-                    />
+                    isPaisaField(field) ? (
+                      <MoneyInput
+                        disabled={isSaving || !canEditField(field)}
+                        value={formValues[field] ?? ''}
+                        onChange={(nextValue) =>
+                          setFormValues((current) => ({
+                            ...current,
+                            [field]: nextValue
+                          }))
+                        }
+                      />
+                    ) : (
+                      <input
+                        disabled={isSaving || !canEditField(field)}
+                        step={isDateTimeField(field) ? 60 : undefined}
+                        type={isDateTimeField(field) ? 'datetime-local' : 'text'}
+                        value={formValues[field] ?? ''}
+                        onChange={(event) =>
+                          setFormValues((current) => ({
+                            ...current,
+                            [field]: event.target.value
+                          }))
+                        }
+                      />
+                    )
                   )}
                 </label>
               ))}
@@ -8055,6 +8415,36 @@ function RecordModal({
         </footer>
       </section>
     </div>
+  )
+}
+
+function MoneyInput({
+  disabled,
+  value,
+  onChange
+}: {
+  disabled?: boolean
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <input
+      disabled={disabled}
+      inputMode="decimal"
+      placeholder="0.00"
+      type="text"
+      value={value}
+      onBlur={() => {
+        if (!value.trim()) return
+        onChange(paisaToNpr(nprToPaisa(value)).toFixed(2))
+      }}
+      onChange={(event) => {
+        const nextValue = event.target.value
+        if (nextValue === '' || isValidMoneyInput(nextValue)) {
+          onChange(nextValue)
+        }
+      }}
+    />
   )
 }
 
@@ -8185,6 +8575,7 @@ function toFormValues(record: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(record).map(([key, value]) => {
       if (value === null || value === undefined) return [key, '']
+      if (isPaisaField(key)) return [key, paisaToNpr(value as number | string).toFixed(2)]
       const stringValue = String(value)
       return [key, isDateTimeField(key) ? toDateTimeLocalValue(stringValue) : stringValue]
     })
@@ -8237,6 +8628,10 @@ function coerceFieldValue(field: string, value: string, originalValue: unknown) 
     return isTruthyValue(value) ? 1 : 0
   }
 
+  if (isPaisaField(field)) {
+    return value
+  }
+
   if (isDateTimeField(field)) {
     return toIsoDateTimeValue(value)
   }
@@ -8244,14 +8639,50 @@ function coerceFieldValue(field: string, value: string, originalValue: unknown) 
   return coerceValue(value, originalValue)
 }
 
-function getTableColumns(records: ApiRecord[]) {
-  const preferred = ['name', 'display_name', 'email', 'slug', 'status', 'webrole']
+function normalizePagination(
+  pagination: PaginationMetadata | undefined,
+  page: number,
+  pageSize: number,
+  rowCount: number
+): PaginationMetadata {
+  const offset = pagination?.offset ?? Math.max(0, (page - 1) * pageSize)
+  const normalizedPageSize = pagination?.pageSize ?? pagination?.limit ?? pageSize
+  const normalizedPage = pagination?.page ?? Math.floor(offset / Math.max(1, normalizedPageSize)) + 1
+  const from = pagination?.from ?? (rowCount > 0 ? offset + 1 : 0)
+  const to = pagination?.to ?? offset + rowCount
+  return {
+    ...pagination,
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
+    from,
+    to,
+    hasPreviousPage: pagination?.hasPreviousPage ?? normalizedPage > 1,
+    hasNextPage: pagination?.hasNextPage ?? Boolean(pagination?.has_more)
+  }
+}
+
+function formatPaginationSummary(pagination: PaginationMetadata | undefined, rowCount: number) {
+  if (!pagination) return rowCount > 0 ? `Showing ${rowCount} records` : 'No records'
+  const from = pagination.from ?? 0
+  const to = pagination.to ?? rowCount
+  if (pagination.totalRecords !== undefined) {
+    return pagination.totalRecords > 0
+      ? `Showing ${from}-${to} of ${pagination.totalRecords} records`
+      : 'No records'
+  }
+  return rowCount > 0 ? `Showing ${from}-${to} records` : 'No records'
+}
+
+function getTableColumns(resource: string, records: ApiRecord[]) {
+  const configured = resourceUiConfig[resource]?.columns ?? []
   const available = new Set(records.flatMap((record) => Object.keys(record)))
-  const preferredColumns = preferred.filter((column) => available.has(column))
+  const configuredColumns = configured.filter((column) => available.has(column) || records.length === 0)
+  const preferred = ['name', 'display_name', 'email', 'slug', 'status', 'webrole', 'created_at']
+  const preferredColumns = preferred.filter((column) => available.has(column) && !configuredColumns.includes(column))
   const remaining = [...available]
-    .filter((column) => !preferredColumns.includes(column) && !hiddenTableColumns.has(column))
+    .filter((column) => !configuredColumns.includes(column) && !preferredColumns.includes(column) && !isHiddenListColumn(column))
     .slice(0, 5)
-  const columns = [...preferredColumns, ...remaining].slice(0, 6)
+  const columns = [...configuredColumns, ...preferredColumns, ...remaining].slice(0, 7)
 
   return columns.length > 0 ? columns : ['name', 'status']
 }
@@ -8259,7 +8690,7 @@ function getTableColumns(records: ApiRecord[]) {
 function getAvailableColumns(schemaColumns: string[], records: ApiRecord[]) {
   const available = new Set([...schemaColumns, ...records.flatMap((record) => Object.keys(record))])
   return [...available].filter(
-    (column) => column !== 'password_hash' && column !== 'google_sub' && column !== 'organization_role'
+    (column) => !isHiddenListColumn(column)
   )
 }
 
@@ -8453,7 +8884,8 @@ function normalizeAdminRailsSettings(value: unknown): AdminRailsSettingsData {
             id,
             name,
             status: String(candidate.status ?? ''),
-            start_datetime: String(candidate.start_datetime ?? '')
+            start_datetime: String(candidate.start_datetime ?? ''),
+            event_type: String(candidate.event_type ?? '')
           }
         })
         .filter((event): event is AdminRailsSettingsData['available_events'][number] => Boolean(event))
@@ -8721,6 +9153,9 @@ function getTicketPdfDownloadUrl(record: ApiRecord) {
 
 function formatCellValue(column: string, value: unknown) {
   if (value === null || value === undefined || value === '') return '-'
+  if (column === 'status' || column.endsWith('_status')) {
+    return <span className={`admin-status-pill ${normalizeStatusLabel(value).replaceAll(/[^a-z0-9]+/g, '-') || 'neutral'}`}>{String(value)}</span>
+  }
   if (isBooleanField(column)) {
     return (
       <span className={isTruthyValue(value) ? 'table-toggle active' : 'table-toggle'}>
@@ -8728,8 +9163,23 @@ function formatCellValue(column: string, value: unknown) {
       </span>
     )
   }
+  if (isPaisaField(column)) {
+    const numericValue = Number(value)
+    return Number.isFinite(numericValue) ? formatMoney(numericValue) : String(value)
+  }
+  if (isDateTimeField(column) && typeof value === 'string') {
+    return formatDateTimeForTable(value)
+  }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function isHiddenListColumn(column: string) {
+  return hiddenTableColumns.has(column) || isIdentifierLikeColumn(column)
+}
+
+function isIdentifierLikeColumn(column: string) {
+  return column === 'id' || column.endsWith('_id')
 }
 
 function getLookupLabel(record: ApiRecord) {
@@ -8756,6 +9206,23 @@ function isBooleanField(field: string) {
 
 function isDateTimeField(field: string) {
   return field.endsWith('_datetime') || field.endsWith('_at')
+}
+
+function isPaisaField(field: string) {
+  return field.endsWith('_paisa')
+}
+
+function isValidMoneyInput(value: string) {
+  return /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{0,2})?$/.test(value.trim())
+}
+
+function formatDateTimeForTable(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('en-NP', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(parsed)
 }
 
 function toDateTimeLocalValue(value: string) {
@@ -8859,7 +9326,30 @@ function getAdminResourceIcon(resource: string) {
 
 function formatResourceName(resource: string) {
   if (resource === 'location_template_id') return 'location'
-  return resource.replaceAll('_', ' ')
+  return formatAdminLabel(resource)
+}
+
+function formatAdminLabel(value: string) {
+  const normalized = value.trim()
+  if (!normalized) return value
+
+  const parts = normalized.split('_').filter(Boolean)
+  if (parts.length === 0) return normalized
+
+  const isMoneyField = parts[parts.length - 1] === 'paisa'
+  const moneyParts = isMoneyField ? parts.slice(0, -1) : parts
+  const labelParts =
+    isMoneyField && moneyParts.length > 1 && moneyParts[moneyParts.length - 1] === 'amount'
+      ? moneyParts.slice(0, -1)
+      : moneyParts
+  const label = labelParts
+    .map((part) => {
+      if (part === 'id') return 'ID'
+      return part
+    })
+    .join(' ')
+
+  return label
 }
 
 function isRequiredField(resource: string, field: string) {
@@ -8911,6 +9401,15 @@ function validateForm(
 
   if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) {
     messages.push('Email must be a valid email address.')
+  }
+
+  for (const [field, value] of Object.entries(values)) {
+    if (!isPaisaField(field) || !String(value ?? '').trim()) continue
+    try {
+      nprToPaisa(value)
+    } catch {
+      messages.push(`${formatResourceName(field)} must be a valid NPR amount with at most 2 decimal places.`)
+    }
   }
 
   if (resource === 'organization_users' && options?.mode === 'create') {
@@ -9046,6 +9545,17 @@ function hasTicketValidationAccess(user: AuthUser) {
   return ['admin', 'organizations', 'organizer', 'organisation', 'organisations', 'ticketvalidator', 'ticket_validator'].includes(role)
 }
 
+function resolveReportsPathForUser(user: AuthUser, selectedWebRole?: WebRoleName) {
+  if (selectedWebRole === 'Admin') return '/admin/reports'
+  if (selectedWebRole === 'Organizations') return '/organizer/reports'
+
+  const role = typeof user?.webrole === 'string' ? user.webrole.trim().toLowerCase() : ''
+  if (['admin'].includes(role)) return '/admin/reports'
+  if (['organizations', 'organizer', 'organisation', 'organisations'].includes(role)) return '/organizer/reports'
+  if (['partneruser', 'partner'].includes(role)) return '/partner/reports'
+  return null
+}
+
 function getDefaultWebRoleView(user: AuthUser): WebRoleName {
   return user?.webrole === 'TicketValidator' ? 'Customers' : user?.webrole ?? 'Customers'
 }
@@ -9055,11 +9565,7 @@ function hasCustomerTicketsAccess(user: AuthUser) {
 }
 
 function formatMoney(paisa: number) {
-  return new Intl.NumberFormat('en-NP', {
-    style: 'currency',
-    currency: 'NPR',
-    maximumFractionDigits: 0
-  }).format(paisa / 100)
+  return formatNpr(paisa)
 }
 
 function formatCountdown(milliseconds: number) {

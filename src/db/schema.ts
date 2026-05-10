@@ -19,6 +19,16 @@ export type TableName =
   | 'ticket_scans'
   | 'coupons'
   | 'coupon_redemptions'
+  | 'partners'
+  | 'partner_users'
+  | 'referral_codes'
+  | 'commission_rules'
+  | 'commission_ledger'
+  | 'refunds'
+  | 'payout_batches'
+  | 'payout_items'
+  | 'partner_reporting_permissions'
+  | 'report_exports'
 
 export type TableConfig = {
   table: TableName
@@ -353,6 +363,179 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'discount_amount_paisa',
       'redeemed_at'
     ]
+  },
+  partners: {
+    table: 'partners',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'organization_id',
+      'name',
+      'code',
+      'partner_type',
+      'parent_partner_id',
+      'is_active',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  partner_users: {
+    table: 'partner_users',
+    defaultOrderBy: 'created_at',
+    columns: ['id', 'partner_id', 'user_id', 'role', 'created_at', 'updated_at']
+  },
+  referral_codes: {
+    table: 'referral_codes',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'code',
+      'partner_id',
+      'event_id',
+      'description',
+      'is_active',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  commission_rules: {
+    table: 'commission_rules',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'name',
+      'event_id',
+      'partner_id',
+      'referral_code_id',
+      'applies_to',
+      'commission_type',
+      'stacking_group',
+      'stacking_behavior',
+      'priority',
+      'commission_source',
+      'rate_value',
+      'flat_amount_paisa',
+      'max_commission_amount_paisa',
+      'max_total_commission_percent_bps',
+      'tier_config_json',
+      'is_active',
+      'start_datetime',
+      'end_datetime',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  commission_ledger: {
+    table: 'commission_ledger',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'order_id',
+      'event_id',
+      'beneficiary_type',
+      'beneficiary_id',
+      'partner_id',
+      'referral_code_id',
+      'commission_rule_id',
+      'commission_type',
+      'base_amount_paisa',
+      'commission_rate_bps',
+      'commission_amount_paisa',
+      'commission_source',
+      'stacking_group',
+      'status',
+      'entry_type',
+      'reverses_ledger_id',
+      'refund_id',
+      'notes',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  refunds: {
+    table: 'refunds',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'order_id',
+      'payment_id',
+      'refund_reference',
+      'status',
+      'reason',
+      'refund_amount_paisa',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  payout_batches: {
+    table: 'payout_batches',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'batch_type',
+      'organization_id',
+      'partner_id',
+      'status',
+      'currency',
+      'total_amount_paisa',
+      'paid_at',
+      'created_by',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  payout_items: {
+    table: 'payout_items',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'payout_batch_id',
+      'beneficiary_type',
+      'beneficiary_id',
+      'order_id',
+      'event_id',
+      'commission_ledger_id',
+      'amount_paisa',
+      'status',
+      'paid_at',
+      'created_at',
+      'updated_at'
+    ]
+  },
+  partner_reporting_permissions: {
+    table: 'partner_reporting_permissions',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'grantee_partner_id',
+      'subject_partner_id',
+      'permission_type',
+      'expires_at',
+      'created_by',
+      'created_at'
+    ]
+  },
+  report_exports: {
+    table: 'report_exports',
+    defaultOrderBy: 'created_at',
+    columns: [
+      'id',
+      'report_type',
+      'requested_by_user_id',
+      'role',
+      'filters_json',
+      'status',
+      'storage_key',
+      'file_url',
+      'generated_at',
+      'error_message',
+      'created_at',
+      'updated_at'
+    ]
   }
 }
 
@@ -377,7 +560,23 @@ const tableAliases: Record<string, TableName> = {
   ticket_scans: 'ticket_scans',
   'ticket-scans': 'ticket_scans',
   coupon_redemptions: 'coupon_redemptions',
-  'coupon-redemptions': 'coupon_redemptions'
+  'coupon-redemptions': 'coupon_redemptions',
+  partner_users: 'partner_users',
+  'partner-users': 'partner_users',
+  referral_codes: 'referral_codes',
+  'referral-codes': 'referral_codes',
+  commission_rules: 'commission_rules',
+  'commission-rules': 'commission_rules',
+  commission_ledger: 'commission_ledger',
+  'commission-ledger': 'commission_ledger',
+  payout_batches: 'payout_batches',
+  'payout-batches': 'payout_batches',
+  payout_items: 'payout_items',
+  'payout-items': 'payout_items',
+  partner_reporting_permissions: 'partner_reporting_permissions',
+  'partner-reporting-permissions': 'partner_reporting_permissions',
+  report_exports: 'report_exports',
+  'report-exports': 'report_exports'
 }
 
 export function resolveTable(resource: string) {

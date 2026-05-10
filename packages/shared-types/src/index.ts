@@ -1,5 +1,43 @@
 export type ApiId = string
 
+export function nprToPaisa(value: string | number) {
+  const rawValue = String(value).trim()
+  if (!rawValue) {
+    throw new Error('Money value is required.')
+  }
+
+  const safeCommaPattern = /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{0,2})?$/
+  if (!safeCommaPattern.test(rawValue)) {
+    throw new Error('Money value must use at most 2 decimal places.')
+  }
+
+  const normalized = rawValue.replaceAll(',', '')
+  const isNegative = normalized.startsWith('-')
+  const unsigned = isNegative ? normalized.slice(1) : normalized
+  const [rupeesPart, paisaPart = ''] = unsigned.split('.')
+  const rupees = Number.parseInt(rupeesPart || '0', 10)
+  const paisa = Number.parseInt(paisaPart.padEnd(2, '0') || '0', 10)
+
+  if (!Number.isSafeInteger(rupees) || !Number.isInteger(paisa) || paisa < 0 || paisa > 99) {
+    throw new Error('Money value is outside the supported range.')
+  }
+
+  const valuePaisa = rupees * 100 + paisa
+  return isNegative ? -valuePaisa : valuePaisa
+}
+
+export function paisaToNpr(valuePaisa: number | string | null | undefined) {
+  const paisa = Number(valuePaisa ?? 0)
+  return Number.isFinite(paisa) ? Math.round(paisa) / 100 : 0
+}
+
+export function formatNpr(valuePaisa: number | string | null | undefined) {
+  return `NPR ${new Intl.NumberFormat('en-NP', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(paisaToNpr(valuePaisa))}`
+}
+
 export type AuthRole = 'Customers' | 'Organizations' | 'Admin' | 'TicketValidator'
 
 export type ApiEnvelope<T> = {

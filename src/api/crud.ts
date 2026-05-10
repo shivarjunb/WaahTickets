@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
+import { nprToPaisa } from '@waahtickets/shared-types'
 import { adminAdsRoutes } from './ads.js'
 import { getGuestCheckoutSession } from '../auth/guest-checkout.js'
 import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
 import { listResources, resolveTable } from '../db/schema.js'
+import type { TableName } from '../db/schema.js'
 import {
   enqueueOrderCopyNotification,
   enqueueAccountDeletedNotification,
@@ -1669,12 +1671,12 @@ crudRoutes.get('/settings/rails', async (c) => {
   const filterPanelEyebrowText = parseRailsFilterPanelEyebrowText(stored.rails_filter_panel_eyebrow_text)
   const availableEventsRows = await db
     .prepare(
-      `SELECT id, name, status, start_datetime
+      `SELECT id, name, status, start_datetime, event_type
        FROM events
        ORDER BY start_datetime ASC, created_at ASC
        LIMIT 500`
     )
-    .all<{ id: string; name: string | null; status: string | null; start_datetime: string | null }>()
+    .all<{ id: string; name: string | null; status: string | null; start_datetime: string | null; event_type: string | null }>()
 
   return c.json({
     data: {
@@ -1687,7 +1689,8 @@ crudRoutes.get('/settings/rails', async (c) => {
         id: event.id,
         name: event.name ?? event.id,
         status: event.status ?? '',
-        start_datetime: event.start_datetime ?? ''
+        start_datetime: event.start_datetime ?? '',
+        event_type: event.event_type ?? ''
       }))
     }
   })
@@ -3152,7 +3155,7 @@ crudRoutes.get('/:resource', async (c) => {
   const queryString = new URLSearchParams(queryEntries).toString()
   const resourceVersion = await cache.getResourceVersion(table.table)
   const cacheKey = `cache:${table.table}:v${resourceVersion}:scope:${getScopeCacheKey(accessScope)}:list:${queryString}`
-  const cached = await cache.getJson<{ data: unknown[]; pagination: { limit: number; offset: number; has_more: boolean } }>(
+  const cached = await cache.getJson<{ data: unknown[]; pagination: JsonRecord }>(
     cacheKey
   )
 
@@ -3218,10 +3221,28 @@ crudRoutes.get('/:resource', async (c) => {
 
   const rows = result.results.length > limit ? result.results.slice(0, limit) : result.results
   const hasMore = result.results.length > limit
+  const countResult = await db
+    .prepare(`SELECT COUNT(*) AS total FROM ${table.table}${whereSql}`)
+    .bind(...values)
+    .first<{ total: number }>()
+  const totalRecords = Number(countResult?.total ?? rows.length)
+  const totalPages = Math.max(1, Math.ceil(totalRecords / limit))
+  const page = Math.floor(offset / limit) + 1
+  const from = totalRecords > 0 ? offset + 1 : 0
+  const to = totalRecords > 0 ? Math.min(offset + rows.length, totalRecords) : 0
+  const enrichedRows = await enrichRowsForTable(db, table.table, sanitizeRowsForTable(table.table, rows))
 
   const payload = {
-    data: sanitizeRowsForTable(table.table, rows),
+    data: enrichedRows,
     pagination: {
+      page,
+      pageSize: limit,
+      totalRecords,
+      totalPages,
+      hasPreviousPage: page > 1,
+      hasNextPage: page < totalPages,
+      from,
+      to,
       limit,
       offset,
       has_more: hasMore
@@ -3256,6 +3277,10 @@ crudRoutes.post('/:resource', async (c) => {
 
   const now = new Date().toISOString()
   const record = pickAllowedColumns(payload, table.columns)
+  const moneyError = normalizeRecordMoneyFields(record)
+  if (moneyError) {
+    return c.json({ error: moneyError }, 400)
+  }
 
   if (table.table === 'organization_users') {
     if (scope.webrole === 'Organizations' && !typedOrganizationUserEmail) {
@@ -3331,6 +3356,7 @@ crudRoutes.post('/:resource', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
+  await maybeEnsurePublishedEventCategoryRail(db, table.table, result, scope.userId)
   await maybeSyncWebroleFromOrganizationUser(c, db, table.table, result)
   await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
   await safeMaybeEnqueue(c, () =>
@@ -3409,6 +3435,10 @@ crudRoutes.patch('/:resource/:id', async (c) => {
   }
 
   const record = pickAllowedColumns(payload, table.columns)
+  const moneyError = normalizeRecordMoneyFields(record)
+  if (moneyError) {
+    return c.json({ error: moneyError }, 400)
+  }
   if (table.table === 'organization_users' && Object.prototype.hasOwnProperty.call(record, 'role')) {
     const normalizedRole = normalizeOrganizationUserRole(record.role)
     if (!normalizedRole) {
@@ -3446,6 +3476,7 @@ crudRoutes.patch('/:resource/:id', async (c) => {
 
   const cache = createCache(c.env)
   await cache.bumpResourceVersion(table.table)
+  await maybeEnsurePublishedEventCategoryRail(db, table.table, result, scope.userId)
   await maybeSyncWebroleFromOrganizationUser(c, db, table.table, result)
   await safeMaybeEnqueue(c, () => maybeEnqueueOrderNotification({ env: c.env, tableName: table.table, row: result }))
 
@@ -3715,6 +3746,121 @@ async function getAppSettings<TKey extends readonly string[]>(db: D1Database, ke
   ) as Record<TKey[number], string | null>
 
   return values
+}
+
+async function maybeEnsurePublishedEventCategoryRail(
+  db: D1Database,
+  tableName: TableName,
+  row: unknown,
+  updatedBy: string
+) {
+  if (tableName !== 'events' || !row || typeof row !== 'object' || Array.isArray(row)) {
+    return
+  }
+
+  const eventRecord = row as JsonRecord
+  const eventId = String(eventRecord.id ?? '').trim()
+  const status = String(eventRecord.status ?? '').trim().toLowerCase()
+  const eventType = String(eventRecord.event_type ?? '').trim()
+  if (!eventId || status !== 'published' || !eventType) {
+    return
+  }
+
+  await ensureAppSettingsTable(db)
+  const stored = await getAppSettings(db, RAILS_SETTING_KEYS)
+  const autoplayIntervalSeconds = parseRailsAutoplayIntervalSeconds(stored.rails_autoplay_interval_seconds)
+  const rails = parseRailsConfig(stored.rails_config_json, autoplayIntervalSeconds)
+  const nextRails = upsertCategoryRailForPublishedEvent(rails, eventId, eventType, autoplayIntervalSeconds)
+  if (!nextRails.changed) {
+    return
+  }
+
+  const now = new Date().toISOString()
+  await db
+    .prepare(
+      `INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(setting_key) DO UPDATE SET
+         setting_value = excluded.setting_value,
+         updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by`
+    )
+    .bind('rails_config_json', JSON.stringify(nextRails.rails), now, updatedBy)
+    .run()
+}
+
+function upsertCategoryRailForPublishedEvent(
+  rails: RailsConfigItem[],
+  eventId: string,
+  eventType: string,
+  fallbackAutoplayIntervalSeconds: number
+) {
+  const normalizedTypeId = normalizeRailId(eventType)
+  if (!normalizedTypeId) {
+    return { changed: false, rails }
+  }
+
+  const railId = `type-${normalizedTypeId}`
+  const railLabel = `${toTitleCaseWords(eventType)} picks`
+  const normalizedLabel = railLabel.trim().toLowerCase()
+  const existingIndex = rails.findIndex(
+    (rail) => rail.id === railId || rail.label.trim().toLowerCase() === normalizedLabel
+  )
+
+  if (existingIndex >= 0) {
+    const existingRail = rails[existingIndex]
+    if (existingRail.event_ids.includes(eventId)) {
+      return { changed: false, rails }
+    }
+
+    const nextEventIds = [eventId, ...existingRail.event_ids.filter((candidate) => candidate !== eventId)].slice(
+      0,
+      MAX_EVENTS_PER_RAIL
+    )
+    return {
+      changed: true,
+      rails: rails.map((rail, index) =>
+        index === existingIndex
+          ? {
+              ...rail,
+              event_ids: nextEventIds
+            }
+          : rail
+      )
+    }
+  }
+
+  const nextRails = [
+    ...rails,
+    {
+      id: railId,
+      label: railLabel,
+      event_ids: [eventId],
+      eyebrow_text: 'Category',
+      autoplay_enabled: DEFAULT_RAIL_AUTOPLAY_ENABLED,
+      autoplay_interval_seconds: fallbackAutoplayIntervalSeconds,
+      accent_color: '#16a34a',
+      header_decor_image_url: ''
+    }
+  ]
+
+  const normalized = normalizeRailsConfigPayload(nextRails, fallbackAutoplayIntervalSeconds)
+  if (!normalized.ok) {
+    return { changed: false, rails }
+  }
+
+  return { changed: true, rails: normalized.value }
+}
+
+function toTitleCaseWords(value: string) {
+  return value
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
 }
 
 function parseKhaltiMode(value: unknown): KhaltiMode | null {
@@ -4062,6 +4208,43 @@ function pickAllowedColumns(payload: JsonRecord, columns: readonly string[]) {
   }
 
   return record
+}
+
+function normalizeRecordMoneyFields(record: JsonRecord) {
+  for (const [key, value] of Object.entries(record)) {
+    if (!key.endsWith('_paisa') || value === null || value === undefined) continue
+
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return `${formatMoneyFieldLabel(key)} must be a valid NPR amount.`
+      }
+      record[key] = Number.isInteger(value) ? value : nprToPaisa(value)
+      continue
+    }
+
+    if (typeof value === 'string') {
+      try {
+        record[key] = nprToPaisa(value)
+      } catch {
+        return `${formatMoneyFieldLabel(key)} must be a valid NPR amount with at most 2 decimal places.`
+      }
+      continue
+    }
+
+    return `${formatMoneyFieldLabel(key)} must be a valid NPR amount.`
+  }
+
+  return null
+}
+
+function formatMoneyFieldLabel(field: string) {
+  const parts = field
+    .replace(/_paisa$/, '')
+    .replace(/_amount$/, '')
+    .split('_')
+    .filter(Boolean)
+
+  return parts.length > 0 ? parts.join(' ') : 'amount'
 }
 
 function toD1Value(value: unknown): D1Value {
@@ -4626,11 +4809,19 @@ function canMutateResource(scope: AuthScope, tableName: string, action: 'patch' 
       'orders',
       'order_items',
       'payments',
+      'refunds',
       'tickets',
       'ticket_scans',
       'coupons',
       'coupon_redemptions',
-      'organization_users'
+      'organization_users',
+      'partners',
+      'partner_users',
+      'referral_codes',
+      'commission_rules',
+      'commission_ledger',
+      'payout_batches',
+      'payout_items'
     ])
     return allowedOrganizationTables.has(tableName)
   }
@@ -4806,6 +4997,18 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
         )`,
         bindings: orgBindings
       }
+    case 'refunds':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM orders
+          JOIN events ON events.id = orders.event_id
+          WHERE orders.id = refunds.order_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
     case 'tickets':
       return {
         allowed: true,
@@ -4825,6 +5028,120 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
           FROM events
           WHERE events.id = ticket_scans.event_id
             AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'partners':
+      return {
+        allowed: true,
+        clause: `(organization_id IS NULL OR organization_id IN (${placeholders}))`,
+        bindings: orgBindings
+      }
+    case 'partner_users':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM partners
+          WHERE partners.id = partner_users.partner_id
+            AND (partners.organization_id IS NULL OR partners.organization_id IN (${placeholders}))
+        )`,
+        bindings: orgBindings
+      }
+    case 'referral_codes':
+      return {
+        allowed: true,
+        clause: `(
+          (event_id IS NOT NULL AND EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = referral_codes.event_id
+              AND events.organization_id IN (${placeholders})
+          ))
+          OR EXISTS (
+            SELECT 1
+            FROM partners
+            WHERE partners.id = referral_codes.partner_id
+              AND (partners.organization_id IS NULL OR partners.organization_id IN (${placeholders}))
+          )
+        )`,
+        bindings: [...orgBindings, ...orgBindings]
+      }
+    case 'commission_rules':
+      return {
+        allowed: true,
+        clause: `(
+          (event_id IS NOT NULL AND EXISTS (
+            SELECT 1
+            FROM events
+            WHERE events.id = commission_rules.event_id
+              AND events.organization_id IN (${placeholders})
+          ))
+          OR (partner_id IS NOT NULL AND EXISTS (
+            SELECT 1
+            FROM partners
+            WHERE partners.id = commission_rules.partner_id
+              AND (partners.organization_id IS NULL OR partners.organization_id IN (${placeholders}))
+          ))
+          OR (referral_code_id IS NOT NULL AND EXISTS (
+            SELECT 1
+            FROM referral_codes
+            JOIN events ON events.id = referral_codes.event_id
+            WHERE referral_codes.id = commission_rules.referral_code_id
+              AND events.organization_id IN (${placeholders})
+          ))
+        )`,
+        bindings: [...orgBindings, ...orgBindings, ...orgBindings]
+      }
+    case 'commission_ledger':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM events
+          WHERE events.id = commission_ledger.event_id
+            AND events.organization_id IN (${placeholders})
+        )`,
+        bindings: orgBindings
+      }
+    case 'payout_batches':
+      return {
+        allowed: true,
+        clause: `(
+          organization_id IN (${placeholders})
+          OR EXISTS (
+            SELECT 1
+            FROM partners
+            WHERE partners.id = payout_batches.partner_id
+              AND (partners.organization_id IS NULL OR partners.organization_id IN (${placeholders}))
+          )
+        )`,
+        bindings: [...orgBindings, ...orgBindings]
+      }
+    case 'payout_items':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM payout_batches
+          LEFT JOIN partners ON partners.id = payout_batches.partner_id
+          WHERE payout_batches.id = payout_items.payout_batch_id
+            AND (
+              payout_batches.organization_id IN (${placeholders})
+              OR partners.organization_id IN (${placeholders})
+              OR partners.organization_id IS NULL
+            )
+        )`,
+        bindings: [...orgBindings, ...orgBindings]
+      }
+    case 'partner_reporting_permissions':
+      return {
+        allowed: true,
+        clause: `EXISTS (
+          SELECT 1
+          FROM partners
+          WHERE partners.id = partner_reporting_permissions.grantee_partner_id
+            AND (partners.organization_id IS NULL OR partners.organization_id IN (${placeholders}))
         )`,
         bindings: orgBindings
       }
@@ -5307,6 +5624,106 @@ function sanitizeOrderBy(value: string | undefined, table: { columns: readonly s
   }
 
   return table.defaultOrderBy ?? 'id'
+}
+
+async function enrichRowsForTable(db: D1Database, tableName: string, rows: unknown[]) {
+  if (rows.length === 0) return rows
+  const records = rows.filter((row): row is JsonRecord => Boolean(row) && typeof row === 'object' && !Array.isArray(row))
+  if (records.length === 0) return rows
+
+  const idsByField = new Map<string, Set<string>>()
+  for (const record of records) {
+    for (const [field, value] of Object.entries(record)) {
+      if (!field.endsWith('_id') || typeof value !== 'string' || !value.trim()) continue
+      if (!idsByField.has(field)) idsByField.set(field, new Set())
+      idsByField.get(field)?.add(value)
+    }
+  }
+
+  const lookups = new Map<string, Map<string, JsonRecord>>()
+  await Promise.all(
+    [...idsByField.entries()].map(async ([field, ids]) => {
+      const lookup = getLookupTableForField(field)
+      if (!lookup || ids.size === 0) return
+      const values = [...ids].slice(0, 100)
+      const placeholders = values.map(() => '?').join(', ')
+      const result = await db
+        .prepare(`SELECT ${lookup.columns.join(', ')} FROM ${lookup.table} WHERE id IN (${placeholders})`)
+        .bind(...values)
+        .all<JsonRecord>()
+      lookups.set(field, new Map((result.results ?? []).map((row) => [String(row.id), row])))
+    })
+  )
+
+  return records.map((record) => {
+    const enriched: JsonRecord = { ...record }
+    for (const [field, map] of lookups.entries()) {
+      const id = typeof record[field] === 'string' ? String(record[field]) : ''
+      const related = map.get(id)
+      if (!related) continue
+      const prefix = field.slice(0, -3)
+      const label = getRelatedDisplayLabel(related)
+      if (label) enriched[`${prefix}_name`] = label
+      if (typeof related.email === 'string') enriched[`${prefix}_email`] = related.email
+      if (field === 'event_id') enriched.event_title = label
+      if (field === 'ticket_type_id') enriched.ticket_type_name = label
+      if (field === 'web_role_id') enriched.web_role_name = label
+      if (field === 'parent_partner_id') enriched.parent_partner_name = label
+    }
+    if (tableName === 'users') {
+      enriched.name = formatPersonNameFromParts(
+        typeof record.first_name === 'string' ? record.first_name : null,
+        typeof record.last_name === 'string' ? record.last_name : null,
+        typeof record.email === 'string' ? record.email : null
+      )
+      enriched.status = record.is_active === 0 ? 'inactive' : 'active'
+    }
+    if (['web_roles', 'organizations', 'partners', 'referral_codes', 'commission_rules', 'ticket_types'].includes(tableName)) {
+      const active = record.is_active
+      if (active !== undefined && active !== null) enriched.status = active === 0 ? 'inactive' : 'active'
+    }
+    return enriched
+  })
+}
+
+function getLookupTableForField(field: string) {
+  const lookups: Record<string, { table: string; columns: string[] }> = {
+    user_id: { table: 'users', columns: ['id', 'first_name', 'last_name', 'email'] },
+    customer_id: { table: 'users', columns: ['id', 'first_name', 'last_name', 'email'] },
+    requested_by_user_id: { table: 'users', columns: ['id', 'first_name', 'last_name', 'email'] },
+    created_by: { table: 'users', columns: ['id', 'first_name', 'last_name', 'email'] },
+    redeemed_by: { table: 'users', columns: ['id', 'first_name', 'last_name', 'email'] },
+    web_role_id: { table: 'web_roles', columns: ['id', 'name', 'description'] },
+    organization_id: { table: 'organizations', columns: ['id', 'name', 'contact_email'] },
+    event_id: { table: 'events', columns: ['id', 'name', 'slug'] },
+    event_location_id: { table: 'event_locations', columns: ['id', 'name', 'address'] },
+    ticket_type_id: { table: 'ticket_types', columns: ['id', 'name'] },
+    order_id: { table: 'orders', columns: ['id', 'order_number', 'total_amount_paisa'] },
+    coupon_id: { table: 'coupons', columns: ['id', 'code', 'description'] },
+    partner_id: { table: 'partners', columns: ['id', 'name', 'code'] },
+    parent_partner_id: { table: 'partners', columns: ['id', 'name', 'code'] },
+    referral_code_id: { table: 'referral_codes', columns: ['id', 'code'] },
+    commission_rule_id: { table: 'commission_rules', columns: ['id', 'name'] },
+    payout_batch_id: { table: 'payout_batches', columns: ['id', 'batch_type', 'status'] },
+    beneficiary_id: { table: 'partners', columns: ['id', 'name', 'code'] },
+    grantee_partner_id: { table: 'partners', columns: ['id', 'name', 'code'] },
+    subject_partner_id: { table: 'partners', columns: ['id', 'name', 'code'] }
+  }
+  return lookups[field]
+}
+
+function getRelatedDisplayLabel(record: JsonRecord) {
+  return String(
+    record.name ??
+      record.display_name ??
+      record.email ??
+      record.order_number ??
+      record.ticket_number ??
+      record.code ??
+      record.batch_type ??
+      record.id ??
+      ''
+  )
 }
 
 function getCookie(cookieHeader: string | undefined, name: string) {
