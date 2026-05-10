@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
@@ -99,6 +99,7 @@ export default function AdminApp({
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null)
   const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => loadAdminSidebarCollapsed())
+  const [isMobileAdminMenuOpen, setIsMobileAdminMenuOpen] = useState(false)
   const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(defaultAdminDashboardMetrics)
   const [r2Settings, setR2Settings] = useState<R2SettingsData>({
     r2_binding_name: 'FILES_BUCKET',
@@ -448,6 +449,12 @@ export default function AdminApp({
     if (typeof window === 'undefined') return
     window.localStorage.setItem(adminSidebarCollapsedStorageKey, isSidebarCollapsed ? '1' : '0')
   }, [isSidebarCollapsed])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    document.body.classList.toggle('admin-mobile-menu-open', isMobileAdminMenuOpen)
+    return () => document.body.classList.remove('admin-mobile-menu-open')
+  }, [isMobileAdminMenuOpen])
 
   useEffect(() => {
     if (!(isSettingsView && isAdminUser && selectedWebRole === 'Admin')) return
@@ -1856,17 +1863,45 @@ export default function AdminApp({
     }
   }
 
+  function selectAdminResource(resource: string) {
+    setSelectedResource(resource)
+    setIsMobileAdminMenuOpen(false)
+  }
+
   let adminMenuItemIndex = 0
   const viewLabel = isDashboardView ? 'Dashboard' : isSettingsView ? 'Settings' : isAdsView ? 'Ads' : resourceConfig.title
 
   return (
-    <div className={isSidebarCollapsed ? 'admin-app sidebar-collapsed' : 'admin-app'}>
+    <div
+      className={[
+        isSidebarCollapsed ? 'admin-app sidebar-collapsed' : 'admin-app',
+        isMobileAdminMenuOpen ? 'admin-mobile-menu-is-open' : ''
+      ].join(' ')}
+    >
+      <button
+        aria-controls="admin-mobile-navigation"
+        aria-expanded={isMobileAdminMenuOpen}
+        aria-label="Open admin menu"
+        className="admin-mobile-menu-button"
+        type="button"
+        onClick={() => setIsMobileAdminMenuOpen(true)}
+      >
+        <Menu size={19} />
+      </button>
       <aside className={isSidebarCollapsed ? 'admin-sidebar collapsed' : 'admin-sidebar'}>
         <div className="admin-sidebar-top">
           <a className="admin-brand" href="/">
             <span className="brand-mark">W</span>
             <span>Waahtickets</span>
           </a>
+          <button
+            aria-label="Close admin menu"
+            className="admin-mobile-menu-close"
+            type="button"
+            onClick={() => setIsMobileAdminMenuOpen(false)}
+          >
+            <X size={18} />
+          </button>
           <button
             aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className="admin-sidebar-toggle"
@@ -1897,7 +1932,7 @@ export default function AdminApp({
             </select>
           </label>
         ) : null}
-        <nav className="admin-menu" aria-label="Admin resources">
+        <nav className="admin-menu" id="admin-mobile-navigation" aria-label="Admin resources">
           <section className="admin-menu-section admin-menu-primary" aria-label="Primary admin navigation">
             <div className="admin-menu-items" style={{ maxHeight: `${sidebarPrimaryItems.length * 46}px` }}>
               {sidebarPrimaryItems.map((item) => {
@@ -1909,7 +1944,7 @@ export default function AdminApp({
                     data-label={item.label}
                     key={item.id}
                     type="button"
-                    onClick={() => setSelectedResource(item.id)}
+                    onClick={() => selectAdminResource(item.id)}
                   >
                     <ItemIcon size={17} />
                     <span>{item.label}</span>
@@ -1948,7 +1983,7 @@ export default function AdminApp({
                       key={resource}
                       style={{ animationDelay: `${itemIndex * 28}ms` }}
                       type="button"
-                      onClick={() => setSelectedResource(resource)}
+                      onClick={() => selectAdminResource(resource)}
                     >
                       <MenuIcon size={17} />
                       <span>{formatResourceName(resource)}</span>
