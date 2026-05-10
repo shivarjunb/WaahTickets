@@ -217,6 +217,27 @@ export type UserCartSnapshot = {
   cart_expired?: boolean
 }
 
+export type GuestCheckoutContact = {
+  first_name: string
+  last_name: string
+  email: string
+  phone_number?: string
+}
+
+export type GuestCheckoutIdentity = {
+  token: string
+  expires_at: string
+  user: {
+    id: ApiId
+    first_name: string
+    last_name: string
+    email: string
+    phone_number?: string | null
+    login_email?: string
+    webrole?: AuthRole
+  }
+}
+
 export type EventTicketSelection = {
   event: PublicEvent
   ticketTypes: TicketType[]

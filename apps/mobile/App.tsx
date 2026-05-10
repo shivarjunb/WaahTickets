@@ -31,6 +31,8 @@ import type {
   AdRecord,
   AuthSessionPayload,
   CartItem,
+  GuestCheckoutContact,
+  GuestCheckoutIdentity,
   MobileSessionState,
   PublicEvent,
   PublicPaymentSettings,
@@ -42,11 +44,14 @@ import type {
 } from '@waahtickets/shared-types'
 import { defaultMobileApiBaseUrl } from './src/config/api'
 import {
+  readStoredCart,
+  readStoredCartHold,
   readStoredMobileSession,
   readStoredPendingEsewaPayment,
   readStoredPendingKhaltiPayment,
   writeStoredMobileSession,
   writeStoredCart,
+  writeStoredCartHold,
   writeStoredPendingEsewaPayment,
   writeStoredPendingKhaltiPayment
 } from './src/lib/session-storage'
@@ -149,6 +154,7 @@ type PendingKhaltiPayment = {
   pidx: string
   paymentUrl: string
   orderGroups: StorefrontOrderGroup[]
+  guestCheckoutToken?: string
 }
 
 type PendingEsewaPayment = {
@@ -158,6 +164,7 @@ type PendingEsewaPayment = {
   mode: 'test' | 'live'
   launchUrl: string
   orderGroups: StorefrontOrderGroup[]
+  guestCheckoutToken?: string
 }
 
 type StoredCartItem = {
@@ -181,6 +188,13 @@ const initialAuthForm: AuthFormState = {
   email: '',
   phone_number: '',
   password: ''
+}
+
+const initialGuestCheckoutContact: GuestCheckoutContact = {
+  first_name: '',
+  last_name: '',
+  email: '',
+  phone_number: ''
 }
 
 function createInitialEventState(): PublicEventState {
@@ -243,6 +257,7 @@ function buildEsewaMobileLaunchUrl(apiBaseUrl: string, formAction: string, field
 export default function App() {
   const screenScrollRef = useRef<ScrollView | null>(null)
   const processedPaymentCallbackRef = useRef('')
+  const restoredGuestCartRef = useRef(false)
   const validatingCartRef = useRef(false)
   const lastValidatedCartSignatureRef = useRef('')
   const [activeView, setActiveView] = useState<MobileView>('home')
@@ -296,6 +311,8 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState('')
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
   const [isRefreshingAccount, setIsRefreshingAccount] = useState(false)
+  const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(initialGuestCheckoutContact)
+  const [guestCheckoutIdentity, setGuestCheckoutIdentity] = useState<GuestCheckoutIdentity | null>(null)
   const [validationState, setValidationState] = useState<ValidationState>({
     qrInput: '',
     status: 'Ready to scan tickets.',
@@ -328,7 +345,6 @@ export default function App() {
 
   useEffect(() => {
     if (!isSessionRestored) return
-    void writeStoredCart([])
     void restorePendingKhaltiPayment()
     void restorePendingEsewaPayment()
     void handleIncomingUrl()
@@ -344,12 +360,15 @@ export default function App() {
     if (!isSessionRestored) return
 
     if (!session.user?.id || !session.tokens?.accessToken) {
-      clearCartState()
+      if (!events.items.length || restoredGuestCartRef.current) return
+      restoredGuestCartRef.current = true
+      void restoreGuestCart()
       return
     }
 
+    restoredGuestCartRef.current = false
     void loadUserCart()
-  }, [isSessionRestored, session.user?.id, session.tokens?.accessToken, api])
+  }, [isSessionRestored, session.user?.id, session.tokens?.accessToken, api, events.items.length])
 
   useEffect(() => {
     void Promise.all([loadPublicEvents(api), loadPaymentSettings(api), loadRailsSettings(api)])
@@ -448,6 +467,7 @@ export default function App() {
 
   function clearCartState() {
     void writeStoredCart([])
+    void writeStoredCartHold(null)
     setCartItems([])
     setCartHoldToken('')
     setCartHoldExpiresAt('')
@@ -455,7 +475,29 @@ export default function App() {
     setCouponCodes({})
     setCouponMessages({})
     setCouponDiscounts({})
+    setGuestCheckoutIdentity(null)
     lastValidatedCartSignatureRef.current = ''
+  }
+
+  async function restoreGuestCart() {
+    try {
+      const stored = await readStoredCart()
+      if (!Array.isArray(stored) || stored.length === 0) {
+        clearCartState()
+        return
+      }
+      const storedHold = await readStoredCartHold()
+      setCartHoldToken(storedHold?.hold_token ?? '')
+      setCartHoldExpiresAt(storedHold?.hold_expires_at ?? '')
+      await validateAndHydrateStoredCart(stored.filter(isStoredCartItemLike), {
+        fromStartup: true,
+        preserveExpiresAt: true,
+        holdToken: storedHold?.hold_token,
+        holdExpiresAt: storedHold?.hold_expires_at
+      })
+    } catch {
+      clearCartState()
+    }
   }
 
   async function loadUserCart() {
@@ -666,6 +708,8 @@ export default function App() {
       setAuthStatus('First name and last name are required for account creation.')
       return
     }
+    const confirmed = await confirmGuestCartResetBeforeLogin()
+    if (!confirmed) return
 
     setIsSubmittingAuth(true)
     setAuthStatus('')
@@ -694,6 +738,9 @@ export default function App() {
   }
 
   async function startGoogleSso() {
+    const confirmed = await confirmGuestCartResetBeforeLogin()
+    if (!confirmed) return
+
     setAuthStatus('Opening Google sign-in...')
     try {
       const startUrl = new URL('/api/auth/google/mobile/start', resolvedApiBaseUrl)
@@ -704,11 +751,28 @@ export default function App() {
     }
   }
 
+  function confirmGuestCartResetBeforeLogin() {
+    if (session.user?.id || cartItems.length === 0) return Promise.resolve(true)
+
+    return new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Reset cart?',
+        'Your cart will reset after log in. Are you sure?',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Log in', style: 'destructive', onPress: () => resolve(true) }
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      )
+    })
+  }
+
   async function applyAuthSession(payload?: AuthSessionPayload) {
     if (!payload?.user || !payload.tokens?.accessToken) {
       throw new Error('The API did not return a mobile session token.')
     }
 
+    clearCartState()
     await persistSession({
       user: payload.user,
       tokens: payload.tokens
@@ -796,9 +860,55 @@ export default function App() {
     return true
   }
 
+  function updateGuestCheckoutContactField(field: keyof GuestCheckoutContact, value: string) {
+    setGuestCheckoutContact((current) => ({ ...current, [field]: value }))
+    setGuestCheckoutIdentity(null)
+  }
+
+  async function ensureGuestCheckoutIdentity() {
+    if (session.user?.id) return null
+
+    const firstName = String(guestCheckoutContact.first_name ?? '').trim()
+    const lastName = String(guestCheckoutContact.last_name ?? '').trim()
+    const email = String(guestCheckoutContact.email ?? '').trim().toLowerCase()
+    const phoneNumber = String(guestCheckoutContact.phone_number ?? '').trim()
+
+    if (!email) {
+      throw new Error('Email address is required for guest checkout.')
+    }
+    if (!firstName || !lastName || !email) {
+      throw new Error('First name, last name, and email are required for guest checkout.')
+    }
+
+    const currentIdentity = guestCheckoutIdentity
+    const canReuseIdentity =
+      currentIdentity &&
+      currentIdentity.user.email.trim().toLowerCase() === email &&
+      currentIdentity.user.first_name.trim() === firstName &&
+      currentIdentity.user.last_name.trim() === lastName &&
+      String(currentIdentity.user.phone_number ?? '').trim() === phoneNumber
+
+    if (canReuseIdentity) {
+      return currentIdentity
+    }
+
+    const response = await api.prepareGuestCheckout({
+      first_name: firstName,
+      last_name: lastName,
+      email,
+      phone_number: phoneNumber,
+      continue_as_guest: true
+    })
+    if (!response.data) {
+      throw new Error('Guest checkout setup failed.')
+    }
+    setGuestCheckoutIdentity(response.data)
+    return response.data
+  }
+
   async function validateAndHydrateStoredCart(
     storedItems: StoredCartItem[],
-    options: { fromStartup?: boolean; preserveExpiresAt?: boolean } = {}
+    options: { fromStartup?: boolean; preserveExpiresAt?: boolean; holdToken?: string; holdExpiresAt?: string } = {}
   ) {
     if (validatingCartRef.current) return
     validatingCartRef.current = true
@@ -900,7 +1010,11 @@ export default function App() {
         })
 
       if (options.fromStartup || changed) {
-        const saved = await commitCartItems(nextItems, { preserveExpiresAt: options.preserveExpiresAt })
+        const saved = await commitCartItems(nextItems, {
+          preserveExpiresAt: options.preserveExpiresAt,
+          holdToken: options.holdToken,
+          holdExpiresAt: options.holdExpiresAt
+        })
         if (!saved) return
       }
 
@@ -923,16 +1037,14 @@ export default function App() {
     await validateAndHydrateStoredCart(buildStoredCartSnapshot(cartItems), { preserveExpiresAt: true })
   }
 
-  async function commitCartItems(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
-    if (!session.user?.id) {
-      setCartStatus('Please sign in to add tickets to your cart.')
-      setActiveView('account')
-      return false
-    }
-
+  async function commitCartItems(
+    nextItems: CartItem[],
+    options: { preserveExpiresAt?: boolean; holdToken?: string; holdExpiresAt?: string } = {}
+  ) {
     try {
+      const storedHold = !session.user?.id ? await readStoredCartHold() : null
       const response = await api.createCartHolds({
-        hold_token: cartHoldToken || undefined,
+        hold_token: options.holdToken || cartHoldToken || undefined,
         preserve_expires_at: Boolean(options.preserveExpiresAt),
         items: nextItems.map((item) => ({
           ticket_type_id: item.ticket_type_id,
@@ -940,8 +1052,21 @@ export default function App() {
         }))
       })
       const holdToken = response.data?.hold_token ?? ''
-      const holdExpiresAt = nextItems.length > 0 ? response.data?.expires_at ?? '' : ''
-      await saveUserCartSnapshot(nextItems, holdToken, holdExpiresAt)
+      const canPreserveStoredGuestHold =
+        !session.user?.id &&
+        Boolean(options.preserveExpiresAt) &&
+        storedHold?.hold_token === holdToken &&
+        (options.holdExpiresAt || storedHold.hold_expires_at) &&
+        new Date(options.holdExpiresAt || storedHold.hold_expires_at).getTime() > Date.now()
+      const holdExpiresAt = canPreserveStoredGuestHold
+        ? options.holdExpiresAt || storedHold.hold_expires_at
+        : nextItems.length > 0 ? response.data?.expires_at ?? '' : ''
+      if (session.user?.id) {
+        await saveUserCartSnapshot(nextItems, holdToken, holdExpiresAt)
+      } else {
+        await writeStoredCart(buildStoredCartSnapshot(nextItems))
+        await writeStoredCartHold(nextItems.length > 0 ? { hold_token: holdToken, hold_expires_at: holdExpiresAt } : null)
+      }
       setCartItems(nextItems)
       setCartHoldToken(holdToken)
       setCartHoldExpiresAt(holdExpiresAt)
@@ -949,6 +1074,7 @@ export default function App() {
         setCouponCodes({})
         setCouponMessages({})
         setCouponDiscounts({})
+        setGuestCheckoutIdentity(null)
       }
       setCartStatus(nextItems.length > 0 ? 'Cart reserved with a live hold.' : 'Cart cleared.')
       return true
@@ -960,12 +1086,6 @@ export default function App() {
 
   async function addTicketToCart(ticketType: TicketType) {
     if (isAddingToCartTicketTypeId || isSubmittingCheckout) return
-    if (!session.user?.id) {
-      setCartStatus('Please sign in to add tickets to your cart.')
-      setActiveView('account')
-      return
-    }
-
     const selectedEvent = events.items.find((event) => event.id === ticketType.event_id)
     if (!selectedEvent) {
       setCartStatus('Select an event before adding tickets.')
@@ -1153,24 +1273,23 @@ export default function App() {
   }
 
   async function completeManualCheckout() {
-    if (!session.user) {
-      setCartStatus('Login is required for mobile checkout right now.')
-      setActiveView('account')
-      return
-    }
     if (cartItems.length === 0 || isSubmittingCheckout) return
 
     setIsSubmittingCheckout(true)
     try {
+      const guestIdentity = await ensureGuestCheckoutIdentity()
       const orderGroups = buildOrderGroups()
       const response = await api.completeStorefrontCheckout({
         order_groups: orderGroups,
-        payment: { provider: 'manual' }
+        payment: { provider: 'manual' },
+        guest_checkout_token: guestIdentity?.token
       })
       await resetCartAfterSuccessfulCheckout()
       setCartStatus(`Checkout complete. ${Number(response.data?.completed_orders ?? orderGroups.length)} order(s) created.`)
-      await loadPurchasedTickets()
-      setActiveView('tickets')
+      if (session.user) {
+        await loadPurchasedTickets()
+        setActiveView('tickets')
+      }
     } catch (error) {
       setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
     } finally {
@@ -1179,11 +1298,6 @@ export default function App() {
   }
 
   async function startKhaltiCheckout() {
-    if (!session.user) {
-      setCartStatus('Login is required for Khalti checkout in mobile right now.')
-      setActiveView('account')
-      return
-    }
     if (cartItems.length === 0 || isSubmittingCheckout) return
     if (!(paymentState.settings?.khalti_enabled && paymentState.settings?.khalti_can_initiate)) {
       setCartStatus(paymentState.settings?.khalti_runtime_note || 'Khalti is not configured right now.')
@@ -1192,18 +1306,21 @@ export default function App() {
 
     setIsSubmittingCheckout(true)
     try {
+      const guestIdentity = await ensureGuestCheckoutIdentity()
+      const checkoutUser = session.user ?? guestIdentity?.user ?? null
       const orderGroups = buildOrderGroups()
       const amountPaisa = orderGroups.reduce((sum, group) => sum + group.total_amount_paisa, 0)
       const response = await api.initiateStorefrontKhaltiPayment({
         amount_paisa: amountPaisa,
-        purchase_order_id: `khalti-${session.user.id}-${Date.now().toString(36)}`,
+        purchase_order_id: `khalti-${String(checkoutUser?.id ?? 'guest')}-${Date.now().toString(36)}`,
         purchase_order_name: `WaahTickets mobile (${orderGroups.length} event${orderGroups.length === 1 ? '' : 's'})`,
-        customer_name: formatFullName(session.user.first_name, session.user.last_name),
-        customer_email: session.user.email,
-        customer_phone: session.user.phone_number ?? '',
+        customer_name: formatFullName(checkoutUser?.first_name, checkoutUser?.last_name),
+        customer_email: checkoutUser?.email ?? '',
+        customer_phone: checkoutUser?.phone_number ?? '',
         return_url: buildKhaltiMobileReturnUrl(resolvedApiBaseUrl),
         website_url: resolvedApiBaseUrl,
-        order_groups: orderGroups
+        order_groups: orderGroups,
+        guest_checkout_token: guestIdentity?.token
       })
 
       if (!response.data?.payment_url || !response.data?.pidx) {
@@ -1215,7 +1332,8 @@ export default function App() {
       const pendingPayment = {
         pidx: response.data.pidx,
         paymentUrl: response.data.payment_url,
-        orderGroups
+        orderGroups,
+        guestCheckoutToken: guestIdentity?.token
       }
       setPendingKhaltiPayment(pendingPayment)
       await writeStoredPendingKhaltiPayment(pendingPayment)
@@ -1229,11 +1347,6 @@ export default function App() {
   }
 
   async function startEsewaCheckout() {
-    if (!session.user) {
-      setCartStatus('Login is required for eSewa checkout in mobile right now.')
-      setActiveView('account')
-      return
-    }
     if (cartItems.length === 0 || isSubmittingCheckout) return
     if (!paymentState.settings?.esewa_can_initiate) {
       setCartStatus(paymentState.settings?.esewa_runtime_note || 'eSewa is not configured right now.')
@@ -1242,12 +1355,14 @@ export default function App() {
 
     setIsSubmittingCheckout(true)
     try {
+      const guestIdentity = await ensureGuestCheckoutIdentity()
       const orderGroups = buildOrderGroups()
       const amountPaisa = orderGroups.reduce((sum, group) => sum + group.total_amount_paisa, 0)
       const response = await api.initiateStorefrontEsewaPayment({
         amount_paisa: amountPaisa,
         order_groups: orderGroups,
-        redirect_uri: buildEsewaMobileReturnUrl(resolvedApiBaseUrl)
+        redirect_uri: buildEsewaMobileReturnUrl(resolvedApiBaseUrl),
+        guest_checkout_token: guestIdentity?.token
       })
       const formAction = String(response.data?.form_action ?? '').trim()
       const fields = response.data?.fields ?? {}
@@ -1266,7 +1381,8 @@ export default function App() {
         productCode,
         mode: response.data?.mode === 'live' ? 'live' : 'test',
         launchUrl: buildEsewaMobileLaunchUrl(resolvedApiBaseUrl, formAction, fields),
-        orderGroups
+        orderGroups,
+        guestCheckoutToken: guestIdentity?.token
       } satisfies PendingEsewaPayment
       setPendingEsewaPayment(pendingPayment)
       await writeStoredPendingEsewaPayment(pendingPayment)
@@ -1288,7 +1404,10 @@ export default function App() {
         title: 'Verifying payment',
         message: 'Processing your Khalti payment. Please wait a moment.'
       })
-      const lookup = await api.lookupStorefrontKhaltiPayment({ pidx: pendingKhaltiPayment.pidx })
+      const lookup = await api.lookupStorefrontKhaltiPayment({
+        pidx: pendingKhaltiPayment.pidx,
+        guest_checkout_token: pendingKhaltiPayment.guestCheckoutToken
+      })
       const status = String(lookup.data?.status ?? '').trim().toLowerCase()
       if (!/complete|completed/.test(status)) {
         setCartStatus(`Khalti payment status is "${lookup.data?.status ?? 'unknown'}". Finish payment first, then verify again.`)
@@ -1298,12 +1417,15 @@ export default function App() {
       const complete = await api.completeStorefrontKhaltiPayment({
         pidx: pendingKhaltiPayment.pidx,
         transaction_id: lookup.data?.transaction_id || undefined,
-        order_groups: pendingKhaltiPayment.orderGroups
+        order_groups: pendingKhaltiPayment.orderGroups,
+        guest_checkout_token: pendingKhaltiPayment.guestCheckoutToken
       })
       await resetCartAfterSuccessfulCheckout()
       setCartStatus(`Khalti payment verified. ${Number(complete.data?.completed_orders ?? 0)} order(s) completed.`)
-      await loadPurchasedTickets()
-      setActiveView('tickets')
+      if (session.user) {
+        await loadPurchasedTickets()
+        setActiveView('tickets')
+      }
     } catch (error) {
       setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
     } finally {
@@ -1330,12 +1452,14 @@ export default function App() {
       const verification = options.encodedData?.trim()
         ? await api.verifyStorefrontEsewaPayment({
             data: options.encodedData.trim(),
-            mode: payment.mode
+            mode: payment.mode,
+            guest_checkout_token: payment.guestCheckoutToken
           })
         : await api.lookupStorefrontEsewaPaymentStatus({
             transaction_uuid: payment.transactionUuid,
             total_amount: payment.totalAmount,
-            mode: payment.mode
+            mode: payment.mode,
+            guest_checkout_token: payment.guestCheckoutToken
           })
       const status = String(verification.data?.status ?? '').trim().toUpperCase()
       if (status !== 'COMPLETE') {
@@ -1349,15 +1473,18 @@ export default function App() {
         payment: {
           provider: 'esewa',
           reference: String(verification.data?.transaction_code ?? '').trim() || undefined
-        }
+        },
+        guest_checkout_token: payment.guestCheckoutToken
       })
       await resetCartAfterSuccessfulCheckout()
       setCartStatus(
         options.successMessage ??
           `eSewa payment verified in the app. ${Number(completed.data?.completed_orders ?? payment.orderGroups.length)} order(s) completed.`
       )
-      await loadPurchasedTickets()
-      setActiveView('tickets')
+      if (session.user) {
+        await loadPurchasedTickets()
+        setActiveView('tickets')
+      }
     } catch (error) {
       setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
       processedPaymentCallbackRef.current = ''
@@ -1415,7 +1542,10 @@ export default function App() {
           title: 'Verifying payment',
           message: 'Processing your Khalti payment. Please wait a moment.'
         })
-        const lookup = await api.lookupStorefrontKhaltiPayment({ pidx })
+        const lookup = await api.lookupStorefrontKhaltiPayment({
+          pidx,
+          guest_checkout_token: restoredPending.guestCheckoutToken
+        })
         const lookupStatus = String(lookup.data?.status ?? '').trim().toLowerCase()
         if (!/complete|completed/.test(lookupStatus)) {
           setCartStatus(`Khalti payment status is "${lookup.data?.status ?? 'unknown'}". Finish payment first, then try again.`)
@@ -1426,12 +1556,15 @@ export default function App() {
         const completion = await api.completeStorefrontKhaltiPayment({
           pidx,
           transaction_id: transactionId || lookup.data?.transaction_id || undefined,
-          order_groups: restoredPending.orderGroups
+          order_groups: restoredPending.orderGroups,
+          guest_checkout_token: restoredPending.guestCheckoutToken
         })
         await resetCartAfterSuccessfulCheckout()
         setCartStatus(`Khalti payment verified in the app. ${Number(completion.data?.completed_orders ?? 0)} order(s) completed.`)
-        await loadPurchasedTickets()
-        setActiveView('tickets')
+        if (session.user) {
+          await loadPurchasedTickets()
+          setActiveView('tickets')
+        }
         return
       }
 
@@ -2077,6 +2210,49 @@ export default function App() {
                     <LabelValue label="Discounts" value={cartDiscountPaisa > 0 ? `-${formatPrice(cartDiscountPaisa)}` : 'NPR 0.00'} />
                     <LabelValue label="Total" value={formatPrice(cartGrandTotalPaisa)} />
                   </View>
+
+                  {!session.user ? (
+                    <View style={styles.stackSmall}>
+                      <Text style={styles.cardTitle}>Guest checkout</Text>
+                      <TextInput
+                        value={guestCheckoutContact.first_name}
+                        onChangeText={(value) => updateGuestCheckoutContactField('first_name', value)}
+                        editable={!isPaymentFlowBusy}
+                        style={styles.input}
+                        placeholder="First name"
+                        placeholderTextColor="#90a3b8"
+                      />
+                      <TextInput
+                        value={guestCheckoutContact.last_name}
+                        onChangeText={(value) => updateGuestCheckoutContactField('last_name', value)}
+                        editable={!isPaymentFlowBusy}
+                        style={styles.input}
+                        placeholder="Last name"
+                        placeholderTextColor="#90a3b8"
+                      />
+                      <TextInput
+                        value={guestCheckoutContact.email}
+                        onChangeText={(value) => updateGuestCheckoutContactField('email', value)}
+                        editable={!isPaymentFlowBusy}
+                        style={styles.input}
+                        placeholder="Email address *"
+                        placeholderTextColor="#90a3b8"
+                        autoCapitalize="none"
+                        autoComplete="email"
+                        textContentType="emailAddress"
+                        keyboardType="email-address"
+                      />
+                      <TextInput
+                        value={guestCheckoutContact.phone_number ?? ''}
+                        onChangeText={(value) => updateGuestCheckoutContactField('phone_number', value)}
+                        editable={!isPaymentFlowBusy}
+                        style={styles.input}
+                        placeholder="Phone number"
+                        placeholderTextColor="#90a3b8"
+                        keyboardType="phone-pad"
+                      />
+                    </View>
+                  ) : null}
 
                   <View style={styles.inlineActions}>
                     <ActionButton
