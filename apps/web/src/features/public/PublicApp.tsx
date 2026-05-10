@@ -48,6 +48,7 @@ export default function PublicApp({
   const [isAddingToCart, setIsAddingToCart] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
+  const [updatingCartItemIds, setUpdatingCartItemIds] = useState<Set<string>>(() => new Set())
   const [cartSettings, setCartSettings] = useState<CartSettingsData>(defaultCartSettingsData)
   const [pendingSingleEventCartItem, setPendingSingleEventCartItem] = useState<CartItem | null>(null)
   const [isSingleEventCartReplacing, setIsSingleEventCartReplacing] = useState(false)
@@ -1487,6 +1488,7 @@ export default function PublicApp({
           cartGroups={cartGroups}
           holdExpiresAt={cartHoldExpiresAt}
           totalPaisa={cartSubtotalPaisa}
+          updatingItemIds={updatingCartItemIds}
           onClose={() => setIsCartOpen(false)}
           onCheckout={() => {
             setIsCartOpen(false)
@@ -1663,19 +1665,49 @@ export default function PublicApp({
   }
 
   async function updateCartItemQuantity(itemId: string, nextQuantity: number) {
+    setCartItemUpdating(itemId, true)
     if (nextQuantity <= 0) {
-      await removeCartItem(itemId)
+      try {
+        await removeCartItem(itemId, { skipLoadingState: true })
+      } finally {
+        setCartItemUpdating(itemId, false)
+      }
       return
     }
-    const nextItems = cartItems.map((item) =>
-      item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item
-    )
-    await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
+    try {
+      const nextItems = cartItems.map((item) =>
+        item.id === itemId ? { ...item, quantity: Math.min(99, Math.max(1, nextQuantity)) } : item
+      )
+      await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
+    } finally {
+      setCartItemUpdating(itemId, false)
+    }
   }
 
-  async function removeCartItem(itemId: string) {
-    const nextItems = cartItems.filter((item) => item.id !== itemId)
-    await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
+  async function removeCartItem(itemId: string, options: { skipLoadingState?: boolean } = {}) {
+    if (!options.skipLoadingState) {
+      setCartItemUpdating(itemId, true)
+    }
+    try {
+      const nextItems = cartItems.filter((item) => item.id !== itemId)
+      await commitCartItems(nextItems, undefined, { preserveExpiresAt: true })
+    } finally {
+      if (!options.skipLoadingState) {
+        setCartItemUpdating(itemId, false)
+      }
+    }
+  }
+
+  function setCartItemUpdating(itemId: string, isUpdating: boolean) {
+    setUpdatingCartItemIds((current) => {
+      const next = new Set(current)
+      if (isUpdating) {
+        next.add(itemId)
+      } else {
+        next.delete(itemId)
+      }
+      return next
+    })
   }
 
   function clearExpiredCartHold() {
@@ -2435,6 +2467,7 @@ export function CartModal({
   cartGroups,
   holdExpiresAt,
   totalPaisa,
+  updatingItemIds,
   onClose,
   onCheckout,
   onUpdateQuantity,
@@ -2443,6 +2476,7 @@ export function CartModal({
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
   holdExpiresAt: string
   totalPaisa: number
+  updatingItemIds: ReadonlySet<string>
   onClose: () => void
   onCheckout: () => void
   onUpdateQuantity: (itemId: string, quantity: number) => void
@@ -2480,22 +2514,50 @@ export function CartModal({
                 <div className="cart-event-group" key={group.event_id}>
                   <p className="eyebrow">{group.event_name}</p>
                   <p className="checkout-event-meta">{group.event_location_name}</p>
-                  {group.items.map((item) => (
-                    <div className="cart-item-row" key={item.id}>
-                      <div>
-                        <strong>{item.ticket_type_name}</strong>
-                        <p>{formatMoney(item.unit_price_paisa)} each</p>
+                  {group.items.map((item) => {
+                    const isUpdating = updatingItemIds.has(item.id)
+                    return (
+                      <div className="cart-item-row" key={item.id}>
+                        <div>
+                          <strong>{item.ticket_type_name}</strong>
+                          <p>{formatMoney(item.unit_price_paisa)} each</p>
+                        </div>
+                        <div className="cart-item-actions">
+                          <button
+                            aria-label={`Decrease ${item.ticket_type_name} quantity`}
+                            disabled={isUpdating}
+                            type="button"
+                            onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                          >
+                            -
+                          </button>
+                          <span className="cart-item-quantity" aria-live="polite">
+                            {isUpdating ? (
+                              <span className="cart-quantity-spinner" role="status" aria-label="Updating quantity" />
+                            ) : (
+                              item.quantity
+                            )}
+                          </span>
+                          <button
+                            aria-label={`Increase ${item.ticket_type_name} quantity`}
+                            disabled={isUpdating}
+                            type="button"
+                            onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                          >
+                            +
+                          </button>
+                          <button
+                            aria-label={`Remove ${item.ticket_type_name} from cart`}
+                            disabled={isUpdating}
+                            type="button"
+                            onClick={() => onRemoveItem(item.id)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="cart-item-actions">
-                        <button type="button" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}>-</button>
-                        <span>{item.quantity}</span>
-                        <button type="button" onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}>+</button>
-                        <button type="button" onClick={() => onRemoveItem(item.id)}>
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ))
             )}
