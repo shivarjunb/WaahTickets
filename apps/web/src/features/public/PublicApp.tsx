@@ -3,7 +3,7 @@ import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, B
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { SidebarAd, RailAd } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
@@ -97,6 +97,14 @@ export default function PublicApp({
       setGuestCheckoutIdentity(null)
     }
   }, [user?.id])
+
+  function requestLoginWithGuestCartConfirmation() {
+    if (!user?.id && cartItems.length > 0) {
+      const confirmed = window.confirm('Your cart will reset after log in. Are you sure?')
+      if (!confirmed) return
+    }
+    onLoginClick()
+  }
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0],
@@ -242,17 +250,29 @@ export default function PublicApp({
     if (typeof window === 'undefined') return
     const snapshot = buildPersistedCartSnapshot(items)
     if (snapshot.length === 0) {
-      window.localStorage.removeItem(cartStorageKey)
+      window.sessionStorage.removeItem(cartStorageKey)
       return
     }
-    window.localStorage.setItem(cartStorageKey, JSON.stringify(snapshot))
+    window.sessionStorage.setItem(cartStorageKey, JSON.stringify(snapshot))
+  }
+
+  function persistCartHold(holdToken: string, holdExpiresAt: string) {
+    if (typeof window === 'undefined') return
+    if (!holdToken || !holdExpiresAt) {
+      window.sessionStorage.removeItem(cartHoldStorageKey)
+      return
+    }
+    window.sessionStorage.setItem(
+      cartHoldStorageKey,
+      JSON.stringify({ hold_token: holdToken, hold_expires_at: holdExpiresAt })
+    )
   }
 
   async function validatePersistedCartItems(
     storedItems: PersistedCartItem[],
-    options: { preserveExpiresAt?: boolean } = {}
+    options: { preserveExpiresAt?: boolean; holdToken?: string; holdExpiresAt?: string } = {}
   ) {
-    if (!user?.id || isValidatingCartRef.current) return false
+    if (isValidatingCartRef.current) return false
     isValidatingCartRef.current = true
     try {
       const grouped = new Map<string, PersistedCartItem[]>()
@@ -333,7 +353,11 @@ export default function PublicApp({
         return true
       }
 
-      const saved = await commitCartItems(nextItems, undefined, { preserveExpiresAt: options.preserveExpiresAt })
+      const saved = await commitCartItems(nextItems, undefined, {
+        preserveExpiresAt: options.preserveExpiresAt,
+        holdToken: options.holdToken,
+        holdExpiresAt: options.holdExpiresAt
+      })
       if (!saved) {
         lastValidatedCartSignatureRef.current = ''
         return false
@@ -360,62 +384,52 @@ export default function PublicApp({
     if (isEventsLoading) return
 
     if (!user?.id) {
-      setCartItems([])
-      setCartHoldToken('')
-      setCartHoldExpiresAt('')
+      const persistedItems = readPersistedCartItems()
+      if (persistedItems.length > 0) {
+        const persistedHold = readPersistedCartHold()
+        setCartHoldToken(persistedHold.hold_token)
+        setCartHoldExpiresAt(persistedHold.hold_expires_at)
+        void validatePersistedCartItems(persistedItems, {
+          preserveExpiresAt: true,
+          holdToken: persistedHold.hold_token,
+          holdExpiresAt: persistedHold.hold_expires_at
+        })
+      } else {
+        setCartItems([])
+        setCartHoldToken('')
+        setCartHoldExpiresAt('')
+      }
       isCartStorageReadyRef.current = true
       return
     }
 
     isCartStorageReadyRef.current = false
     void (async () => {
-      const persistedItems = readPersistedCartItems()
       try {
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem(cartStorageKey)
+          window.sessionStorage.removeItem(cartHoldStorageKey)
+        }
         const { data } = await fetchJson<{ data: UserCartSnapshot }>('/api/cart')
         const snapshot = data.data
         const storedItems = Array.isArray(snapshot?.items) ? snapshot.items : []
         const validSnapshotItems = storedItems.filter(isCartItemLike)
-        if (validSnapshotItems.length > 0) {
-          setCartItems(validSnapshotItems)
-          setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
-          setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
-          persistCartSnapshot(validSnapshotItems)
-        } else if (persistedItems.length > 0) {
-          setCartItems([])
-          setCartHoldToken('')
-          setCartHoldExpiresAt('')
-          await validatePersistedCartItems(persistedItems)
-        } else {
-          setCartItems([])
-          setCartHoldToken('')
-          setCartHoldExpiresAt('')
-        }
+        setCartItems(validSnapshotItems)
+        setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
+        setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
         if (snapshot?.cart_expired) {
           setIsCartExpiredNoticeOpen(true)
         }
       } catch (error) {
-        if (persistedItems.length > 0) {
-          setCartItems([])
-          setCartHoldToken('')
-          setCartHoldExpiresAt('')
-          await validatePersistedCartItems(persistedItems)
-        } else {
-          setCartItems([])
-          setCartHoldToken('')
-          setCartHoldExpiresAt('')
-          setPublicStatus(getErrorMessage(error))
-        }
+        setCartItems([])
+        setCartHoldToken('')
+        setCartHoldExpiresAt('')
+        setPublicStatus(getErrorMessage(error))
       } finally {
         isCartStorageReadyRef.current = true
       }
     })()
   }, [isAuthLoading, isEventsLoading, user?.id])
-
-  useEffect(() => {
-    if (!isAuthLoading && !user?.id && cartItems.length > 0) {
-      setCartItems([])
-    }
-  }, [cartItems.length, isAuthLoading, user?.id])
 
   useEffect(() => {
     if (!cartHoldExpiresAt) return
@@ -433,6 +447,7 @@ export default function PublicApp({
 
   useEffect(() => {
     if (!isCartCheckoutOpen) return
+    if (!user?.id) return
     if (cartItems.length === 0) return
     const signature = cartItems
       .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
@@ -441,7 +456,7 @@ export default function PublicApp({
     if (!signature || signature === lastValidatedCartSignatureRef.current) return
     lastValidatedCartSignatureRef.current = signature
     void validatePersistedCartItems(buildPersistedCartSnapshot(cartItems), { preserveExpiresAt: true })
-  }, [cartItems, isCartCheckoutOpen])
+  }, [cartItems, isCartCheckoutOpen, user?.id])
 
   useEffect(() => {
     const eventIds = new Set(cartGroups.map((group) => group.event_id))
@@ -1103,7 +1118,7 @@ export default function PublicApp({
                 {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
                 <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
               </button>
-              <button className="nav-action" type="button" onClick={onLoginClick}>
+              <button className="nav-action" type="button" onClick={requestLoginWithGuestCartConfirmation}>
                 Login
               </button>
             </div>
@@ -1557,11 +1572,6 @@ export default function PublicApp({
 
   async function addCurrentSelectionToCart() {
     if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return false
-    if (!user?.id) {
-      setPublicStatus('Please sign in to add tickets to your cart.')
-      onLoginClick()
-      return false
-    }
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
       return false
@@ -1593,17 +1603,19 @@ export default function PublicApp({
   async function commitCartItems(
     nextItems: CartItem[],
     successMessage?: string,
-    options: { preserveExpiresAt?: boolean } = {}
+    options: { preserveExpiresAt?: boolean; holdToken?: string; holdExpiresAt?: string } = {}
   ) {
-    if (!user?.id) {
-      setPublicStatus('Please sign in to update your cart.')
-      onLoginClick()
-      return false
-    }
     const reserved = await syncCartHold(nextItems, options)
     if (!reserved) return false
     setCartItems(nextItems)
-    persistCartSnapshot(nextItems)
+    if (user?.id) {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(cartStorageKey)
+        window.sessionStorage.removeItem(cartHoldStorageKey)
+      }
+    } else if (typeof window !== 'undefined') {
+      persistCartSnapshot(nextItems)
+    }
     if (successMessage) {
       setPublicStatus(successMessage)
     }
@@ -1673,13 +1685,25 @@ export default function PublicApp({
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(cartStorageKey)
       window.localStorage.removeItem(cartHoldStorageKey)
+      window.sessionStorage.removeItem(cartStorageKey)
+      window.sessionStorage.removeItem(cartHoldStorageKey)
     }
     void saveUserCart([], '', '')
   }
 
-  async function syncCartHold(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
+  async function syncCartHold(
+    nextItems: CartItem[],
+    options: { preserveExpiresAt?: boolean; holdToken?: string; holdExpiresAt?: string } = {}
+  ) {
     try {
-      const holdToken = cartHoldToken || crypto.randomUUID()
+      const holdToken = options.holdToken || cartHoldToken || crypto.randomUUID()
+      const storedHold = !user?.id ? readPersistedCartHold() : { hold_token: '', hold_expires_at: '' }
+      const canPreserveStoredGuestHold =
+        !user?.id &&
+        Boolean(options.preserveExpiresAt) &&
+        storedHold.hold_token === holdToken &&
+        (options.holdExpiresAt || storedHold.hold_expires_at) &&
+        new Date(options.holdExpiresAt || storedHold.hold_expires_at).getTime() > Date.now()
       const { data } = await fetchJson<{
         data: { hold_token: string; expires_at: string; items: Array<{ ticket_type_id: string; quantity: number }> }
       }>('/api/public/cart-holds', {
@@ -1696,8 +1720,14 @@ export default function PublicApp({
         timeoutMs: 10000
       })
       setCartHoldToken(data.data.hold_token)
-      const holdExpiresAt = nextItems.length > 0 ? data.data.expires_at : ''
+      const holdExpiresAt = canPreserveStoredGuestHold
+        ? options.holdExpiresAt || storedHold.hold_expires_at
+        : nextItems.length > 0 ? data.data.expires_at : ''
       setCartHoldExpiresAt(holdExpiresAt)
+      if (!user?.id) {
+        persistCartHold(data.data.hold_token, holdExpiresAt)
+        return true
+      }
       return saveUserCart(nextItems, data.data.hold_token, holdExpiresAt)
     } catch (error) {
       setPublicStatus(getErrorMessage(error))
@@ -1785,6 +1815,9 @@ export default function PublicApp({
     const email = guestCheckoutContact.email.trim().toLowerCase()
     const phoneNumber = guestCheckoutContact.phone_number.trim()
 
+    if (!email) {
+      throw new Error('Email address is required for guest checkout.')
+    }
     if (!firstName || !lastName || !email) {
       throw new Error('First name, last name, and email are required for guest checkout.')
     }
@@ -2592,9 +2625,11 @@ export function CartCheckoutModal({
                 </div>
                 <div className="guest-checkout-grid">
                   <label className="public-select-label">
-                    <span>Email</span>
+                    <span>Email address *</span>
                     <input
+                      aria-required="true"
                       placeholder="name@example.com"
+                      required
                       type="email"
                       value={guestCheckoutContact.email}
                       onChange={(event) => onChangeGuestCheckoutField('email', event.target.value)}

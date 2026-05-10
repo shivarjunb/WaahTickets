@@ -6,12 +6,26 @@ import { Users, UserCog, ShieldCheck, SquarePlus, SquareMinus, Building2, Layout
 export function readPersistedCartItems() {
   if (typeof window === 'undefined') return [] as PersistedCartItem[]
   try {
-    const raw = window.localStorage.getItem(cartStorageKey)
+    const raw = window.sessionStorage.getItem(cartStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown[]
     return Array.isArray(parsed) ? parsed.filter(isPersistedCartItemLike) : []
   } catch {
     return []
+  }
+}
+
+export function readPersistedCartHold() {
+  if (typeof window === 'undefined') return { hold_token: '', hold_expires_at: '' }
+  try {
+    const raw = window.sessionStorage.getItem(cartHoldStorageKey)
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+    return {
+      hold_token: typeof parsed?.hold_token === 'string' ? parsed.hold_token : '',
+      hold_expires_at: typeof parsed?.hold_expires_at === 'string' ? parsed.hold_expires_at : ''
+    }
+  } catch {
+    return { hold_token: '', hold_expires_at: '' }
   }
 }
 

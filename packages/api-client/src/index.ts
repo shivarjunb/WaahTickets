@@ -9,6 +9,8 @@ import type {
   AuthUser,
   CartHoldResponse,
   CouponValidationResponse,
+  GuestCheckoutContact,
+  GuestCheckoutIdentity,
   PublicEvent,
   PublicPaymentSettings,
   PublicRailsSettings,
@@ -108,6 +110,9 @@ export function createApiClient(options: ApiClientOptions) {
     },
     register(body: AuthRequestBody) {
       return authRequest('/api/auth/register', body)
+    },
+    prepareGuestCheckout(body: GuestCheckoutContact & { continue_as_guest?: boolean }) {
+      return request<GuestCheckoutIdentity>('/api/auth/guest-checkout/prepare', withJsonBody(body as unknown as JsonBody, { method: 'POST' }))
     },
     logout() {
       return request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
