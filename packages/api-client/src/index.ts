@@ -14,7 +14,8 @@ import type {
   PublicRailsSettings,
   StorefrontOrderGroup,
   TicketValidationResponse,
-  TicketType
+  TicketType,
+  UserCartSnapshot
 } from '@waahtickets/shared-types'
 
 export type ApiClientOptions = {
@@ -201,6 +202,19 @@ export function createApiClient(options: ApiClientOptions) {
       items: Array<{ ticket_type_id: string; quantity: number }>
     }) {
       return request<CartHoldResponse>('/api/public/cart-holds', withJsonBody(body, { method: 'POST' }))
+    },
+    getUserCart() {
+      return request<UserCartSnapshot>('/api/cart')
+    },
+    saveUserCart(body: {
+      items: UserCartSnapshot['items']
+      hold_token?: string
+      hold_expires_at?: string
+    }) {
+      return request<UserCartSnapshot>('/api/cart', withJsonBody(body as unknown as JsonBody, { method: 'PUT' }))
+    },
+    clearUserCart() {
+      return request<UserCartSnapshot>('/api/cart', { method: 'DELETE' })
     },
     validateCoupon(body: {
       code: string

@@ -210,6 +210,13 @@ export type CartItem = {
   currency: string
 }
 
+export type UserCartSnapshot = {
+  items: CartItem[]
+  hold_token?: string
+  hold_expires_at?: string
+  cart_expired?: boolean
+}
+
 export type EventTicketSelection = {
   event: PublicEvent
   ticketTypes: TicketType[]

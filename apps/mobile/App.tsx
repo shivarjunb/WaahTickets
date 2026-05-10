@@ -42,11 +42,9 @@ import type {
 } from '@waahtickets/shared-types'
 import { defaultMobileApiBaseUrl } from './src/config/api'
 import {
-  readStoredCart,
   readStoredMobileSession,
   readStoredPendingEsewaPayment,
   readStoredPendingKhaltiPayment,
-  type StoredCartItem,
   writeStoredMobileSession,
   writeStoredCart,
   writeStoredPendingEsewaPayment,
@@ -162,6 +160,16 @@ type PendingEsewaPayment = {
   orderGroups: StorefrontOrderGroup[]
 }
 
+type StoredCartItem = {
+  eventId: string
+  ticketTypeId: string
+  ticketName: string
+  quantity: number
+  unitPrice: number
+  eventTitle: string
+  eventDate: string
+}
+
 const emptySession: MobileSessionState = {
   user: null,
   tokens: null
@@ -235,7 +243,6 @@ function buildEsewaMobileLaunchUrl(apiBaseUrl: string, formAction: string, field
 export default function App() {
   const screenScrollRef = useRef<ScrollView | null>(null)
   const processedPaymentCallbackRef = useRef('')
-  const restoredStoredCartRef = useRef(false)
   const validatingCartRef = useRef(false)
   const lastValidatedCartSignatureRef = useRef('')
   const [activeView, setActiveView] = useState<MobileView>('home')
@@ -271,7 +278,6 @@ export default function App() {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false)
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({})
   const [cartItems, setCartItems] = useState<CartItem[]>([])
-  const [storedCartItems, setStoredCartItems] = useState<StoredCartItem[] | null>(null)
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [cartHoldRemainingMs, setCartHoldRemainingMs] = useState(0)
@@ -322,7 +328,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isSessionRestored) return
-    void restoreStoredCart()
+    void writeStoredCart([])
     void restorePendingKhaltiPayment()
     void restorePendingEsewaPayment()
     void handleIncomingUrl()
@@ -333,6 +339,17 @@ export default function App() {
       subscription.remove()
     }
   }, [isSessionRestored, api])
+
+  useEffect(() => {
+    if (!isSessionRestored) return
+
+    if (!session.user?.id || !session.tokens?.accessToken) {
+      clearCartState()
+      return
+    }
+
+    void loadUserCart()
+  }, [isSessionRestored, session.user?.id, session.tokens?.accessToken, api])
 
   useEffect(() => {
     void Promise.all([loadPublicEvents(api), loadPaymentSettings(api), loadRailsSettings(api)])
@@ -358,23 +375,6 @@ export default function App() {
     if (!selectedEventId) return
     void loadTicketTypes(selectedEventId)
   }, [api, selectedEventId])
-
-  useEffect(() => {
-    if (restoredStoredCartRef.current) return
-    if (!storedCartItems) return
-    if (!events.items.length) return
-    if (storedCartItems.length === 0) {
-      restoredStoredCartRef.current = true
-      return
-    }
-
-    const optimisticItems = buildCartItemsFromStoredSnapshot(storedCartItems)
-    if (optimisticItems.length > 0) {
-      setCartItems((current) => (current.length > 0 ? current : optimisticItems))
-    }
-    restoredStoredCartRef.current = true
-    void validateAndHydrateStoredCart(storedCartItems, { fromStartup: true })
-  }, [events.items, storedCartItems])
 
   useEffect(() => {
     if (activeView !== 'cart') return
@@ -446,17 +446,36 @@ export default function App() {
     }
   }
 
-  async function restoreStoredCart() {
+  function clearCartState() {
+    void writeStoredCart([])
+    setCartItems([])
+    setCartHoldToken('')
+    setCartHoldExpiresAt('')
+    setCartHoldRemainingMs(0)
+    setCouponCodes({})
+    setCouponMessages({})
+    setCouponDiscounts({})
+    lastValidatedCartSignatureRef.current = ''
+  }
+
+  async function loadUserCart() {
     try {
-      const stored = await readStoredCart()
-      if (!Array.isArray(stored)) {
-        setStoredCartItems([])
-        return
+      const response = await api.getUserCart()
+      const snapshot = response.data
+      const nextItems = Array.isArray(snapshot?.items) ? snapshot.items.filter(isCartItemLike) : []
+      setCartItems(nextItems)
+      setCartHoldToken(typeof snapshot?.hold_token === 'string' ? snapshot.hold_token : '')
+      setCartHoldExpiresAt(typeof snapshot?.hold_expires_at === 'string' ? snapshot.hold_expires_at : '')
+      if (snapshot?.cart_expired) {
+        setCartStatus('Your previous cart hold expired while you were signed out.')
       }
-      setStoredCartItems(stored.filter(isStoredCartItemLike))
-    } catch {
-      await writeStoredCart([])
-      setStoredCartItems([])
+      lastValidatedCartSignatureRef.current = nextItems
+        .map((item) => `${item.event_id}:${item.ticket_type_id}:${item.quantity}:${item.unit_price_paisa}`)
+        .sort()
+        .join('|')
+    } catch (error) {
+      clearCartState()
+      setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
     }
   }
 
@@ -767,31 +786,14 @@ export default function App() {
     })
   }
 
-  function buildCartItemsFromStoredSnapshot(items: StoredCartItem[]) {
-    return items.flatMap((item) => {
-      const event = events.items.find((entry) => entry.id === item.eventId)
-      const eventLocationId = String(event?.location_id ?? '')
-      if (!event || !eventLocationId) return []
-
-      return [
-        {
-          id: `${item.ticketTypeId}:${eventLocationId}`,
-          event_id: event.id,
-          event_name: event.name,
-          event_location_id: eventLocationId,
-          event_location_name: event.location_name ?? event.organization_name ?? 'Venue coming soon',
-          ticket_type_id: item.ticketTypeId,
-          ticket_type_name: item.ticketName,
-          quantity: Math.max(1, Math.min(99, item.quantity)),
-          unit_price_paisa: item.unitPrice,
-          currency: 'NPR'
-        } satisfies CartItem
-      ]
+  async function saveUserCartSnapshot(items: CartItem[], holdToken: string, holdExpiresAt: string) {
+    if (!session.user?.id) return false
+    await api.saveUserCart({
+      items,
+      hold_token: holdToken,
+      hold_expires_at: holdExpiresAt
     })
-  }
-
-  async function persistCartSnapshot(items: CartItem[]) {
-    await writeStoredCart(buildStoredCartSnapshot(items))
+    return true
   }
 
   async function validateAndHydrateStoredCart(
@@ -878,7 +880,7 @@ export default function App() {
         setCouponMessages({})
         setCouponDiscounts({})
         lastValidatedCartSignatureRef.current = ''
-        await writeStoredCart([])
+        await saveUserCartSnapshot([], '', '')
         if (updates.length > 0) {
           setCartStatus(updates.join(' '))
         }
@@ -910,11 +912,7 @@ export default function App() {
         .sort()
         .join('|')
     } catch (error) {
-      if (options.fromStartup) {
-        setCartStatus(`We restored your saved cart, but couldn’t verify it yet. ${buildApiErrorMessage(error, resolvedApiBaseUrl)}`)
-      } else {
-        setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
-      }
+      setCartStatus(buildApiErrorMessage(error, resolvedApiBaseUrl))
       lastValidatedCartSignatureRef.current = ''
     } finally {
       validatingCartRef.current = false
@@ -926,6 +924,12 @@ export default function App() {
   }
 
   async function commitCartItems(nextItems: CartItem[], options: { preserveExpiresAt?: boolean } = {}) {
+    if (!session.user?.id) {
+      setCartStatus('Please sign in to add tickets to your cart.')
+      setActiveView('account')
+      return false
+    }
+
     try {
       const response = await api.createCartHolds({
         hold_token: cartHoldToken || undefined,
@@ -935,10 +939,12 @@ export default function App() {
           quantity: item.quantity
         }))
       })
+      const holdToken = response.data?.hold_token ?? ''
+      const holdExpiresAt = nextItems.length > 0 ? response.data?.expires_at ?? '' : ''
+      await saveUserCartSnapshot(nextItems, holdToken, holdExpiresAt)
       setCartItems(nextItems)
-      setCartHoldToken(response.data?.hold_token ?? '')
-      setCartHoldExpiresAt(nextItems.length > 0 ? response.data?.expires_at ?? '' : '')
-      await persistCartSnapshot(nextItems)
+      setCartHoldToken(holdToken)
+      setCartHoldExpiresAt(holdExpiresAt)
       if (nextItems.length === 0) {
         setCouponCodes({})
         setCouponMessages({})
@@ -954,6 +960,12 @@ export default function App() {
 
   async function addTicketToCart(ticketType: TicketType) {
     if (isAddingToCartTicketTypeId || isSubmittingCheckout) return
+    if (!session.user?.id) {
+      setCartStatus('Please sign in to add tickets to your cart.')
+      setActiveView('account')
+      return
+    }
+
     const selectedEvent = events.items.find((event) => event.id === ticketType.event_id)
     if (!selectedEvent) {
       setCartStatus('Select an event before adding tickets.')
@@ -1700,11 +1712,12 @@ export default function App() {
     [purchasedTickets.items, events.items]
   )
   const cartSubtotalPaisa = cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
+  const cartTicketCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const cartDiscountPaisa = Object.values(couponDiscounts).reduce((sum, item) => sum + item.discount, 0)
   const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartDiscountPaisa)
   const isPaymentFlowBusy = isSubmittingCheckout || Boolean(paymentProcessingOverlay)
   const currentTitle = getViewTitle(activeView)
-  const currentSubtitle = getViewSubtitle(activeView, cartItems.length)
+  const currentSubtitle = getViewSubtitle(activeView, cartTicketCount)
   const topInset = Platform.OS === 'android' ? Math.max(NativeStatusBar.currentHeight ?? 0, 18) : 18
   const bottomInset = Platform.OS === 'android' ? 18 : 12
 
@@ -1797,7 +1810,7 @@ export default function App() {
         />
         <QuickAccessRow
           activeView={activeView}
-          cartCount={cartItems.length}
+          cartCount={cartTicketCount}
           onSelect={navigateTo}
           signedIn={Boolean(session.user)}
           validatorAllowed={validatorAllowed}
@@ -2326,7 +2339,7 @@ export default function App() {
       </ScrollView>
       <TicketPickerModal
         apiBaseUrl={resolvedApiBaseUrl}
-        cartCount={cartItems.length}
+        cartCount={cartTicketCount}
         cartStatus={cartStatus}
         event={events.items.find((event) => event.id === ticketPickerEventId) ?? selectedEvent}
         loading={ticketTypes.loading}
@@ -2354,7 +2367,7 @@ export default function App() {
           <SideDrawer
             activeView={activeView}
             api={api}
-            cartCount={cartItems.length}
+            cartCount={cartTicketCount}
             onClose={() => setIsMenuOpen(false)}
             onRefreshFeed={() => void Promise.all([loadPublicEvents(), loadRailsSettings()])}
             onSelect={navigateTo}
@@ -3460,6 +3473,25 @@ function isMobileGoogleReturnUrl(rawUrl: string) {
   } catch {
     return false
   }
+}
+
+function isCartItemLike(value: unknown): value is CartItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Partial<CartItem>
+  return (
+    typeof item.id === 'string' &&
+    typeof item.event_id === 'string' &&
+    typeof item.event_name === 'string' &&
+    typeof item.event_location_id === 'string' &&
+    typeof item.event_location_name === 'string' &&
+    typeof item.ticket_type_id === 'string' &&
+    typeof item.ticket_type_name === 'string' &&
+    typeof item.quantity === 'number' &&
+    typeof item.unit_price_paisa === 'number' &&
+    typeof item.currency === 'string' &&
+    Number.isFinite(item.quantity) &&
+    Number.isFinite(item.unit_price_paisa)
+  )
 }
 
 function isStoredCartItemLike(value: unknown): value is StoredCartItem {
