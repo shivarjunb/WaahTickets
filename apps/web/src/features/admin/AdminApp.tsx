@@ -233,7 +233,7 @@ export default function AdminApp({
       { id: DASHBOARD_VIEW, label: 'Dashboard', icon: LayoutDashboard },
       { id: 'events', label: 'Events', icon: CalendarDays },
       { id: 'orders', label: 'Orders', icon: Receipt },
-      { id: 'ticket_types', label: 'Tickets', icon: Ticket },
+      { id: 'ticket_types', label: 'Ticket Types', icon: Ticket },
       { id: 'organizations', label: 'Organizers', icon: Building2 },
       { id: 'partners', label: 'Partners', icon: HandCoins },
       { id: 'referral_codes', label: 'Referral Codes', icon: Megaphone },
@@ -1380,24 +1380,27 @@ export default function AdminApp({
     )
   }
 
-  function openCreateModal() {
+  function openCreateModal(resource = selectedResource) {
+    if (resource !== selectedResource) {
+      setSelectedResource(resource)
+    }
     setSelectedRecord(null)
     setRecordError('')
     const values = ensureFormHasRequiredFields(
-      selectedResource,
-      toFormValues(samplePayloads[selectedResource] ?? {})
+      resource,
+      toFormValues(samplePayloads[resource] ?? {})
     )
-    if (selectedResource === 'organization_users' && selectedWebRole === 'Organizations') {
+    if (resource === 'organization_users' && selectedWebRole === 'Organizations') {
       delete values.user_id
       values.email = ''
     }
-    if (selectedResource === 'events') {
+    if (resource === 'events') {
       values.location_template_id = ''
       setPendingEventLocation(null)
     }
     setFormValues(values)
     setModalMode('create')
-    void loadLookupOptions(selectedResource, values)
+    void loadLookupOptions(resource, values)
   }
 
   function openEditModal(record: ApiRecord) {
@@ -2075,6 +2078,12 @@ export default function AdminApp({
                   <Plus size={17} />
                   Create event
                 </button>
+                {visibleResources.includes('ticket_types') && roleAccess[selectedWebRole].ticket_types?.can_create ? (
+                  <button type="button" onClick={() => openCreateModal('ticket_types')}>
+                    <Ticket size={17} />
+                    Create ticket type
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => setSelectedResource('orders')}>
                   <Receipt size={17} />
                   Review orders
@@ -3107,7 +3116,7 @@ export default function AdminApp({
                     className="primary-admin-button"
                     disabled={!selectedPermissions.can_create}
                     type="button"
-                    onClick={openCreateModal}
+                    onClick={() => openCreateModal()}
                   >
                     <Plus size={17} />
                     {resourceConfig.createLabel ?? `Create ${resourceConfig.title.replace(/s$/, '').toLowerCase()}`}
