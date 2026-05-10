@@ -318,7 +318,7 @@ export type TicketValidationSummary = {
 }
 
 export type TicketValidationResponse = {
-  status: 'not_found' | 'unredeemed' | 'already_redeemed' | 'redeemed'
+  status: 'not_found' | 'unredeemed' | 'already_redeemed' | 'expired' | 'redeemed'
   message: string
   ticket?: TicketValidationSummary
 }

@@ -1435,6 +1435,26 @@ crudRoutes.post('/tickets/redeem', async (c) => {
     })
   }
 
+  if (isTicketExpiredForEvent(ticket, now)) {
+    await createTicketScanRecord(db, {
+      ticket_id: ticket.id,
+      scanned_by: scope.userId,
+      event_id: ticket.event_id,
+      event_location_id: ticket.event_location_id,
+      scan_result: 'expired',
+      scan_message: 'Ticket is expired because the event date/time has passed.',
+      scanned_at: now
+    })
+
+    return c.json({
+      data: {
+        status: 'expired',
+        message: 'Ticket is expired because the event date/time has passed.',
+        ticket: ticketSummary
+      }
+    })
+  }
+
   const updateResult = await executeMutation(c, () =>
     db
       .prepare(
@@ -1546,6 +1566,16 @@ crudRoutes.post('/tickets/inspect', async (c) => {
       data: {
         status: 'already_redeemed',
         message: 'Ticket has already been redeemed.',
+        ticket: ticketSummary
+      }
+    })
+  }
+
+  if (isTicketExpiredForEvent(ticket)) {
+    return c.json({
+      data: {
+        status: 'expired',
+        message: 'Ticket is expired because the event date/time has passed.',
         ticket: ticketSummary
       }
     })
@@ -4553,6 +4583,8 @@ type TicketLookupRow = {
   customer_id: string
   organization_id: string
   event_name: string | null
+  event_start_datetime: string | null
+  event_end_datetime: string | null
   event_location_name: string | null
   ticket_type_name: string | null
   customer_first_name: string | null
@@ -4578,6 +4610,8 @@ async function fetchTicketByQrValue(db: D1Database, qrCodeValue: string) {
          tickets.customer_id,
          events.organization_id,
          events.name AS event_name,
+         events.start_datetime AS event_start_datetime,
+         events.end_datetime AS event_end_datetime,
          event_locations.name AS event_location_name,
          ticket_types.name AS ticket_type_name,
          customer.first_name AS customer_first_name,
@@ -4619,6 +4653,15 @@ function buildTicketSummary(ticket: TicketLookupRow) {
     customer_name: formatPersonNameFromParts(ticket.customer_first_name, ticket.customer_last_name, ticket.customer_email),
     customer_email: ticket.customer_email
   }
+}
+
+function isTicketExpiredForEvent(ticket: TicketLookupRow, nowIso = new Date().toISOString()) {
+  const expiresAt = ticket.event_end_datetime || ticket.event_start_datetime
+  if (!expiresAt) return false
+
+  const expiresAtMs = new Date(expiresAt).getTime()
+  const nowMs = new Date(nowIso).getTime()
+  return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs < nowMs
 }
 
 function formatPersonNameFromParts(

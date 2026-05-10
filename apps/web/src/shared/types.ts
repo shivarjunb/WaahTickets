@@ -199,7 +199,7 @@ export type CouponValidationResponse = {
 
 export type TicketRedeemResponse = {
   data?: {
-    status?: 'redeemed' | 'already_redeemed' | 'not_found' | 'unredeemed'
+    status?: 'redeemed' | 'already_redeemed' | 'expired' | 'not_found' | 'unredeemed'
     message?: string
     ticket?: ApiRecord
   }

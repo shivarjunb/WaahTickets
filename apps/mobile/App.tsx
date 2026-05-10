@@ -1724,15 +1724,15 @@ export default function App() {
         return
       }
 
-      if (result?.status === 'already_redeemed' && ticket) {
+      if ((result?.status === 'already_redeemed' || result?.status === 'expired') && ticket) {
         setValidationState((current) => ({
           ...current,
           qrInput: resolvedQrValue,
-          status: result.message || 'Ticket has already been redeemed.',
+          status: result.message || (result.status === 'expired' ? 'Ticket is expired.' : 'Ticket has already been redeemed.'),
           tone: 'warning',
           ticket,
           pendingQrValue: resolvedQrValue,
-          pendingStatus: 'already_redeemed',
+          pendingStatus: result.status,
           scanning: false,
           busy: false
         }))
@@ -1782,9 +1782,14 @@ export default function App() {
       setValidationState((current) => ({
         ...current,
         status: result?.message || (result?.status === 'redeemed' ? 'Ticket redeemed successfully.' : 'Unable to redeem ticket.'),
-        tone: result?.status === 'redeemed' ? 'success' : result?.status === 'already_redeemed' ? 'warning' : 'error',
+        tone: result?.status === 'redeemed' ? 'success' : result?.status === 'already_redeemed' || result?.status === 'expired' ? 'warning' : 'error',
         ticket,
-        pendingStatus: result?.status === 'redeemed' || result?.status === 'already_redeemed' ? 'already_redeemed' : null,
+        pendingStatus:
+          result?.status === 'redeemed' || result?.status === 'already_redeemed'
+            ? 'already_redeemed'
+            : result?.status === 'expired'
+              ? 'expired'
+              : null,
         busy: false
       }))
     } catch (error) {

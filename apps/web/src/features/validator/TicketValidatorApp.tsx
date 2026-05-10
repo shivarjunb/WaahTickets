@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ChevronLeft, RefreshCw, ScanLine, Ticket, X, AlertTriangle } from "lucide-react";
-import { jsQR } from "jsqr";
+import { AlertTriangle, Camera, CheckCircle2, Home, LogOut, Moon, ScanLine, Sun, Ticket, X } from "lucide-react";
+import jsQR from "jsqr";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
@@ -27,7 +27,7 @@ export default function TicketValidatorApp({
   const [cameraError, setCameraError] = useState('')
   const [scanResult, setScanResult] = useState<ApiRecord | null>(null)
   const [pendingTicket, setPendingTicket] = useState<ApiRecord | null>(null)
-  const [pendingStatus, setPendingStatus] = useState<'unredeemed' | 'already_redeemed' | null>(null)
+  const [pendingStatus, setPendingStatus] = useState<'unredeemed' | 'already_redeemed' | 'expired' | null>(null)
   const [pendingQrValue, setPendingQrValue] = useState('')
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -231,15 +231,15 @@ export default function TicketValidatorApp({
       const result = data.data
       const ticket = (result?.ticket ?? null) as ApiRecord | null
 
-      if (result?.status === 'already_redeemed' && ticket) {
+      if ((result?.status === 'already_redeemed' || result?.status === 'expired') && ticket) {
         const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
         setPendingTicket(ticket)
-        setPendingStatus('already_redeemed')
+        setPendingStatus(result.status)
         setPendingQrValue(resolvedQrCodeValue)
         setQrInput(resolvedQrCodeValue)
         setStatusTone('warning')
-        setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
+        setStatusMessage(result.message ?? (result.status === 'expired' ? 'Ticket is expired.' : 'Ticket has already been redeemed.'))
       } else if (result?.status === 'unredeemed' && ticket) {
         const resolvedQrCodeValue = typeof ticket.qr_code_value === 'string' ? ticket.qr_code_value.trim() : qrCodeValue
         setScanResult(ticket)
@@ -286,11 +286,11 @@ export default function TicketValidatorApp({
         setStatusMessage(result.message ?? 'Ticket redeemed successfully.')
         setPendingTicket(ticket)
         setPendingStatus(ticket ? 'already_redeemed' : null)
-      } else if (result?.status === 'already_redeemed') {
+      } else if (result?.status === 'already_redeemed' || result?.status === 'expired') {
         setStatusTone('warning')
-        setStatusMessage(result.message ?? 'Ticket has already been redeemed.')
+        setStatusMessage(result.message ?? (result.status === 'expired' ? 'Ticket is expired.' : 'Ticket has already been redeemed.'))
         setPendingTicket(ticket)
-        setPendingStatus(ticket ? 'already_redeemed' : null)
+        setPendingStatus(ticket ? result.status : null)
       } else {
         setPendingTicket(null)
         setPendingStatus(null)
@@ -320,6 +320,8 @@ export default function TicketValidatorApp({
   const lastCheckLabel =
     statusTone === 'success'
       ? 'Redeemed'
+      : pendingStatus === 'expired'
+        ? 'Expired'
       : statusTone === 'warning'
         ? 'Already redeemed'
         : statusTone === 'error'
@@ -328,8 +330,10 @@ export default function TicketValidatorApp({
   const queueStateLabel =
     pendingStatus === 'unredeemed'
       ? 'Needs confirmation'
-      : pendingStatus === 'already_redeemed'
-        ? 'Already redeemed'
+    : pendingStatus === 'already_redeemed'
+      ? 'Already redeemed'
+      : pendingStatus === 'expired'
+        ? 'Expired'
         : 'No pending ticket'
 
   return (
@@ -467,12 +471,17 @@ export function TicketValidationModal({
   onConfirmRedeem
 }: {
   busy: boolean
-  status: 'unredeemed' | 'already_redeemed'
+  status: 'unredeemed' | 'already_redeemed' | 'expired'
   ticket: ApiRecord
   onClose: () => void
   onConfirmRedeem: () => void
 }) {
-  const title = status === 'unredeemed' ? 'Confirm ticket redemption' : 'Ticket already redeemed'
+  const title =
+    status === 'unredeemed'
+      ? 'Confirm ticket redemption'
+      : status === 'expired'
+        ? 'Ticket expired'
+        : 'Ticket already redeemed'
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -520,7 +529,7 @@ export function CustomerTicketModal({
   onClose
 }: {
   isLoading: boolean
-  status: 'already_redeemed' | 'unredeemed' | 'not_found' | null
+  status: 'already_redeemed' | 'unredeemed' | 'expired' | 'not_found' | null
   message: string
   ticket: ApiRecord
   onClose: () => void
@@ -537,11 +546,11 @@ export function CustomerTicketModal({
             <X size={18} />
           </button>
         </header>
-        <div className={`validator-result validator-result-${status === 'already_redeemed' ? 'warning' : 'neutral'}`}>
+        <div className={`validator-result validator-result-${status === 'already_redeemed' || status === 'expired' ? 'warning' : 'neutral'}`}>
           <span>{isLoading ? 'Loading ticket...' : message || 'Ticket loaded.'}</span>
         </div>
         <div className="validator-ticket-meta">
-          <p><strong>Status</strong> {status === 'already_redeemed' ? 'Redeemed' : 'Valid'}</p>
+          <p><strong>Status</strong> {status === 'already_redeemed' ? 'Redeemed' : status === 'expired' ? 'Expired' : 'Valid'}</p>
           <p><strong>Event</strong> {String(ticket.event_name ?? '-')}</p>
           <p><strong>Location</strong> {String(ticket.event_location_name ?? '-')}</p>
           <p><strong>Type</strong> {String(ticket.ticket_type_name ?? '-')}</p>
