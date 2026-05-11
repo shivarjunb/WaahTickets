@@ -503,7 +503,7 @@ body[data-theme='dark'] .order-whats-next-step {
 .process-payment-overlay {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 220;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -2456,7 +2456,7 @@ h1 {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 200;
   display: grid;
   place-items: center;
   padding: 18px;
@@ -2578,7 +2578,7 @@ h1 {
 }
 
 .nested-modal-backdrop {
-  z-index: 40;
+  z-index: 210;
 }
 
 .event-location-popup {
@@ -3015,6 +3015,89 @@ h1 {
   line-height: 1.4;
 }
 
+.modal-org-section {
+  padding: 14px 18px 4px;
+  border-top: 1px solid var(--admin-border, #e5e7eb);
+}
+
+.modal-org-section-label {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--admin-muted, #6b7280);
+}
+
+.modal-org-existing {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-org-existing li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.88rem;
+  padding: 6px 10px;
+  background: var(--admin-bg-subtle, #f9fafb);
+  border-radius: 7px;
+  border: 1px solid var(--admin-border, #e5e7eb);
+}
+
+.modal-org-existing li svg {
+  flex-shrink: 0;
+  color: var(--admin-muted, #6b7280);
+}
+
+.modal-org-existing li span {
+  flex: 1;
+  font-weight: 500;
+}
+
+.modal-org-existing li em {
+  font-style: normal;
+  font-size: 0.76rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--admin-accent-subtle, #ede9fe);
+  color: var(--admin-accent, #7c3aed);
+  font-weight: 500;
+}
+
+.modal-org-empty {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  color: var(--admin-muted, #6b7280);
+}
+
+.modal-org-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.modal-org-add select {
+  flex: 1;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 0.88rem;
+  border: 1px solid var(--admin-border, #e5e7eb);
+  border-radius: 7px;
+  background: var(--admin-bg, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+
+.modal-org-add select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .auth-status {
   margin: 0;
   color: inherit;
@@ -3405,7 +3488,7 @@ h1 {
   position: fixed;
   right: 16px;
   top: 96px;
-  z-index: 36;
+  z-index: 100;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -9227,6 +9310,7 @@ body[data-theme='light'] .admin-sidebar.collapsed {
 
 .marketplace-event-card,
 .venue-card {
+  position: relative;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 20px;
@@ -9322,7 +9406,7 @@ body[data-theme='light'] .admin-sidebar.collapsed {
 
 .marketplace-event-content,
 .venue-card div {
-  padding: 16px;
+  padding: 14px 16px 68px;
 }
 
 .marketplace-event-date {
@@ -9332,47 +9416,96 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   font-weight: 900;
 }
 
+/* Title: clamp to 2 lines, always reserve that height */
 .marketplace-event-content h3,
 .venue-card h3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   margin: 0 0 8px;
+  min-height: 2.6em;
   color: #0f172a;
-  font-size: 1.04rem;
+  font-size: 1.02rem;
+  font-weight: 700;
   line-height: 1.3;
 }
 
+/* Meta rows: venue and location */
 .marketplace-event-content p,
-.marketplace-event-content span,
 .venue-card p {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin: 0 0 7px;
+  margin: 0 0 6px;
   color: #64748b;
-  font-size: 0.86rem;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  overflow: hidden;
 }
 
+.marketplace-event-content p svg,
+.venue-card p svg {
+  flex-shrink: 0;
+}
+
+/* Truncate venue/location text to one line */
+.ec-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Footer: time on the left, price on the right */
 .marketplace-event-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.marketplace-event-footer span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #64748b;
+  font-size: 0.83rem;
+  white-space: nowrap;
 }
 
 .marketplace-event-footer strong {
   color: #0f172a;
-  font-size: 0.86rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.marketplace-event-footer button {
-  min-height: 38px;
+/* Ticket icon button — bottom-right of card */
+.event-card-ticket-btn {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
   border: 0;
-  border-radius: 12px;
-  padding: 0 15px;
+  border-radius: 50%;
   color: #ffffff;
   background: #7c3aed;
-  font-weight: 900;
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.38);
   cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  z-index: 1;
+}
+
+.event-card-ticket-btn:hover {
+  background: #6d28d9;
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
 }
 
 .seller-cta {
@@ -11047,6 +11180,86 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   padding: 12px 0;
 }
 
+/* Ticket type rows in wizard step 3 */
+.wizard-ticket-types {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wizard-ticket-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(30, 41, 59, 0.6);
+}
+
+.wizard-ticket-row .wizard-input {
+  background: rgba(15, 23, 42, 0.8);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+
+.wizard-ticket-row-footer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.wizard-ticket-row-footer .wizard-label {
+  flex: 1;
+}
+
+/* Delete button — always red */
+.tt-remove-btn {
+  color: #f87171 !important;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.tt-remove-btn:hover {
+  background: rgba(220, 38, 38, 0.2) !important;
+  color: #fca5a5 !important;
+}
+
+/* Confirm dialog */
+.confirm-dialog {
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  padding: 28px 28px 22px;
+  max-width: 380px;
+  width: calc(100% - 32px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.confirm-dialog-message {
+  margin: 0 0 22px;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: #e2e8f0;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.danger-button {
+  background: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #b91c1c !important;
+  border-color: #b91c1c !important;
+}
+
 /* Footer */
 .wizard-footer {
   display: flex;
@@ -11332,6 +11545,27 @@ body[data-theme='light'] .wizard-coupon-form {
 body[data-theme='light'] .wizard-coupon-item {
   background: #ffffff;
   border-color: rgba(15, 23, 42, 0.1);
+}
+
+body[data-theme='light'] .wizard-ticket-row {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+body[data-theme='light'] .wizard-ticket-row .wizard-input {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.18);
+  color: #0f172a;
+}
+
+body[data-theme='light'] .confirm-dialog {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+}
+
+body[data-theme='light'] .confirm-dialog-message {
+  color: #0f172a;
 }
 
 body[data-theme='light'] .inline-action-btn {

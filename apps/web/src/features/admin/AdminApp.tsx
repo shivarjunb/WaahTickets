@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Tag, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
@@ -63,6 +63,9 @@ export default function AdminApp({
   const [resources, setResources] = useState(fallbackResources)
   const [resourceColumnsCatalog, setResourceColumnsCatalog] = useState<Record<string, string[]>>({})
   const isAdminUser = user?.webrole === 'Admin'
+  const isOrgUser = !isAdminUser && user?.webrole === 'Organizations'
+  const [userOrganizations, setUserOrganizations] = useState<ApiRecord[]>([])
+  const [selectedOrgId, setSelectedOrgId] = useState<string>('')
   const [selectedWebRole, setSelectedWebRole] = useState<WebRoleName>(getDefaultWebRoleView(user))
   const [selectedResource, setSelectedResource] = useState(readAdminResourceFromPath)
   const [records, setRecords] = useState<ApiRecord[]>([])
@@ -73,6 +76,7 @@ export default function AdminApp({
   const [selectedColumnsByResource, setSelectedColumnsByResource] = useState<Record<string, string[]>>({})
   const [selectedRecord, setSelectedRecord] = useState<ApiRecord | null>(null)
   const [isEventWizardOpen, setIsEventWizardOpen] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<ApiRecord | null>(null)
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [lookupOptions, setLookupOptions] = useState<Record<string, ApiRecord[]>>({})
@@ -103,10 +107,15 @@ export default function AdminApp({
   const [isSavingRecord, setIsSavingRecord] = useState(false)
   const [recordError, setRecordError] = useState('')
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null)
+  const [pendingDeleteRecord, setPendingDeleteRecord] = useState<ApiRecord | null>(null)
+  const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false)
   const [collapsedMenuGroups, setCollapsedMenuGroups] = useState<Set<string>>(() => new Set())
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => loadAdminSidebarCollapsed())
   const [isMobileAdminMenuOpen, setIsMobileAdminMenuOpen] = useState(false)
   const [dashboardMetrics, setDashboardMetrics] = useState<AdminDashboardMetrics>(defaultAdminDashboardMetrics)
+  const [allOrganizationsForUserModal, setAllOrganizationsForUserModal] = useState<ApiRecord[]>([])
+  const [existingUserOrgMemberships, setExistingUserOrgMemberships] = useState<ApiRecord[]>([])
+  const [pendingUserOrgMembership, setPendingUserOrgMembership] = useState<{ orgId: string; role: string } | null>(null)
   const [r2Settings, setR2Settings] = useState<R2SettingsData>({
     r2_binding_name: 'FILES_BUCKET',
     r2_binding_configured: false,
@@ -256,7 +265,6 @@ export default function AdminApp({
       { id: DASHBOARD_VIEW, label: 'Dashboard', icon: LayoutDashboard },
       { id: 'events', label: 'Events', icon: CalendarDays },
       { id: 'orders', label: 'Orders', icon: Receipt },
-      { id: 'ticket_types', label: 'Ticket Types', icon: Ticket },
       { id: 'organizations', label: 'Organizers', icon: Building2 },
       { id: 'partners', label: 'Partners', icon: HandCoins },
       { id: 'referral_codes', label: 'Referral Codes', icon: Megaphone },
@@ -265,8 +273,12 @@ export default function AdminApp({
       { id: 'report_exports', label: 'Reports', icon: FileText },
       { id: ADS_VIEW, label: 'Ads', icon: Megaphone },
       { id: SETTINGS_VIEW, label: 'Settings', icon: Settings2 }
-    ].filter((item) => item.id === DASHBOARD_VIEW || item.id === ADS_VIEW || item.id === SETTINGS_VIEW || visibleResources.includes(item.id)),
-    [visibleResources]
+    ].filter((item) => {
+      if (item.id === DASHBOARD_VIEW) return true
+      if (item.id === ADS_VIEW || item.id === SETTINGS_VIEW) return isAdminUser
+      return visibleResources.includes(item.id)
+    }),
+    [isAdminUser, visibleResources]
   )
   const visibleResourceGroups = useMemo(() => {
     const resourcesShownInPrimary = new Set(sidebarPrimaryItems.map((item) => item.id))
@@ -304,6 +316,24 @@ export default function AdminApp({
     if (window.location.pathname === nextPath) return
     window.history.replaceState({}, '', `${nextPath}${window.location.search}`)
   }, [selectedResource])
+
+  useEffect(() => {
+    if (!isOrgUser) return
+    void (async () => {
+      try {
+        const { data } = await fetchJson<ApiListResponse>('/api/organizations?limit=100')
+        const orgs = data.data ?? []
+        setUserOrganizations(orgs)
+        if (orgs.length > 0 && !selectedOrgId) {
+          setSelectedOrgId(String(orgs[0].id ?? ''))
+        }
+      } catch {
+        setUserOrganizations([])
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOrgUser])
+
   const selectedPermissions =
     isDashboardView
       ? { can_create: false, can_edit: false, can_delete: false }
@@ -1279,6 +1309,66 @@ export default function AdminApp({
     }
 
     try {
+      const orgParam = isOrgUser && selectedOrgId ? `&organization_id=${encodeURIComponent(selectedOrgId)}` : ''
+
+      if (isOrgUser) {
+        const [eventsResponse, ticketTypesResponse, ordersResponse, ticketsResponse] = await Promise.all([
+          fetchJson<ApiListResponse>(`/api/events?limit=1000${orgParam}`),
+          fetchJson<ApiListResponse>(`/api/ticket_types?limit=1000${orgParam}`),
+          fetchJson<ApiListResponse>(`/api/orders?limit=1000${orgParam}`),
+          fetchJson<ApiListResponse>(`/api/tickets?limit=1000${orgParam}`)
+        ])
+
+        const orgEvents = eventsResponse.data.data ?? []
+        const orgOrders = ordersResponse.data.data ?? []
+        const orgTickets = ticketsResponse.data.data ?? []
+
+        const currentTotalPaisa = orgOrders.reduce(
+          (total, order) => total + Number(order.total_amount_paisa ?? 0),
+          0
+        )
+
+        const nowMs = Date.now()
+        const windowStart = nowMs - 30 * 24 * 60 * 60 * 1000
+        const monthlyTicketSales = buildLastMonthLabels(6).map((label) => ({ label, count: 0 }))
+        const monthlyTicketSalesIndex = new Map(monthlyTicketSales.map((item) => [item.label, item]))
+        let ticketsSoldLast30Days = 0
+        let ordersLast30Days = 0
+
+        for (const ticket of orgTickets) {
+          const timestamp = getRecordTimestamp(ticket, ['issued_at', 'created_at', 'updated_at'])
+          if (!timestamp) continue
+          const label = formatMonthLabel(timestamp)
+          const monthlyBucket = monthlyTicketSalesIndex.get(label)
+          if (monthlyBucket) monthlyBucket.count += 1
+          if (timestamp >= windowStart) ticketsSoldLast30Days += 1
+        }
+
+        for (const order of orgOrders) {
+          const timestamp = getRecordTimestamp(order, ['order_datetime', 'created_at', 'updated_at'])
+          if (!timestamp || timestamp < windowStart) continue
+          ordersLast30Days += 1
+        }
+
+        setDashboardMetrics({
+          eventsLoaded: orgEvents.length,
+          ticketTypes: ticketTypesResponse.data.data?.length ?? 0,
+          currentTotalPaisa,
+          ticketsSoldLast30Days,
+          activeUsersLast30Days: ordersLast30Days,
+          paymentSuccessRate: 0,
+          queueFailureCountLast30Days: 0,
+          monthlyTicketSales,
+          activityMix: [
+            { label: 'Orders', count: ordersLast30Days },
+            { label: 'Tickets', count: ticketsSoldLast30Days }
+          ],
+          paymentStatusMix: [],
+          queueJobsProcessedLast30Days: 0
+        })
+        return
+      }
+
       const [
         eventsResponse,
         ticketTypesResponse,
@@ -1517,6 +1607,18 @@ export default function AdminApp({
       delete values.user_id
       values.email = ''
     }
+    if (resource === 'users') {
+      setPendingUserOrgMembership(null)
+      setExistingUserOrgMemberships([])
+      void (async () => {
+        try {
+          const { data } = await fetchJson<ApiListResponse>('/api/organizations?limit=100')
+          setAllOrganizationsForUserModal(data.data ?? [])
+        } catch {
+          setAllOrganizationsForUserModal([])
+        }
+      })()
+    }
     setFormValues(values)
     setModalMode('create')
     void loadLookupOptions(resource, values)
@@ -1528,12 +1630,36 @@ export default function AdminApp({
       return
     }
 
+    if (selectedResource === 'events') {
+      setEditingEvent(record)
+      setIsEventWizardOpen(true)
+      return
+    }
     setSelectedRecord(record)
     setRecordError('')
     setPendingEventLocation(null)
     const values = ensureFormHasRequiredFields(selectedResource, toFormValues(record))
     setModalMode('edit')
     void loadLookupOptions(selectedResource, values)
+    if (selectedResource === 'users') {
+      setPendingUserOrgMembership(null)
+      const userId = String(record.id ?? '')
+      void (async () => {
+        try {
+          const [orgsResponse, membershipsResponse] = await Promise.all([
+            fetchJson<ApiListResponse>('/api/organizations?limit=100'),
+            fetchJson<ApiListResponse>(`/api/organization_users?user_id=${encodeURIComponent(userId)}&limit=100`)
+          ])
+          setAllOrganizationsForUserModal(orgsResponse.data.data ?? [])
+          setExistingUserOrgMemberships(membershipsResponse.data.data ?? [])
+        } catch {
+          setAllOrganizationsForUserModal([])
+          setExistingUserOrgMemberships([])
+        }
+      })()
+      setFormValues(values)
+      return
+    }
     if (selectedResource !== 'events') {
       setFormValues(values)
       return
@@ -1564,6 +1690,9 @@ export default function AdminApp({
     setPendingEventLocation(null)
     setIsEventLocationPopupOpen(false)
     setEventLocationError('')
+    setAllOrganizationsForUserModal([])
+    setExistingUserOrgMemberships([])
+    setPendingUserOrgMembership(null)
   }
 
   function openEventLocationPopup() {
@@ -1734,6 +1863,24 @@ export default function AdminApp({
       }
 
       setSelectedRecord(data.data ?? null)
+      if (selectedResource === 'users' && pendingUserOrgMembership?.orgId) {
+        const savedUserId = String(data.data?.id ?? selectedRecord?.id ?? '')
+        if (savedUserId) {
+          try {
+            await fetchJson<ApiMutationResponse>('/api/organization_users', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                organization_id: pendingUserOrgMembership.orgId,
+                user_id: savedUserId,
+                role: pendingUserOrgMembership.role || 'member'
+              })
+            })
+          } catch {
+            // non-fatal: user saved, org assignment failed silently
+          }
+        }
+      }
       setStatus(`${modalMode === 'edit' ? 'Updated' : 'Created'} ${formatResourceName(selectedResource)}`)
       closeModal()
       await loadRecords()
@@ -1748,14 +1895,17 @@ export default function AdminApp({
     }
   }
 
-  async function deleteRecord(record: ApiRecord) {
+  async function deleteRecord(record: ApiRecord, confirmed = false) {
     if (!selectedPermissions.can_delete) {
       setStatus(`${selectedWebRole} cannot delete ${formatResourceName(selectedResource)}.`)
       return
     }
-
     if (!record.id) {
       setStatus('The selected record does not have an id.')
+      return
+    }
+    if (!confirmed) {
+      setPendingDeleteRecord(record)
       return
     }
 
@@ -2057,6 +2207,21 @@ export default function AdminApp({
             </select>
           </label>
         ) : null}
+        {isOrgUser && userOrganizations.length > 1 ? (
+          <label className="role-switcher">
+            <span>Organization</span>
+            <select
+              value={selectedOrgId}
+              onChange={(event) => setSelectedOrgId(event.target.value)}
+            >
+              {userOrganizations.map((org) => (
+                <option key={String(org.id)} value={String(org.id)}>
+                  {String(org.name ?? org.id)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <nav className="admin-menu" id="admin-mobile-navigation" aria-label="Admin resources">
           <section className="admin-menu-section admin-menu-primary" aria-label="Primary admin navigation">
             <div className="admin-menu-items" style={{ maxHeight: `${sidebarPrimaryItems.length * 46}px` }}>
@@ -2078,11 +2243,19 @@ export default function AdminApp({
               })}
             </div>
           </section>
-          {visibleResourceGroups.map((group) => (
+          {visibleResourceGroups.map((group) => {
+            const orgGroupLabels: Record<string, string> = {
+              'Organizations': 'My Organization',
+              'Event setup': 'My Events',
+              'Sales': 'My Sales',
+              'People & access': 'Access'
+            }
+            const displayLabel = isOrgUser ? (orgGroupLabels[group.label] ?? group.label) : group.label
+            return (
             <section
               className={collapsedMenuGroups.has(group.label) ? 'admin-menu-section collapsed' : 'admin-menu-section'}
               key={group.label}
-              aria-label={group.label}
+              aria-label={displayLabel}
             >
               <button
                 aria-expanded={!collapsedMenuGroups.has(group.label)}
@@ -2090,7 +2263,7 @@ export default function AdminApp({
                 type="button"
                 onClick={() => toggleMenuGroup(group.label)}
               >
-                <span>{group.label}</span>
+                <span>{displayLabel}</span>
                 <ChevronDown size={15} />
               </button>
               <div
@@ -2117,7 +2290,7 @@ export default function AdminApp({
                 })}
               </div>
             </section>
-          ))}
+          )})}
         </nav>
       </aside>
 
@@ -2128,7 +2301,9 @@ export default function AdminApp({
             <h1>{viewLabel}</h1>
             <p className="admin-page-subtitle">
               {isDashboardView
-                ? 'Ticketing operations, revenue, payouts, and partner performance in one console.'
+                ? isOrgUser
+                  ? 'Your events, ticket sales, and order activity — all in one place.'
+                  : 'Ticketing operations, revenue, payouts, and partner performance in one console.'
                 : isSettingsView
                   ? 'Configure storage, payments, rails, appearance, and grid preferences.'
                   : isAdsView
@@ -2173,7 +2348,7 @@ export default function AdminApp({
               <Home size={17} />
               Public site
             </a>
-            <button type="button" onClick={() => void onLogout()}>
+            <button type="button" onClick={() => setConfirmLogoutOpen(true)}>
               <LogOut size={17} />
               Logout
             </button>
@@ -2232,133 +2407,195 @@ export default function AdminApp({
                 ) : null}
               </div>
             </section>
-            <div className="admin-summary-grid admin-metric-grid">
-              <StatCard icon={Banknote} label="Gross Sales" value={formatMoney(dashboardMetrics.currentTotalPaisa)} helperText="Loaded order value" />
-              <StatCard icon={Ticket} label="Tickets Sold" value={dashboardMetrics.ticketsSoldLast30Days} helperText="Last 30 days" />
-              <StatCard icon={Users} label="Active Users" value={dashboardMetrics.activeUsersLast30Days} helperText="Last 30 days" />
-              <StatCard icon={CreditCard} label="Payment Success" value={`${dashboardMetrics.paymentSuccessRate}%`} helperText="Last 30 days" />
-              <StatCard icon={CalendarDays} label="Active Events" value={dashboardMetrics.eventsLoaded} helperText="Currently loaded" />
-              <StatCard icon={CreditCard} label="Pending Payouts" value="Review" helperText="Open settlements" />
-              <StatCard icon={HandCoins} label="Partner Commissions" value="Ledger" helperText="Track commission entries" />
-              <StatCard icon={AlertTriangle} label="Queue Failures" value={dashboardMetrics.queueFailureCountLast30Days} helperText="Last 30 days" />
-            </div>
-            <section className="admin-analytics-grid" aria-label="Admin insights charts">
-              <article className="admin-chart-card">
-                <header>
-                  <h2>
-                    <BarChart3 size={18} />
-                    Ticket Sales (Last 6 Months)
-                  </h2>
-                  <p>Month-on-month sold ticket volume.</p>
-                </header>
-                <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
-                  {dashboardMetrics.monthlyTicketSales.map((point) => (
-                    <div className="admin-insight-bar-group" key={point.label}>
-                      <div
-                        className="admin-insight-bar"
-                        style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
-                        title={`${point.label}: ${point.count} tickets`}
-                      />
-                      <span>{point.label}</span>
-                    </div>
-                  ))}
+            {isOrgUser ? (
+              <>
+                <div className="admin-summary-grid admin-metric-grid">
+                  <StatCard icon={CalendarDays} label="Your Events" value={dashboardMetrics.eventsLoaded} helperText="Published & draft" />
+                  <StatCard icon={Ticket} label="Tickets Sold" value={dashboardMetrics.ticketsSoldLast30Days} helperText="Last 30 days" />
+                  <StatCard icon={Banknote} label="Gross Sales" value={formatMoney(dashboardMetrics.currentTotalPaisa)} helperText="All time" />
+                  <StatCard icon={Tag} label="Ticket Types" value={dashboardMetrics.ticketTypes} helperText="Across your events" />
                 </div>
-              </article>
-
-              <article className="admin-chart-card">
-                <header>
-                  <h2>
-                    <Activity size={18} />
-                    Activity Mix (30d)
-                  </h2>
-                  <p>Orders, scans, queue processing, and payments.</p>
-                </header>
-                <div className="admin-activity-list">
-                  {dashboardMetrics.activityMix.map((item) => (
-                    <div className="admin-activity-row" key={item.label}>
-                      <div>
-                        <strong>{item.label}</strong>
-                        <span>{item.count} actions</span>
-                      </div>
-                      <div className="admin-status-meter">
-                        <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
-                      </div>
+                <section className="admin-analytics-grid" aria-label="Organizer insights">
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2><BarChart3 size={18} /> Ticket Sales (Last 6 Months)</h2>
+                      <p>Month-on-month sold ticket volume for your events.</p>
+                    </header>
+                    <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
+                      {dashboardMetrics.monthlyTicketSales.map((point) => (
+                        <div className="admin-insight-bar-group" key={point.label}>
+                          <div
+                            className="admin-insight-bar"
+                            style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
+                            title={`${point.label}: ${point.count} tickets`}
+                          />
+                          <span>{point.label}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </article>
-
-              <article className="admin-chart-card">
-                <header>
-                  <h2>
-                    <Bell size={18} />
-                    Delivery Reliability
-                  </h2>
-                  <p>Queue health and payment status distribution for the last 30 days.</p>
-                </header>
-                <div className="admin-reliability-grid">
-                  <div className="admin-reliability-stat">
-                    <span>Queue success rate</span>
-                    <strong>
-                      {dashboardMetrics.queueJobsProcessedLast30Days > 0
-                        ? `${Math.max(
-                            0,
-                            Math.round(
-                              ((dashboardMetrics.queueJobsProcessedLast30Days -
-                                dashboardMetrics.queueFailureCountLast30Days) /
-                                dashboardMetrics.queueJobsProcessedLast30Days) *
-                                100
-                            )
-                          )}%`
-                        : '0%'}
-                    </strong>
-                    <p>
-                      {dashboardMetrics.queueJobsProcessedLast30Days -
-                        dashboardMetrics.queueFailureCountLast30Days}{' '}
-                      successful out of {dashboardMetrics.queueJobsProcessedLast30Days} queue jobs
-                    </p>
-                  </div>
-                  <div className="admin-payment-status-list">
-                    {dashboardMetrics.paymentStatusMix.length === 0 ? (
-                      <p className="admin-chart-empty">No payment status data found yet.</p>
-                    ) : (
-                      dashboardMetrics.paymentStatusMix.map((item) => (
-                        <div className="admin-status-row" key={item.label}>
+                  </article>
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2><Activity size={18} /> Recent Activity (30d)</h2>
+                      <p>Orders and tickets issued for your events.</p>
+                    </header>
+                    <div className="admin-activity-list">
+                      {dashboardMetrics.activityMix.map((item) => (
+                        <div className="admin-activity-row" key={item.label}>
                           <div>
                             <strong>{item.label}</strong>
-                            <span>{item.count} payments</span>
+                            <span>{item.count} {item.label.toLowerCase()}</span>
                           </div>
                           <div className="admin-status-meter">
-                            <span
-                              style={{
-                                width: `${Math.max(
-                                  6,
-                                  Math.round((item.count / Math.max(1, paymentStatusTotal)) * 100)
-                                )}%`
-                              }}
-                            />
+                            <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
                           </div>
                         </div>
-                      ))
-                    )}
-                  </div>
+                      ))}
+                    </div>
+                  </article>
+                </section>
+                <section className="admin-dashboard-panels">
+                  <article className="admin-chart-card">
+                    <header><h2><Receipt size={18} /> Recent orders</h2><p>View all orders for your events.</p></header>
+                    <button type="button" onClick={() => setSelectedResource('orders')}>View orders</button>
+                  </article>
+                  <article className="admin-chart-card">
+                    <header><h2><CalendarDays size={18} /> Your events</h2><p>Manage schedules, ticket inventory, and publishing status.</p></header>
+                    <button type="button" onClick={() => setSelectedResource('events')}>View events</button>
+                  </article>
+                </section>
+              </>
+            ) : (
+              <>
+                <div className="admin-summary-grid admin-metric-grid">
+                  <StatCard icon={Banknote} label="Gross Sales" value={formatMoney(dashboardMetrics.currentTotalPaisa)} helperText="Loaded order value" />
+                  <StatCard icon={Ticket} label="Tickets Sold" value={dashboardMetrics.ticketsSoldLast30Days} helperText="Last 30 days" />
+                  <StatCard icon={Users} label="Active Users" value={dashboardMetrics.activeUsersLast30Days} helperText="Last 30 days" />
+                  <StatCard icon={CreditCard} label="Payment Success" value={`${dashboardMetrics.paymentSuccessRate}%`} helperText="Last 30 days" />
+                  <StatCard icon={CalendarDays} label="Active Events" value={dashboardMetrics.eventsLoaded} helperText="Currently loaded" />
+                  <StatCard icon={CreditCard} label="Pending Payouts" value="Review" helperText="Open settlements" />
+                  <StatCard icon={HandCoins} label="Partner Commissions" value="Ledger" helperText="Track commission entries" />
+                  <StatCard icon={AlertTriangle} label="Queue Failures" value={dashboardMetrics.queueFailureCountLast30Days} helperText="Last 30 days" />
                 </div>
-              </article>
-            </section>
-            <section className="admin-dashboard-panels">
-              <article className="admin-chart-card">
-                <header><h2><Receipt size={18} /> Recent orders</h2><p>Open the Orders grid for detailed payment context.</p></header>
-                <button type="button" onClick={() => setSelectedResource('orders')}>View orders</button>
-              </article>
-              <article className="admin-chart-card">
-                <header><h2><CalendarDays size={18} /> Upcoming events</h2><p>Manage schedules, ticket inventory, and publishing status.</p></header>
-                <button type="button" onClick={() => setSelectedResource('events')}>View events</button>
-              </article>
-              <article className="admin-chart-card">
-                <header><h2><HandCoins size={18} /> Partner commissions</h2><p>Review rules, referral attribution, and ledger entries.</p></header>
-                <button type="button" onClick={() => setSelectedResource('commission_ledger')}>View ledger</button>
-              </article>
-            </section>
+                <section className="admin-analytics-grid" aria-label="Admin insights charts">
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <BarChart3 size={18} />
+                        Ticket Sales (Last 6 Months)
+                      </h2>
+                      <p>Month-on-month sold ticket volume.</p>
+                    </header>
+                    <div className="admin-insight-chart" role="img" aria-label="Ticket sales by month">
+                      {dashboardMetrics.monthlyTicketSales.map((point) => (
+                        <div className="admin-insight-bar-group" key={point.label}>
+                          <div
+                            className="admin-insight-bar"
+                            style={{ height: `${Math.max(8, Math.round((point.count / monthlyTicketSalesMax) * 100))}%` }}
+                            title={`${point.label}: ${point.count} tickets`}
+                          />
+                          <span>{point.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <Activity size={18} />
+                        Activity Mix (30d)
+                      </h2>
+                      <p>Orders, scans, queue processing, and payments.</p>
+                    </header>
+                    <div className="admin-activity-list">
+                      {dashboardMetrics.activityMix.map((item) => (
+                        <div className="admin-activity-row" key={item.label}>
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span>{item.count} actions</span>
+                          </div>
+                          <div className="admin-status-meter">
+                            <span style={{ width: `${Math.max(6, Math.round((item.count / activityMixMax) * 100))}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="admin-chart-card">
+                    <header>
+                      <h2>
+                        <Bell size={18} />
+                        Delivery Reliability
+                      </h2>
+                      <p>Queue health and payment status distribution for the last 30 days.</p>
+                    </header>
+                    <div className="admin-reliability-grid">
+                      <div className="admin-reliability-stat">
+                        <span>Queue success rate</span>
+                        <strong>
+                          {dashboardMetrics.queueJobsProcessedLast30Days > 0
+                            ? `${Math.max(
+                                0,
+                                Math.round(
+                                  ((dashboardMetrics.queueJobsProcessedLast30Days -
+                                    dashboardMetrics.queueFailureCountLast30Days) /
+                                    dashboardMetrics.queueJobsProcessedLast30Days) *
+                                    100
+                                )
+                              )}%`
+                            : '0%'}
+                        </strong>
+                        <p>
+                          {dashboardMetrics.queueJobsProcessedLast30Days -
+                            dashboardMetrics.queueFailureCountLast30Days}{' '}
+                          successful out of {dashboardMetrics.queueJobsProcessedLast30Days} queue jobs
+                        </p>
+                      </div>
+                      <div className="admin-payment-status-list">
+                        {dashboardMetrics.paymentStatusMix.length === 0 ? (
+                          <p className="admin-chart-empty">No payment status data found yet.</p>
+                        ) : (
+                          dashboardMetrics.paymentStatusMix.map((item) => (
+                            <div className="admin-status-row" key={item.label}>
+                              <div>
+                                <strong>{item.label}</strong>
+                                <span>{item.count} payments</span>
+                              </div>
+                              <div className="admin-status-meter">
+                                <span
+                                  style={{
+                                    width: `${Math.max(
+                                      6,
+                                      Math.round((item.count / Math.max(1, paymentStatusTotal)) * 100)
+                                    )}%`
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                </section>
+                <section className="admin-dashboard-panels">
+                  <article className="admin-chart-card">
+                    <header><h2><Receipt size={18} /> Recent orders</h2><p>Open the Orders grid for detailed payment context.</p></header>
+                    <button type="button" onClick={() => setSelectedResource('orders')}>View orders</button>
+                  </article>
+                  <article className="admin-chart-card">
+                    <header><h2><CalendarDays size={18} /> Upcoming events</h2><p>Manage schedules, ticket inventory, and publishing status.</p></header>
+                    <button type="button" onClick={() => setSelectedResource('events')}>View events</button>
+                  </article>
+                  <article className="admin-chart-card">
+                    <header><h2><HandCoins size={18} /> Partner commissions</h2><p>Review rules, referral attribution, and ledger entries.</p></header>
+                    <button type="button" onClick={() => setSelectedResource('commission_ledger')}>View ledger</button>
+                  </article>
+                </section>
+              </>
+            )}
           </>
         ) : isSettingsView ? (
           <>
@@ -3277,15 +3514,16 @@ export default function AdminApp({
                       ) : null}
                     </div>
                   ) : null}
-                  <button
-                    className="primary-admin-button"
-                    disabled={!selectedPermissions.can_create}
-                    type="button"
-                    onClick={() => openCreateModal()}
-                  >
-                    <Plus size={17} />
-                    {resourceConfig.createLabel ?? `Create ${resourceConfig.title.replace(/s$/, '').toLowerCase()}`}
-                  </button>
+                  {selectedPermissions.can_create ? (
+                    <button
+                      className="primary-admin-button"
+                      type="button"
+                      onClick={() => openCreateModal()}
+                    >
+                      <Plus size={17} />
+                      {resourceConfig.createLabel ?? `Create ${resourceConfig.title.replace(/s$/, '').toLowerCase()}`}
+                    </button>
+                  ) : null}
                 </div>
               </div>
               {recordError ? <div className="admin-table-alert" role="alert">{recordError}</div> : null}
@@ -3374,20 +3612,22 @@ export default function AdminApp({
                               >
                                 <Edit3 size={16} />
                               </button>
-                              <button
-                                aria-label="Delete record"
-                                className="danger-icon"
-                                disabled={!selectedPermissions.can_delete || deletingRecordId === String(record.id)}
-                                title="Delete"
-                                type="button"
-                                onClick={() => void deleteRecord(record)}
-                              >
-                                {deletingRecordId === String(record.id) ? (
-                                  <span aria-hidden="true" className="inline-spinner" />
-                                ) : (
-                                  <Trash2 size={16} />
-                                )}
-                              </button>
+                              {selectedPermissions.can_delete ? (
+                                <button
+                                  aria-label="Delete record"
+                                  className="danger-icon"
+                                  disabled={deletingRecordId === String(record.id)}
+                                  title="Delete"
+                                  type="button"
+                                  onClick={() => void deleteRecord(record)}
+                                >
+                                  {deletingRecordId === String(record.id) ? (
+                                    <span aria-hidden="true" className="inline-spinner" />
+                                  ) : (
+                                    <Trash2 size={16} />
+                                  )}
+                                </button>
+                              ) : null}
                               {selectedResource === 'files' && getFileDownloadUrl(record) ? (
                                 <button
                                   aria-label="Download file"
@@ -3631,10 +3871,13 @@ export default function AdminApp({
         <CreateEventWizard
           userId={user?.id ?? ''}
           webRole={selectedWebRole}
-          onClose={() => setIsEventWizardOpen(false)}
+          initialEvent={editingEvent}
+          onClose={() => { setIsEventWizardOpen(false); setEditingEvent(null) }}
           onSaved={async () => {
+            const wasEditing = Boolean(editingEvent)
             setIsEventWizardOpen(false)
-            setStatus('Event created successfully.')
+            setEditingEvent(null)
+            setStatus(wasEditing ? 'Event updated successfully.' : 'Event created successfully.')
             await loadRecords()
             await loadDashboardMetrics()
           }}
@@ -3645,13 +3888,17 @@ export default function AdminApp({
         <RecordModal
           currentUser={user}
           errorMessage={recordError}
+          existingOrgMemberships={existingUserOrgMemberships}
           formValues={formValues}
           isSaving={isSavingRecord}
           lookupOptions={lookupOptions}
           mode={modalMode}
           onFileUploaded={handleFileUploadSuccess}
           onOpenCreateEventLocation={openEventLocationPopup}
+          orgOptions={allOrganizationsForUserModal}
           pendingEventLocation={pendingEventLocation}
+          pendingOrgMembership={pendingUserOrgMembership}
+          onPendingOrgMembershipChange={setPendingUserOrgMembership}
           record={selectedRecord}
           resource={selectedResource}
           setFormValues={setFormValues}
@@ -3696,6 +3943,26 @@ export default function AdminApp({
           </section>
         </div>
       ) : null}
+
+      {pendingDeleteRecord ? (
+        <ConfirmDialog
+          message={`Delete this ${formatResourceName(selectedResource).replace(/s$/, '').toLowerCase()}? This cannot be undone.`}
+          confirmLabel="Delete"
+          isDanger
+          onConfirm={() => { const r = pendingDeleteRecord; setPendingDeleteRecord(null); void deleteRecord(r, true) }}
+          onCancel={() => setPendingDeleteRecord(null)}
+        />
+      ) : null}
+
+      {confirmLogoutOpen ? (
+        <ConfirmDialog
+          message="Are you sure you want to log out?"
+          confirmLabel="Log out"
+          isDanger={false}
+          onConfirm={() => { setConfirmLogoutOpen(false); void onLogout() }}
+          onCancel={() => setConfirmLogoutOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }
@@ -3728,13 +3995,17 @@ export function StatCard({
 export function RecordModal({
   currentUser,
   errorMessage,
+  existingOrgMemberships,
   formValues,
   isSaving,
   lookupOptions,
   mode,
   onFileUploaded,
   onOpenCreateEventLocation,
+  orgOptions,
   pendingEventLocation,
+  pendingOrgMembership,
+  onPendingOrgMembershipChange,
   record,
   resource,
   setFormValues,
@@ -3744,13 +4015,17 @@ export function RecordModal({
 }: {
   currentUser: AuthUser
   errorMessage: string
+  existingOrgMemberships?: ApiRecord[]
   formValues: Record<string, string>
   isSaving: boolean
   lookupOptions: Record<string, ApiRecord[]>
   mode: 'create' | 'edit'
   onFileUploaded: (uploadedFile: ApiRecord) => Promise<void>
   onOpenCreateEventLocation?: () => void
+  orgOptions?: ApiRecord[]
   pendingEventLocation?: EventLocationDraft | null
+  pendingOrgMembership?: { orgId: string; role: string } | null
+  onPendingOrgMembershipChange?: (m: { orgId: string; role: string } | null) => void
   record: ApiRecord | null
   resource: string
   setFormValues: Dispatch<SetStateAction<Record<string, string>>>
@@ -3991,6 +4266,62 @@ export function RecordModal({
               ))}
             </div>
           ) : null}
+          {resource === 'users' && orgOptions && orgOptions.length > 0 ? (
+            <div className="modal-org-section">
+              <p className="modal-org-section-label">Organization membership</p>
+              {existingOrgMemberships && existingOrgMemberships.length > 0 ? (
+                <ul className="modal-org-existing">
+                  {existingOrgMemberships.map((m) => (
+                    <li key={String(m.id)}>
+                      <Building2 size={14} />
+                      <span>{String(m.organization_name ?? m.organization_id ?? m.id)}</span>
+                      {m.role ? <em>{String(m.role)}</em> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : mode === 'edit' ? (
+                <p className="modal-org-empty">Not a member of any organization.</p>
+              ) : null}
+              <div className="modal-org-add">
+                <select
+                  disabled={isSaving}
+                  value={pendingOrgMembership?.orgId ?? ''}
+                  onChange={(event) => {
+                    const orgId = event.target.value
+                    if (!orgId) {
+                      onPendingOrgMembershipChange?.(null)
+                    } else {
+                      onPendingOrgMembershipChange?.({ orgId, role: pendingOrgMembership?.role ?? 'member' })
+                    }
+                  }}
+                >
+                  <option value="">
+                    {mode === 'edit' ? '+ Add to organization' : 'Assign to organization (optional)'}
+                  </option>
+                  {orgOptions
+                    .filter((org) => !existingOrgMemberships?.some((m) => String(m.organization_id) === String(org.id)))
+                    .map((org) => (
+                      <option key={String(org.id)} value={String(org.id)}>
+                        {String(org.name ?? org.id)}
+                      </option>
+                    ))}
+                </select>
+                {pendingOrgMembership?.orgId ? (
+                  <select
+                    disabled={isSaving}
+                    value={pendingOrgMembership.role}
+                    onChange={(event) =>
+                      onPendingOrgMembershipChange?.({ ...pendingOrgMembership, role: event.target.value })
+                    }
+                  >
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                    <option value="owner">Owner</option>
+                  </select>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {errorMessage ? <p className="record-modal-error">{errorMessage}</p> : null}
         </div>
 
@@ -4041,6 +4372,44 @@ export function MoneyInput({
   )
 }
 
+
+export function ConfirmDialog({
+  message,
+  confirmLabel = 'Delete',
+  isDanger = true,
+  onConfirm,
+  onCancel
+}: {
+  message: string
+  confirmLabel?: string
+  isDanger?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="nested-modal-backdrop" role="presentation" onClick={onCancel}>
+      <div
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={message}
+        onClick={e => e.stopPropagation()}
+      >
+        <p className="confirm-dialog-message">{message}</p>
+        <div className="confirm-dialog-actions">
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button
+            className={isDanger ? 'primary-admin-button danger-button' : 'primary-admin-button'}
+            type="button"
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function EventLocationPopup({
   draft,

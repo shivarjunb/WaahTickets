@@ -380,12 +380,16 @@ export const roleAccess: Record<
     tickets: { can_create: false, can_edit: false, can_delete: false },
     ticket_scans: { can_create: true, can_edit: false, can_delete: false }
   },
-  Admin: Object.fromEntries(
-    fallbackResources.map((resource) => [
-      resource,
-      { can_create: true, can_edit: true, can_delete: true }
-    ])
-  ) as Record<string, { can_create: boolean; can_edit: boolean; can_delete: boolean }>
+  Admin: {
+    ...Object.fromEntries(
+      fallbackResources.map((resource) => [
+        resource,
+        { can_create: true, can_edit: true, can_delete: true }
+      ])
+    ),
+    orders: { can_create: false, can_edit: true, can_delete: true },
+    order_items: { can_create: false, can_edit: true, can_delete: true }
+  } as Record<string, { can_create: boolean; can_edit: boolean; can_delete: boolean }>
 }
 
 export const lookupResourceByField: Record<string, string> = {

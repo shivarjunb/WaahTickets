@@ -39,8 +39,7 @@ export default function PublicApp({
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedEventDetailId, setSelectedEventDetailId] = useState<string | null>(null)
-  const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null)
-  const [quantity, setQuantity] = useState(1)
+  const [ticketQuantities, setTicketQuantities] = useState<Record<string, number>>({})
   const [eventSearchQuery, setEventSearchQuery] = useState('')
   const [eventLocationQuery, setEventLocationQuery] = useState('')
   const [eventTypeFilter, setEventTypeFilter] = useState('all')
@@ -137,10 +136,6 @@ export default function PublicApp({
   const selectedEventDetails = useMemo(
     () => events.find((event) => event.id === selectedEventDetailId) ?? null,
     [events, selectedEventDetailId]
-  )
-  const selectedTicketType = useMemo(
-    () => ticketTypes.find((ticketType) => ticketType.id === selectedTicketTypeId) ?? ticketTypes[0],
-    [ticketTypes, selectedTicketTypeId]
   )
   const eventTypeOptions = useMemo(() => {
     const options = new Set<string>()
@@ -308,7 +303,10 @@ export default function PublicApp({
     if (!isSearchOrFilterActive) setShowAllRails(false)
   }, [isSearchOrFilterActive])
   const homepagePageUrl = typeof window === 'undefined' ? '/' : `${window.location.pathname}${window.location.search}`
-  const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
+  const totalPaisa = useMemo(
+    () => ticketTypes.reduce((sum, tt) => sum + (tt.price_paisa ?? 0) * (ticketQuantities[String(tt.id ?? '')] ?? 0), 0),
+    [ticketTypes, ticketQuantities]
+  )
   const cartSubtotalPaisa = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0),
     [cartItems]
@@ -331,16 +329,6 @@ export default function PublicApp({
     [cartItems]
   )
   const cartGroups = useMemo(() => groupCartItemsByEvent(cartItems), [cartItems])
-  const remainingTickets =
-    selectedTicketType?.quantity_remaining !== undefined && selectedTicketType?.quantity_remaining !== null
-      ? Math.max(Number(selectedTicketType.quantity_remaining ?? 0), 0)
-      : selectedTicketType?.quantity_available === undefined
-      ? null
-      : Math.max(
-          Number(selectedTicketType.quantity_available ?? 0) -
-            Number(selectedTicketType.quantity_sold ?? 0),
-          0
-        )
   const reserveBlockedMessage = getReserveBlockedMessage()
   const canAccessTickets = hasCustomerTicketsAccess(user)
   const isProcessPaymentRoute = currentPath === '/processpayment'
@@ -693,8 +681,6 @@ export default function PublicApp({
         const loadedTicketTypes = (data.data ?? []) as TicketType[]
 
         setTicketTypes(loadedTicketTypes)
-        setSelectedTicketTypeId(loadedTicketTypes[0]?.id ?? null)
-        setQuantity(1)
       } catch (error) {
         setTicketTypes([])
         setPublicStatus(getErrorMessage(error))
@@ -1648,17 +1634,17 @@ export default function PublicApp({
           event={selectedEvent}
           isSubmittingOrder={isAddingToCart}
           isTicketTypesLoading={isTicketTypesLoading}
-          quantity={quantity}
-          remainingTickets={remainingTickets}
           reserveBlockedMessage={reserveBlockedMessage}
-          selectedTicketType={selectedTicketType}
+          ticketQuantities={ticketQuantities}
           ticketTypes={ticketTypes}
           totalPaisa={totalPaisa}
-          onChangeQuantity={(nextQuantity) => setQuantity(nextQuantity)}
-          onChangeTicketType={(nextTicketTypeId) => setSelectedTicketTypeId(nextTicketTypeId)}
+          onChangeQuantity={(typeId, qty) =>
+            setTicketQuantities((prev) => ({ ...prev, [typeId]: qty }))
+          }
           onClose={() => {
             if (isAddingToCart) return
             setIsCheckoutOpen(false)
+            setTicketQuantities({})
           }}
           onReserve={async () => {
             if (isAddingToCart) return
@@ -1667,6 +1653,7 @@ export default function PublicApp({
               const added = await addCurrentSelectionToCart()
               if (added) {
                 setIsCheckoutOpen(false)
+                setTicketQuantities({})
                 setIsCartOpen(false)
                 setIsCartCheckoutOpen(true)
               }
@@ -1793,33 +1780,42 @@ export default function PublicApp({
   )
 
   async function addCurrentSelectionToCart() {
-    if (!selectedEvent?.id || !selectedEvent.location_id || !selectedTicketType?.id) return false
+    if (!selectedEvent?.id || !selectedEvent.location_id) return false
     if (reserveBlockedMessage) {
       setPublicStatus(reserveBlockedMessage)
       return false
     }
 
-    const unitPrice = selectedTicketType.price_paisa ?? 0
-    const key = `${selectedEvent.id}::${selectedTicketType.id}`
-    const nextItem: CartItem = {
-      id: key,
-      event_id: selectedEvent.id,
-      event_name: String(selectedEvent.name ?? 'Event'),
-      event_location_id: String(selectedEvent.location_id),
-      event_location_name: String(selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'),
-      ticket_type_id: selectedTicketType.id,
-      ticket_type_name: String(selectedTicketType.name ?? 'Ticket'),
-      quantity: Math.max(1, quantity),
-      unit_price_paisa: unitPrice,
-      currency: String(selectedTicketType.currency ?? 'NPR')
+    const newItems: CartItem[] = []
+    for (const tt of ticketTypes) {
+      const qty = ticketQuantities[String(tt.id ?? '')] ?? 0
+      if (qty <= 0) continue
+      newItems.push({
+        id: `${selectedEvent.id}::${tt.id}`,
+        event_id: selectedEvent.id,
+        event_name: String(selectedEvent.name ?? 'Event'),
+        event_location_id: String(selectedEvent.location_id),
+        event_location_name: String(selectedEvent.location_name ?? selectedEvent.organization_name ?? 'Venue pending'),
+        ticket_type_id: String(tt.id ?? ''),
+        ticket_type_name: String(tt.name ?? 'Ticket'),
+        quantity: qty,
+        unit_price_paisa: tt.price_paisa ?? 0,
+        currency: String(tt.currency ?? 'NPR')
+      })
     }
-    const nextItems = upsertCartItem(cartItems, nextItem)
+    if (newItems.length === 0) return false
+
     if (!cartSettings.allow_multiple_events && cartHasDifferentEvent(cartItems, selectedEvent.id)) {
-      setPendingSingleEventCartItem(nextItem)
+      setPendingSingleEventCartItem(newItems[0])
       return false
     }
 
-    return commitCartItems(nextItems, `${quantity} ticket(s) added to cart and held for 15 minutes.`)
+    let nextItems = cartItems
+    for (const item of newItems) {
+      nextItems = upsertCartItem(nextItems, item)
+    }
+    const totalQty = newItems.reduce((s, i) => s + i.quantity, 0)
+    return commitCartItems(nextItems, `${totalQty} ticket(s) added to cart and held for 15 minutes.`)
   }
 
   async function commitCartItems(
@@ -2436,7 +2432,9 @@ export default function PublicApp({
     if (!selectedEvent?.id) return 'Select an event first.'
     if (!selectedEvent.location_id) return 'Add a location for this event in admin before reservations.'
     if (isTicketTypesLoading) return 'Loading ticket types...'
-    if (!selectedTicketType?.id) return 'Add a ticket type for this event in admin before reservations.'
+    if (ticketTypes.length === 0) return 'No ticket types available for this event.'
+    const totalQty = Object.values(ticketQuantities).reduce((s, q) => s + q, 0)
+    if (totalQty === 0) return 'Select at least one ticket to continue.'
     return ''
   }
 }
@@ -3000,16 +2998,22 @@ function EventCard({
       </button>
       <div className="marketplace-event-content">
         <h3>{event.name}</h3>
-        <p><Building2 size={15} /> {venue}</p>
-        <p><MapPin size={15} /> {location}</p>
-        <span><Clock size={15} /> {formatEventTime(event.start_datetime)}</span>
+        <p><Building2 size={14} /><span className="ec-label">{venue}</span></p>
+        <p><MapPin size={14} /><span className="ec-label">{location}</span></p>
         <div className="marketplace-event-footer">
+          <span><Clock size={13} /> {formatEventTime(event.start_datetime)}</span>
           <strong>{priceLabel}</strong>
-          <button type="button" onClick={onSelectTickets}>
-            View Tickets
-          </button>
         </div>
       </div>
+      <button
+        aria-label="View tickets"
+        className="event-card-ticket-btn"
+        title="View tickets"
+        type="button"
+        onClick={onSelectTickets}
+      >
+        <Ticket size={17} />
+      </button>
     </article>
   )
 }
@@ -3221,34 +3225,31 @@ export function CartExpiredNoticeModal({ onClose }: { onClose: () => void }) {
 export function CheckoutModal({
   event,
   ticketTypes,
-  selectedTicketType,
-  quantity,
-  remainingTickets,
+  ticketQuantities,
   totalPaisa,
   reserveBlockedMessage,
   isTicketTypesLoading,
   isSubmittingOrder,
   onClose,
-  onChangeTicketType,
   onChangeQuantity,
   onReserve
 }: {
   event?: PublicEvent
   ticketTypes: TicketType[]
-  selectedTicketType?: TicketType
-  quantity: number
-  remainingTickets: number | null
+  ticketQuantities: Record<string, number>
   totalPaisa: number
   reserveBlockedMessage: string
   isTicketTypesLoading: boolean
   isSubmittingOrder: boolean
   onClose: () => void
-  onChangeTicketType: (id: string) => void
-  onChangeQuantity: (value: number) => void
+  onChangeQuantity: (typeId: string, qty: number) => void
   onReserve: () => void | Promise<void>
 }) {
   const canReserve = !reserveBlockedMessage && !isSubmittingOrder
   const isInteractionLocked = isSubmittingOrder
+  const lineItems = ticketTypes
+    .map((tt) => ({ tt, qty: ticketQuantities[String(tt.id ?? '')] ?? 0 }))
+    .filter(({ qty }) => qty > 0)
 
   return (
     <div className="modal-backdrop checkout-backdrop" role="presentation">
@@ -3283,30 +3284,11 @@ export function CheckoutModal({
                 <span>{event?.location_name ?? event?.organization_name ?? 'Venue pending'}</span>
               </div>
             </div>
-            <div className="seat-map-panel" aria-label="Ticket availability">
-              <div className="seat-stage">Stage</div>
-              <div className="seat-grid" aria-hidden="true">
-                {Array.from({ length: 96 }).map((_, index) => (
-                  <span
-                    className={index % 13 === 0 ? 'seat unavailable' : index >= 42 && index <= 50 ? 'seat selected' : 'seat available'}
-                    key={index}
-                  />
-                ))}
-              </div>
-              <div className="seat-legend">
-                <span><i className="seat available" /> Available</span>
-                <span><i className="seat selected" /> Selected</span>
-                <span><i className="seat unavailable" /> Unavailable</span>
-              </div>
-            </div>
             <TicketSelector
               isLocked={isInteractionLocked}
-              quantity={quantity}
-              remainingTickets={remainingTickets}
-              selectedTicketType={selectedTicketType}
+              ticketQuantities={ticketQuantities}
               ticketTypes={ticketTypes}
               onChangeQuantity={onChangeQuantity}
-              onChangeTicketType={onChangeTicketType}
             />
             <AdSlot
               className="checkout-between-rails-ad"
@@ -3319,11 +3301,13 @@ export function CheckoutModal({
           <OrderSummary
             feePaisa={0}
             isSubmitting={isSubmittingOrder}
-            primaryLabel={isSubmittingOrder ? 'Adding...' : isTicketTypesLoading ? 'Loading ticket types...' : 'Continue to Checkout'}
+            lineItems={lineItems.map(({ tt, qty }) => ({
+              label: String(tt.name ?? 'Ticket'),
+              qty,
+              pricePaisa: tt.price_paisa ?? 0
+            }))}
+            primaryLabel={isSubmittingOrder ? 'Adding...' : isTicketTypesLoading ? 'Loading...' : 'Continue to Checkout'}
             reserveBlockedMessage={reserveBlockedMessage}
-            selectedTicketLabel={selectedTicketType?.name ?? 'Ticket'}
-            quantity={quantity}
-            subtotalPaisa={totalPaisa}
             totalPaisa={totalPaisa}
             onSubmit={onReserve}
             canSubmit={canReserve}
@@ -3350,51 +3334,46 @@ function CheckoutStepper({ activeStep }: { activeStep: 'Tickets' | 'Details' | '
 
 function TicketSelector({
   isLocked,
-  quantity,
-  remainingTickets,
-  selectedTicketType,
+  ticketQuantities,
   ticketTypes,
-  onChangeQuantity,
-  onChangeTicketType
+  onChangeQuantity
 }: {
   isLocked: boolean
-  quantity: number
-  remainingTickets: number | null
-  selectedTicketType?: TicketType
+  ticketQuantities: Record<string, number>
   ticketTypes: TicketType[]
-  onChangeQuantity: (value: number) => void
-  onChangeTicketType: (id: string) => void
+  onChangeQuantity: (typeId: string, qty: number) => void
 }) {
-  const maxQuantity = Math.max(1, selectedTicketType?.max_per_order ?? 10)
+  if (ticketTypes.length === 0) {
+    return (
+      <section className="ticket-selector" aria-label="Select tickets">
+        <h3>Select Tickets</h3>
+        <p className="checkout-hint">No ticket types available for this event.</p>
+      </section>
+    )
+  }
   return (
     <section className="ticket-selector" aria-label="Select tickets">
       <h3>Select Tickets</h3>
-      <label className="ticket-type-select">
-        <span>Ticket type</span>
-        <select disabled={isLocked} value={selectedTicketType?.id ?? ''} onChange={(event) => onChangeTicketType(event.target.value)}>
-          {ticketTypes.length === 0 ? (
-            <option value="">No ticket types</option>
-          ) : (
-            ticketTypes.map((ticketType) => (
-              <option key={ticketType.id} value={ticketType.id}>
-                {ticketType.name} - {formatMoney(ticketType.price_paisa ?? 0)}
-              </option>
-            ))
-          )}
-        </select>
-      </label>
-      <div className="ticket-option-row">
-        <div>
-          <strong>{selectedTicketType?.name ?? 'General Admission'}</strong>
-          <p>{remainingTickets === null ? 'Open availability' : `${remainingTickets} available`} · First come, first served.</p>
-        </div>
-        <strong>{formatMoney(selectedTicketType?.price_paisa ?? 0)}</strong>
-        <div className="quantity-stepper">
-          <button disabled={isLocked || quantity <= 1} type="button" onClick={() => onChangeQuantity(Math.max(1, quantity - 1))}>-</button>
-          <span>{quantity}</span>
-          <button disabled={isLocked || quantity >= maxQuantity} type="button" onClick={() => onChangeQuantity(Math.min(maxQuantity, quantity + 1))}>+</button>
-        </div>
-      </div>
+      {ticketTypes.map((tt) => {
+        const id = String(tt.id ?? '')
+        const qty = ticketQuantities[id] ?? 0
+        const max = Math.max(1, tt.max_per_order ?? 10)
+        return (
+          <div key={id} className="ticket-option-row">
+            <div className="ticket-option-info">
+              <strong>{tt.name ?? 'Ticket'}</strong>
+              {tt.description ? <p className="ticket-option-desc">{tt.description}</p> : null}
+              <p className="ticket-option-avail">First come, first served.</p>
+            </div>
+            <strong className="ticket-option-price">{formatMoney(tt.price_paisa ?? 0)}</strong>
+            <div className="quantity-stepper">
+              <button disabled={isLocked || qty <= 0} type="button" onClick={() => onChangeQuantity(id, Math.max(0, qty - 1))}>-</button>
+              <span>{qty}</span>
+              <button disabled={isLocked || qty >= max} type="button" onClick={() => onChangeQuantity(id, Math.min(max, qty + 1))}>+</button>
+            </div>
+          </div>
+        )
+      })}
     </section>
   )
 }
@@ -3403,32 +3382,35 @@ function OrderSummary({
   canSubmit,
   feePaisa,
   isSubmitting,
+  lineItems,
   primaryLabel,
-  quantity,
   reserveBlockedMessage,
-  selectedTicketLabel,
-  subtotalPaisa,
   totalPaisa,
   onSubmit
 }: {
   canSubmit: boolean
   feePaisa: number
   isSubmitting: boolean
+  lineItems: { label: string; qty: number; pricePaisa: number }[]
   primaryLabel: string
-  quantity: number
   reserveBlockedMessage: string
-  selectedTicketLabel: string
-  subtotalPaisa: number
   totalPaisa: number
   onSubmit: () => void | Promise<void>
 }) {
+  const visibleItems = lineItems.filter((item) => item.qty > 0)
   return (
     <aside className="order-summary-card">
       <h3>Order Summary</h3>
-      <div className="checkout-line">
-        <span>{selectedTicketLabel} ({quantity})</span>
-        <strong>{formatMoney(subtotalPaisa)}</strong>
-      </div>
+      {visibleItems.length === 0 ? (
+        <p className="checkout-hint">No tickets selected.</p>
+      ) : (
+        visibleItems.map((item) => (
+          <div key={item.label} className="checkout-line">
+            <span>{item.label} × {item.qty}</span>
+            <strong>{formatMoney(item.pricePaisa * item.qty)}</strong>
+          </div>
+        ))
+      )}
       <div className="checkout-line">
         <span>Fees</span>
         <strong>{formatMoney(feePaisa)}</strong>

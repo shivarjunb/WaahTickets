@@ -2,15 +2,15 @@ import { useState, useRef, useEffect, type Dispatch, type SetStateAction } from 
 import {
   Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon, RotateCcw,
   CalendarDays, Building2, MapPin, Clock, ChevronLeft, ChevronRight,
-  Upload, X, Plus, Trash2, Save, Image, Check, Tag
+  Upload, X, Plus, Trash2, Save, Image, Check, Tag, Ticket
 } from "lucide-react";
 import type { ApiRecord, ApiListResponse, ApiMutationResponse, EventLocationDraft } from "../../shared/types";
 import {
   fetchJson, getErrorMessage, formatEventDate, formatEventTime,
-  toIsoDateTimeValue, isTruthyValue, eventLocationDraftToPayload
+  toIsoDateTimeValue, toDateTimeLocalValue, isTruthyValue, eventLocationDraftToPayload
 } from "../../shared/utils";
 import { emptyEventLocationDraft, eventTypeLabels } from "../../shared/constants";
-import { EventLocationPopup } from "./AdminApp";
+import { EventLocationPopup, ConfirmDialog } from "./AdminApp";
 
 interface CouponDraft {
   localId: string
@@ -34,6 +34,30 @@ function emptyDraft(): CouponDraft {
   }
 }
 
+interface TicketTypeDraft {
+  localId: string
+  id: string
+  name: string
+  price_npr: string
+  quantity_available: string
+  max_per_order: string
+  description: string
+  deleted: boolean
+}
+
+function emptyTicketTypeDraft(): TicketTypeDraft {
+  return {
+    localId: Date.now().toString() + Math.random().toString(36).slice(2),
+    id: '',
+    name: '',
+    price_npr: '',
+    quantity_available: '',
+    max_per_order: '',
+    description: '',
+    deleted: false
+  }
+}
+
 const EVENT_TYPES = ['concert', 'theatre', 'sports', 'comedy', 'festival', 'food', 'conference', 'workshop', 'other']
 const STATUSES = ['draft', 'published', 'cancelled', 'archived']
 
@@ -48,35 +72,42 @@ function slugify(value: string) {
 export function CreateEventWizard({
   userId,
   webRole,
+  initialEvent,
   onClose,
   onSaved
 }: {
   userId?: string
   webRole?: string
+  initialEvent?: ApiRecord | null
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
   const isOrgRole = webRole === 'Organizations'
-  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const isEditing = Boolean(initialEvent?.id)
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
 
   // Step 1 fields
-  const [name, setName] = useState('')
-  const [shortDesc, setShortDesc] = useState('')
-  const [eventType, setEventType] = useState('')
+  const [name, setName] = useState(String(initialEvent?.name ?? ''))
+  const [shortDesc, setShortDesc] = useState(String(initialEvent?.description ?? ''))
+  const [eventType, setEventType] = useState(String(initialEvent?.event_type ?? ''))
 
   // Step 2 fields
-  const [orgId, setOrgId] = useState('')
-  const [slug, setSlug] = useState('')
-  const [startDatetime, setStartDatetime] = useState('')
-  const [endDatetime, setEndDatetime] = useState('')
-  const [status, setStatus] = useState('draft')
-  const [isFeatured, setIsFeatured] = useState(false)
+  const [orgId, setOrgId] = useState(String(initialEvent?.organization_id ?? ''))
+  const [slug, setSlug] = useState(String(initialEvent?.slug ?? ''))
+  const [startDatetime, setStartDatetime] = useState(
+    initialEvent?.start_datetime ? toDateTimeLocalValue(String(initialEvent.start_datetime)) : ''
+  )
+  const [endDatetime, setEndDatetime] = useState(
+    initialEvent?.end_datetime ? toDateTimeLocalValue(String(initialEvent.end_datetime)) : ''
+  )
+  const [status, setStatus] = useState(String(initialEvent?.status ?? 'draft'))
+  const [isFeatured, setIsFeatured] = useState(isTruthyValue(initialEvent?.is_featured ?? false))
   const [locationId, setLocationId] = useState('')
 
   // Image upload
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreviewUrl, setImagePreviewUrl] = useState('')
-  const [bannerId, setBannerId] = useState('')
+  const [bannerId, setBannerId] = useState(String(initialEvent?.banner_file_id ?? ''))
   const [isUploading, setIsUploading] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
 
@@ -93,6 +124,11 @@ export function CreateEventWizard({
   const [pendingLocation, setPendingLocation] = useState<EventLocationDraft | null>(null)
   const [locationError, setLocationError] = useState('')
   const [isSavingLocation, setIsSavingLocation] = useState(false)
+
+  // Ticket types
+  const [ticketTypeDrafts, setTicketTypeDrafts] = useState<TicketTypeDraft[]>([emptyTicketTypeDraft()])
+  const [ticketTypeError, setTicketTypeError] = useState('')
+  const [confirmDeleteTT, setConfirmDeleteTT] = useState<TicketTypeDraft | null>(null)
 
   // Coupons
   const [coupons, setCoupons] = useState<CouponDraft[]>([])
@@ -118,14 +154,48 @@ export function CreateEventWizard({
         setLocations(locsRes.data.data ?? [])
 
         // For org-role users: auto-select their organization
-        if (isOrgRole && loadedOrgs.length > 0) {
+        if (!isEditing && isOrgRole && loadedOrgs.length > 0) {
           setOrgId(String(loadedOrgs[0].id ?? ''))
+        }
+
+        // When editing: load the event's linked location and existing ticket types
+        if (isEditing && initialEvent?.id) {
+          const eventId = encodeURIComponent(String(initialEvent.id))
+          try {
+            const [locRes, ttRes] = await Promise.all([
+              fetchJson<ApiListResponse>(`/api/event_locations?event_id=${eventId}&limit=1`),
+              fetchJson<ApiListResponse>(`/api/ticket_types?event_id=${eventId}&limit=100`)
+            ])
+            const linked = locRes.data.data?.[0]
+            if (linked?.id) setLocationId(String(linked.id))
+            const existingTTs: TicketTypeDraft[] = (ttRes.data.data ?? []).map((tt: ApiRecord) => ({
+              localId: String(tt.id ?? ''),
+              id: String(tt.id ?? ''),
+              name: String(tt.name ?? ''),
+              price_npr: tt.price_paisa != null ? String(Number(tt.price_paisa) / 100) : '',
+              quantity_available: tt.quantity_available != null ? String(tt.quantity_available) : '',
+              max_per_order: tt.max_per_order != null ? String(tt.max_per_order) : '',
+              description: String(tt.description ?? ''),
+              deleted: false
+            }))
+            if (existingTTs.length > 0) setTicketTypeDrafts(existingTTs)
+          } catch {
+            // non-fatal
+          }
         }
       } catch {
         // non-fatal
       }
     }
     void loadLookups()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Pre-fill rich description editor when editing
+  useEffect(() => {
+    if (isEditing && editorRef.current && shortDesc) {
+      editorRef.current.innerHTML = shortDesc
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -199,6 +269,9 @@ export function CreateEventWizard({
       if (err) { setError(err); return }
       setError('')
       setStep(3)
+    } else if (step === 3) {
+      setError('')
+      setStep(4)
     }
   }
 
@@ -206,6 +279,7 @@ export function CreateEventWizard({
     setError('')
     if (step === 2) setStep(1)
     else if (step === 3) setStep(2)
+    else if (step === 4) setStep(3)
   }
 
   async function handleSave() {
@@ -236,15 +310,19 @@ export function CreateEventWizard({
       if (eventType) eventBody.event_type = eventType
       if (finalBannerId) eventBody.banner_file_id = finalBannerId
 
-      const { data } = await fetchJson<ApiMutationResponse>('/api/events', {
-        method: 'POST',
+      const existingId = isEditing ? String(initialEvent?.id ?? '') : ''
+      const url = existingId ? `/api/events/${existingId}` : '/api/events'
+      const method = existingId ? 'PATCH' : 'POST'
+      const { data } = await fetchJson<ApiMutationResponse>(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(eventBody)
       })
 
-      const eventId = String(data.data?.id ?? '')
+      const eventId = existingId || String(data.data?.id ?? '')
       if (!eventId) throw new Error('No event ID returned from server.')
 
+      let finalLocationId = locationId
       if (locationId) {
         await fetchJson<ApiMutationResponse>(`/api/event_locations/${locationId}`, {
           method: 'PATCH',
@@ -252,11 +330,44 @@ export function CreateEventWizard({
           body: JSON.stringify({ event_id: eventId })
         })
       } else if (pendingLocation) {
-        await fetchJson<ApiMutationResponse>('/api/event_locations', {
+        const locData = await fetchJson<ApiMutationResponse>('/api/event_locations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...eventLocationDraftToPayload(pendingLocation), event_id: eventId })
         })
+        finalLocationId = String(locData.data?.data?.id ?? '')
+      }
+
+      // Save ticket types
+      for (const tt of ticketTypeDrafts) {
+        if (!tt.name.trim() && !tt.id) continue // skip blank new rows
+        if (tt.deleted && tt.id) {
+          await fetchJson<ApiMutationResponse>(`/api/ticket_types/${tt.id}`, { method: 'DELETE' })
+          continue
+        }
+        if (tt.deleted) continue
+        const ttBody: Record<string, unknown> = {
+          event_id: eventId,
+          name: tt.name.trim() || 'General Admission',
+          price_paisa: Math.round(Number(tt.price_npr || 0) * 100)
+        }
+        if (finalLocationId) ttBody.event_location_id = finalLocationId
+        if (tt.quantity_available) ttBody.quantity_available = Number(tt.quantity_available)
+        if (tt.max_per_order) ttBody.max_per_order = Number(tt.max_per_order)
+        if (tt.description.trim()) ttBody.description = tt.description.trim()
+        if (tt.id) {
+          await fetchJson<ApiMutationResponse>(`/api/ticket_types/${tt.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ttBody)
+          })
+        } else {
+          await fetchJson<ApiMutationResponse>('/api/ticket_types', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ttBody)
+          })
+        }
       }
 
       for (const coupon of coupons) {
@@ -336,10 +447,10 @@ export function CreateEventWizard({
         <header className="record-modal-header wizard-header">
           <div>
             <p className="admin-breadcrumb">Events</p>
-            <h2 id="wizard-title">Create New Event</h2>
+            <h2 id="wizard-title">{isEditing ? 'Edit Event' : 'Create New Event'}</h2>
           </div>
           <div className="wizard-step-indicators">
-            {([1, 2, 3] as const).map((s) => (
+            {([1, 2, 3, 4] as const).map((s) => (
               <div
                 key={s}
                 className={`wizard-step-dot ${step === s ? 'active' : ''} ${step > s ? 'done' : ''}`}
@@ -355,7 +466,7 @@ export function CreateEventWizard({
 
         {/* Step bar */}
         <div className="wizard-step-bar">
-          {['Event Details', 'Schedule & Venue', 'Coupons'].map((label, i) => (
+          {['Event Details', 'Schedule & Venue', 'Ticket Types', 'Coupons'].map((label, i) => (
             <div key={label} className={`wizard-step-item ${step === i + 1 ? 'active' : ''} ${step > i + 1 ? 'done' : ''}`}>
               <span className="wizard-step-number">{i + 1}</span>
               <span className="wizard-step-label">{label}</span>
@@ -660,8 +771,111 @@ export function CreateEventWizard({
             </div>
           )}
 
-          {/* ── Step 3 ── */}
+          {/* ── Step 3: Ticket Types ── */}
           {step === 3 && (
+            <div className="wizard-step3-layout">
+              <div className="wizard-coupons-intro">
+                <Ticket size={20} />
+                <div>
+                  <h3>Ticket Types</h3>
+                  <p>Define the tickets available for this event. You can add multiple types with different prices and limits.</p>
+                </div>
+              </div>
+
+              <div className="wizard-ticket-types">
+                {ticketTypeDrafts.filter(tt => !tt.deleted).map((tt) => (
+                  <div key={tt.localId} className="wizard-ticket-row">
+                    <div className="wizard-field-row">
+                      <label className="wizard-label">
+                        <span>Name <em className="required-indicator">*</em></span>
+                        <input
+                          className="wizard-input"
+                          placeholder="e.g. General Admission"
+                          type="text"
+                          value={tt.name}
+                          onChange={e => setTicketTypeDrafts(prev => prev.map(d => d.localId === tt.localId ? { ...d, name: e.target.value } : d))}
+                        />
+                      </label>
+                      <label className="wizard-label">
+                        <span>Price (NPR) <em className="required-indicator">*</em></span>
+                        <input
+                          className="wizard-input"
+                          inputMode="decimal"
+                          min={0}
+                          placeholder="500"
+                          type="number"
+                          value={tt.price_npr}
+                          onChange={e => setTicketTypeDrafts(prev => prev.map(d => d.localId === tt.localId ? { ...d, price_npr: e.target.value } : d))}
+                        />
+                      </label>
+                    </div>
+                    <div className="wizard-field-row">
+                      <label className="wizard-label">
+                        <span>Quantity Available</span>
+                        <input
+                          className="wizard-input"
+                          inputMode="numeric"
+                          min={1}
+                          placeholder="Unlimited"
+                          type="number"
+                          value={tt.quantity_available}
+                          onChange={e => setTicketTypeDrafts(prev => prev.map(d => d.localId === tt.localId ? { ...d, quantity_available: e.target.value } : d))}
+                        />
+                      </label>
+                      <label className="wizard-label">
+                        <span>Max Per Order</span>
+                        <input
+                          className="wizard-input"
+                          inputMode="numeric"
+                          min={1}
+                          placeholder="No limit"
+                          type="number"
+                          value={tt.max_per_order}
+                          onChange={e => setTicketTypeDrafts(prev => prev.map(d => d.localId === tt.localId ? { ...d, max_per_order: e.target.value } : d))}
+                        />
+                      </label>
+                    </div>
+                    <div className="wizard-ticket-row-footer">
+                      <label className="wizard-label wizard-full-width">
+                        <span>Description (optional)</span>
+                        <input
+                          className="wizard-input"
+                          placeholder="VIP access, front row seats, etc."
+                          type="text"
+                          value={tt.description}
+                          onChange={e => setTicketTypeDrafts(prev => prev.map(d => d.localId === tt.localId ? { ...d, description: e.target.value } : d))}
+                        />
+                      </label>
+                      {ticketTypeDrafts.filter(d => !d.deleted).length > 1 ? (
+                        <button
+                          aria-label="Remove ticket type"
+                          className="coupon-remove-btn tt-remove-btn"
+                          type="button"
+                          onClick={() => setConfirmDeleteTT(tt)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {ticketTypeError ? <p className="record-modal-error">{ticketTypeError}</p> : null}
+
+              <button
+                className="primary-admin-button wizard-add-coupon-btn"
+                type="button"
+                onClick={() => { setTicketTypeError(''); setTicketTypeDrafts(prev => [...prev, emptyTicketTypeDraft()]) }}
+              >
+                <Plus size={16} />
+                Add Ticket Type
+              </button>
+            </div>
+          )}
+
+          {/* ── Step 4: Coupons ── */}
+          {step === 4 && (
             <div className="wizard-step3-layout">
               <div className="wizard-coupons-intro">
                 <Tag size={20} />
@@ -800,16 +1014,28 @@ export function CreateEventWizard({
           </button>
 
           <div className="wizard-footer-right">
-            {step < 3 ? (
-              <button
-                className="primary-admin-button"
-                disabled={isSaving || isUploading}
-                type="button"
-                onClick={() => void handleNext()}
-              >
-                Next
-                <ChevronRight size={15} />
-              </button>
+            {step < 4 ? (
+              <>
+                {step === 3 ? (
+                  <button
+                    disabled={isSaving}
+                    type="button"
+                    onClick={() => void handleSave()}
+                  >
+                    {isSaving ? <span aria-hidden="true" className="button-spinner" /> : null}
+                    {isSaving ? 'Saving...' : 'Skip & Save'}
+                  </button>
+                ) : null}
+                <button
+                  className="primary-admin-button"
+                  disabled={isSaving || isUploading}
+                  type="button"
+                  onClick={() => void handleNext()}
+                >
+                  Next
+                  <ChevronRight size={15} />
+                </button>
+              </>
             ) : (
               <>
                 <button
@@ -834,6 +1060,20 @@ export function CreateEventWizard({
           </div>
         </footer>
       </section>
+
+      {confirmDeleteTT ? (
+        <ConfirmDialog
+          message={`Remove "${confirmDeleteTT.name || 'this ticket type'}"? This cannot be undone after saving.`}
+          confirmLabel="Remove"
+          isDanger
+          onConfirm={() => {
+            const id = confirmDeleteTT.localId
+            setTicketTypeDrafts(prev => prev.map(d => d.localId === id ? { ...d, deleted: true } : d))
+            setConfirmDeleteTT(null)
+          }}
+          onCancel={() => setConfirmDeleteTT(null)}
+        />
+      ) : null}
 
       {isLocationPopupOpen ? (
         <EventLocationPopup
