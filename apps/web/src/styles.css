@@ -6192,11 +6192,20 @@ body[data-theme='dark'] .cart-checkout-modern .checkout-total.grand strong {
     max-height: calc(100dvh - 10px);
   }
 
-  .cart-modal-layout,
-  .cart-checkout-layout {
+  .cart-checkout-modern {
+    max-height: calc(100dvh - 10px);
+  }
+
+  .cart-modal-layout {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     overflow: hidden;
+  }
+
+  .cart-checkout-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
   }
 
   .cart-modal-main,
@@ -6226,8 +6235,8 @@ body[data-theme='dark'] .cart-checkout-modern .checkout-total.grand strong {
   }
 
   .cart-checkout-main {
-    min-height: 220px;
-    max-height: min(46vh, 420px);
+    min-height: 0;
+    max-height: none;
     padding-right: 4px;
   }
 
