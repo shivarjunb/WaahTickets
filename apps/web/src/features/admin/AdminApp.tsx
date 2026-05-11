@@ -7,6 +7,7 @@ import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
 import { HeroSettingsForm } from "./HeroSettingsForm";
+import { CreateEventWizard } from "./CreateEventWizard";
 
 function readAdminResourceFromPath() {
   if (typeof window === 'undefined') return DASHBOARD_VIEW
@@ -71,6 +72,7 @@ export default function AdminApp({
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false)
   const [selectedColumnsByResource, setSelectedColumnsByResource] = useState<Record<string, string[]>>({})
   const [selectedRecord, setSelectedRecord] = useState<ApiRecord | null>(null)
+  const [isEventWizardOpen, setIsEventWizardOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [lookupOptions, setLookupOptions] = useState<Record<string, ApiRecord[]>>({})
@@ -80,7 +82,10 @@ export default function AdminApp({
   const [eventLocationError, setEventLocationError] = useState('')
   const [isSavingEventLocation, setIsSavingEventLocation] = useState(false)
   const [filter, setFilter] = useState('')
+  const [committedFilter, setCommittedFilter] = useState('')
   const [columnFiltersByResource, setColumnFiltersByResource] = useState<Record<string, Record<string, string>>>({})
+  const [committedColumnFiltersByResource, setCommittedColumnFiltersByResource] = useState<Record<string, Record<string, string>>>({})
+  const loadAbortRef = useRef<AbortController | null>(null)
   const [tableSortByResource, setTableSortByResource] = useState<Record<string, ResourceSort>>({})
   const [tablePageByResource, setTablePageByResource] = useState<Record<string, number>>({})
   const [tableHasMoreByResource, setTableHasMoreByResource] = useState<Record<string, boolean>>({})
@@ -187,6 +192,19 @@ export default function AdminApp({
         .sort()
         .join('|'),
     [activeColumnFilterEntries]
+  )
+  const committedColumnFilters = committedColumnFiltersByResource[selectedResource] ?? emptyColumnFilterState
+  const committedColumnFilterEntries = useMemo(
+    () => Object.entries(committedColumnFilters).filter(([, value]) => value.trim().length > 0),
+    [committedColumnFilters]
+  )
+  const committedColumnFilterQueryKey = useMemo(
+    () =>
+      committedColumnFilterEntries
+        .map(([column, value]) => `${column}:${value.trim().toLowerCase()}`)
+        .sort()
+        .join('|'),
+    [committedColumnFilterEntries]
   )
   const activeSort = tableSortByResource[selectedResource] ?? null
   const tableRowsPerPage = subgridRowsPerPage
@@ -323,6 +341,16 @@ export default function AdminApp({
   }, [selectedWebRole])
 
   useEffect(() => {
+    const timeout = setTimeout(() => setCommittedFilter(filter.trim()), 300)
+    return () => clearTimeout(timeout)
+  }, [filter])
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setCommittedColumnFiltersByResource(columnFiltersByResource), 300)
+    return () => clearTimeout(timeout)
+  }, [columnFiltersByResource])
+
+  useEffect(() => {
     setSelectedRecord(null)
     if (isDashboardView) {
       setRecords([])
@@ -349,10 +377,10 @@ export default function AdminApp({
     currentTablePage,
     tableRowsPerPage,
     orderCustomerFilter,
-    filter,
+    committedFilter,
     activeSort?.column,
     activeSort?.direction,
-    activeColumnFilterQueryKey,
+    committedColumnFilterQueryKey,
     isCustomerRoleOverride,
     adSearch,
     adPlacementFilter,
@@ -405,7 +433,7 @@ export default function AdminApp({
         [selectedResource]: 1
       }
     })
-  }, [selectedResource, filter, activeSort?.column, activeSort?.direction, activeColumnFilterQueryKey, orderCustomerFilter])
+  }, [selectedResource, committedFilter, activeSort?.column, activeSort?.direction, committedColumnFilterQueryKey, orderCustomerFilter])
 
   useEffect(() => {
     setSubgridPage({ users: 1, menuItems: 1 })
@@ -449,6 +477,15 @@ export default function AdminApp({
       setSelectedWebRole(getDefaultWebRoleView(user))
     }
   }, [isAdminUser, user?.webrole])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('create') === 'true') {
+      window.history.replaceState({}, '', window.location.pathname)
+      openCreateModal('events')
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1113,6 +1150,10 @@ export default function AdminApp({
   }
 
   async function loadRecords(resource = selectedResource, page = currentTablePage) {
+    loadAbortRef.current?.abort()
+    const controller = new AbortController()
+    loadAbortRef.current = controller
+
     setIsLoading(true)
     setStatus(`Loading ${formatResourceName(resource)} page ${page}`)
 
@@ -1131,12 +1172,12 @@ export default function AdminApp({
       }
 
       if (resource === selectedResource) {
-        const globalQuery = filter.trim()
+        const globalQuery = committedFilter.trim()
         if (globalQuery) {
           query.set('q', globalQuery)
         }
 
-        const columnFilters = columnFiltersByResource[resource] ?? {}
+        const columnFilters = committedColumnFiltersByResource[resource] ?? {}
         for (const [column, value] of Object.entries(columnFilters)) {
           const filterValue = value.trim()
           if (filterValue) {
@@ -1154,7 +1195,9 @@ export default function AdminApp({
       }
 
       const endpoint = `/api/${resource}?${query.toString()}`
-      const { data } = await fetchJson<ApiListResponse>(endpoint)
+      const { data } = await fetchJson<ApiListResponse>(endpoint, { signal: controller.signal })
+      if (controller.signal.aborted) return
+
       const loadedRecords = data.data ?? []
       const pagination = normalizePagination(data.pagination, page, tableRowsPerPage, loadedRecords.length)
       const hasMore = Boolean(pagination.hasNextPage ?? pagination.has_more)
@@ -1175,6 +1218,7 @@ export default function AdminApp({
 
       setStatus(`${loadedRecords.length} ${formatResourceName(resource)} loaded`)
     } catch (error) {
+      if (controller.signal.aborted) return
       setRecords([])
       setTableHasMoreByResource((current) => ({
         ...current,
@@ -1186,7 +1230,7 @@ export default function AdminApp({
       }))
       setStatus(getErrorMessage(error))
     } finally {
-      setIsLoading(false)
+      if (!controller.signal.aborted) setIsLoading(false)
     }
   }
 
@@ -1438,6 +1482,12 @@ export default function AdminApp({
     if (resource !== selectedResource) {
       setSelectedResource(resource)
     }
+
+    if (resource === 'events') {
+      setIsEventWizardOpen(true)
+      return
+    }
+
     setSelectedRecord(null)
     setRecordError('')
     const values = ensureFormHasRequiredFields(
@@ -1447,10 +1497,6 @@ export default function AdminApp({
     if (resource === 'organization_users' && selectedWebRole === 'Organizations') {
       delete values.user_id
       values.email = ''
-    }
-    if (resource === 'events') {
-      values.location_template_id = ''
-      setPendingEventLocation(null)
     }
     setFormValues(values)
     setModalMode('create')
@@ -1906,6 +1952,7 @@ export default function AdminApp({
   function runGlobalSearch(query: string) {
     const nextQuery = query.trim()
     setFilter(nextQuery)
+    setCommittedFilter(nextQuery)
     setOrderCustomerFilter('')
     setTablePageByResource((current) => ({
       ...current,
@@ -1921,6 +1968,8 @@ export default function AdminApp({
   }
 
   function selectAdminResource(resource: string) {
+    setFilter('')
+    setCommittedFilter('')
     setSelectedResource(resource)
     setIsMobileAdminMenuOpen(false)
   }
@@ -2123,15 +2172,29 @@ export default function AdminApp({
           <>
             <section className="admin-dashboard-hero">
               <div>
-                <p className="admin-kicker">Waah Tickets command center</p>
-                <h2>Event revenue, ticket flow, partner payouts, and platform health.</h2>
-                <p>Use the sidebar to manage events, orders, tickets, partners, referrals, settlements, ads, and reports.</p>
+                <p className="admin-kicker">
+                  {selectedWebRole === 'Organizations' ? 'Organizer dashboard' : 'Waah Tickets command center'}
+                </p>
+                <h2>
+                  {selectedWebRole === 'Organizations'
+                    ? 'Create and manage your events.'
+                    : 'Event revenue, ticket flow, partner payouts, and platform health.'}
+                </h2>
+                <p>
+                  {selectedWebRole === 'Organizations'
+                    ? 'Set up events, manage ticket types, track sales, and validate entries from one place.'
+                    : 'Use the sidebar to manage events, orders, tickets, partners, referrals, settlements, ads, and reports.'}
+                </p>
               </div>
               <div className="admin-quick-actions">
-                <button className="primary-admin-button" type="button" onClick={() => setSelectedResource('events')}>
-                  <Plus size={17} />
-                  Create event
-                </button>
+                {(selectedWebRole === 'Admin' || selectedWebRole === 'Organizations') &&
+                  visibleResources.includes('events') &&
+                  roleAccess[selectedWebRole].events?.can_create ? (
+                  <button className="primary-admin-button" type="button" onClick={() => openCreateModal('events')}>
+                    <Plus size={17} />
+                    Create event
+                  </button>
+                ) : null}
                 {visibleResources.includes('ticket_types') && roleAccess[selectedWebRole].ticket_types?.can_create ? (
                   <button type="button" onClick={() => openCreateModal('ticket_types')}>
                     <Ticket size={17} />
@@ -2142,10 +2205,12 @@ export default function AdminApp({
                   <Receipt size={17} />
                   Review orders
                 </button>
-                <button type="button" onClick={() => setSelectedResource('payout_batches')}>
-                  <CreditCard size={17} />
-                  Settlements
-                </button>
+                {selectedWebRole === 'Admin' ? (
+                  <button type="button" onClick={() => setSelectedResource('payout_batches')}>
+                    <CreditCard size={17} />
+                    Settlements
+                  </button>
+                ) : null}
               </div>
             </section>
             <div className="admin-summary-grid admin-metric-grid">
@@ -3541,6 +3606,20 @@ export default function AdminApp({
           </>
         )}
       </section>
+
+      {isEventWizardOpen ? (
+        <CreateEventWizard
+          userId={user?.id ?? ''}
+          webRole={selectedWebRole}
+          onClose={() => setIsEventWizardOpen(false)}
+          onSaved={async () => {
+            setIsEventWizardOpen(false)
+            setStatus('Event created successfully.')
+            await loadRecords()
+            await loadDashboardMetrics()
+          }}
+        />
+      ) : null}
 
       {modalMode ? (
         <RecordModal

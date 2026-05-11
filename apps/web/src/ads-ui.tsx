@@ -4,12 +4,9 @@ import { shouldShowAd } from './shared/utils'
 
 export const adPlacementOptions: AdPlacement[] = [
   'HOME_BETWEEN_RAILS',
-  'EVENT_LIST_BETWEEN_RAILS',
   'EVENT_DETAIL_BETWEEN_RAILS',
-  'WEB_RIGHT_SIDEBAR',
   'WEB_LEFT_SIDEBAR',
-  'CHECKOUT_BETWEEN_RAILS',
-  'ORGANIZER_PAGE_BETWEEN_RAILS'
+  'CHECKOUT_BETWEEN_RAILS'
 ]
 
 export const adDeviceTargetOptions = ['web', 'mobile', 'both'] as const
@@ -92,7 +89,6 @@ type AdPreviewProps = {
 type SponsoredAdProps = {
   ad: AdRecord | null
   className?: string
-  fallbackHidden?: boolean
 }
 
 const previewPlaceholder =
@@ -381,7 +377,7 @@ export function AdSlot({
         })
         if (pageUrl) params.set('page_url', pageUrl)
         if (typeof railIndex === 'number') params.set('rail_index', String(railIndex))
-        const response = await fetch(`/api/ads/placement/${encodeURIComponent(resolvedPlacement)}?${params.toString()}`)
+        const response = await fetch(`/api/ads/placement/${encodeURIComponent(resolvedPlacement ?? '')}?${params.toString()}`)
         const json = (await response.json()) as { data?: AdRecord | null }
         if (!cancelled) {
           setAd(json.data ?? null)
@@ -464,6 +460,8 @@ export function AdSlot({
     return null
   }
 
+  if (!ad) return null
+
   return (
     <SponsoredAdShell
       ad={ad}
@@ -475,17 +473,17 @@ export function AdSlot({
   )
 }
 
-export function SponsoredCard({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+export function SponsoredCard({ ad, className = '' }: SponsoredAdProps) {
   if (!ad) return null
   return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="card" />
 }
 
-export function SponsoredBanner({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+export function SponsoredBanner({ ad, className = '' }: SponsoredAdProps) {
   if (!ad) return null
   return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="banner" />
 }
 
-export function SponsoredRail({ ad, className = '', fallbackHidden = true }: SponsoredAdProps) {
+export function SponsoredRail({ ad, className = '' }: SponsoredAdProps) {
   if (!ad) return null
   return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="rail" />
 }
@@ -1092,12 +1090,12 @@ function formatPlacementLabel(value: string) {
 
 function useIsDesktopViewport() {
   const [isDesktop, setIsDesktop] = useState(() =>
-    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 960px)').matches
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1101px)').matches
   )
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const mediaQuery = window.matchMedia('(min-width: 960px)')
+    const mediaQuery = window.matchMedia('(min-width: 1101px)')
     const update = () => setIsDesktop(mediaQuery.matches)
     update()
     mediaQuery.addEventListener('change', update)

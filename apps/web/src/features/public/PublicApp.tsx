@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "
 import type { HeroSettingsData } from "../../shared/types";
 import { defaultHeroSettingsData } from "../../shared/constants";
 import { normalizeHeroSettings } from "../../shared/utils";
-import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Database, Drama, Edit3, Eye, FileText, FilterX, Headphones, Heart, Home, Laugh, LayoutDashboard, Lock, LogIn, LogOut, Mail, MapPin, Menu, Music, Plus, RefreshCw, Save, Search, ScanLine, Settings2, Share2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Star, Ticket, Trash2, Trophy, Upload, Utensils, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
+import { AlertTriangle, Building2, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, CreditCard, Drama, Filter, FilterX, Heart, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
@@ -53,6 +53,7 @@ export default function PublicApp({
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
   const [isPublicMenuOpen, setIsPublicMenuOpen] = useState(false)
+  const [isMobileEventFiltersOpen, setIsMobileEventFiltersOpen] = useState(false)
   const [isAddingToCart, setIsAddingToCart] = useState(false)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
@@ -182,15 +183,15 @@ export default function PublicApp({
     })
   }, [eventLocationQuery, eventSearchQuery, eventTimeFilter, eventTypeFilter, events])
   const featuredEvents = useMemo(() => {
-    const eventsWithImages = events.filter((event) => {
+    const eventsWithImages = filteredEvents.filter((event) => {
       const bannerUrl = typeof event.banner_public_url === 'string' ? event.banner_public_url.trim() : ''
       return bannerUrl.length > 0 && isValidHttpUrl(bannerUrl)
     })
     const markedFeaturedEvents = eventsWithImages.filter((event) => isTruthyValue(event.is_featured))
     if (markedFeaturedEvents.length > 0) return markedFeaturedEvents
     if (eventsWithImages.length > 0) return eventsWithImages
-    return events
-  }, [events])
+    return filteredEvents
+  }, [filteredEvents])
   const heroActiveSlides = useMemo(
     () => [...heroSettings.slides].filter((slide) => slide.is_active).sort((left, right) => left.sort_order - right.sort_order),
     [heroSettings.slides]
@@ -257,16 +258,37 @@ export default function PublicApp({
       ])
     ) as Record<string, number>
   }, [events])
+  const hasActiveEventFilters = eventTypeFilter !== 'all' || eventTimeFilter !== 'all'
+  const handleCategorySelect = (categoryValue: string) => {
+    const matchedType = eventTypeOptions.find((type) => type.toLowerCase().includes(categoryValue))
+    setEventTypeFilter(matchedType ?? 'all')
+    document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+  }
+  const clearEventFilters = () => {
+    setEventTypeFilter('all')
+    setEventTimeFilter('all')
+    setIsMobileEventFiltersOpen(false)
+    document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+  }
+  const handleMobileEventTypeChange = (value: string) => {
+    setEventTypeFilter(value)
+    setIsMobileEventFiltersOpen(false)
+    document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+  }
+  const handleMobileEventTimeChange = (value: 'all' | 'weekend' | 'month') => {
+    setEventTimeFilter(value)
+    setIsMobileEventFiltersOpen(false)
+    document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
+  }
   const configuredHomepageRails = useMemo(
-    () => buildConfiguredRails(events, railsSettings.rails),
-    [events, railsSettings.rails]
+    () => buildConfiguredRails(filteredEvents, railsSettings.rails),
+    [filteredEvents, railsSettings.rails]
   )
   const configuredHomepageRailIds = useMemo(
     () => new Set(configuredHomepageRails.map((rail) => rail.id)),
     [configuredHomepageRails]
   )
   const homepagePageUrl = typeof window === 'undefined' ? '/' : `${window.location.pathname}${window.location.search}`
-  const homepageAdRailIndex = Math.max(1, Math.floor(Number(defaultAdSettingsData.default_ad_frequency || 3)))
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
   const cartSubtotalPaisa = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0),
@@ -1144,17 +1166,38 @@ export default function PublicApp({
         onSearchChange={setEventSearchQuery}
       />
 
-      <button
-        aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
-        className="mobile-sticky-cart-button"
-        type="button"
-        onClick={() => setIsCartOpen(true)}
-      >
-        <ShoppingCart size={20} />
-        <span className="mobile-sticky-cart-badge" aria-hidden="true">
-          {cartItemCount}
-        </span>
-      </button>
+      <div className="mobile-sticky-actions" aria-label="Mobile quick actions">
+        {hasActiveEventFilters ? (
+          <button
+            aria-label="Clear event filters"
+            className="mobile-sticky-filter-clear-button"
+            type="button"
+            onClick={clearEventFilters}
+          >
+            <FilterX size={17} />
+          </button>
+        ) : null}
+        <button
+          aria-label={isMobileEventFiltersOpen ? 'Close event filters' : 'Open event filters'}
+          aria-pressed={isMobileEventFiltersOpen}
+          className={`mobile-sticky-filter-button ${isMobileEventFiltersOpen ? 'is-active' : ''}`}
+          type="button"
+          onClick={() => setIsMobileEventFiltersOpen((current) => !current)}
+        >
+          <Filter size={19} />
+        </button>
+        <button
+          aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
+          className="mobile-sticky-cart-button"
+          type="button"
+          onClick={() => setIsCartOpen(true)}
+        >
+          <ShoppingCart size={20} />
+          <span className="mobile-sticky-cart-badge" aria-hidden="true">
+            {cartItemCount}
+          </span>
+        </button>
+      </div>
 
       <HeroSearch
         badgeText={heroBadgeText}
@@ -1204,183 +1247,185 @@ export default function PublicApp({
             actionLabel="View all"
             onAction={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
           />
-          <div className="category-grid">
+          <div className="category-chip-rail" aria-label="Popular categories">
+            {categoryCards.map((category) => (
+              <CategoryChip
+                key={category.label}
+                count={categoryEventCounts[category.label] ?? 0}
+                icon={category.icon}
+                label={category.label}
+                onClick={() => handleCategorySelect(category.value)}
+              />
+            ))}
+          </div>
+          <div className="category-grid" aria-label="Popular categories">
             {categoryCards.map((category) => (
               <CategoryCard
                 key={category.label}
                 count={categoryEventCounts[category.label] ?? 0}
                 icon={category.icon}
                 label={category.label}
-                onClick={() => {
-                  const matchedType = eventTypeOptions.find((type) => type.toLowerCase().includes(category.value))
-                  setEventTypeFilter(matchedType ?? 'all')
-                  document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
-                }}
+                onClick={() => handleCategorySelect(category.value)}
               />
             ))}
           </div>
         </section>
 
-        <section className="marketplace-section" id="events" aria-labelledby="events-heading">
-          <SectionHeader title="Browse Events" />
-          <EventFilters
-            eventTypeFilter={eventTypeFilter}
-            eventTimeFilter={eventTimeFilter}
-            eventTypeOptions={eventTypeOptions}
-            hasFilters={eventTypeFilter !== 'all' || eventTimeFilter !== 'all'}
-            onClear={() => {
-              setEventTypeFilter('all')
-              setEventTimeFilter('all')
-            }}
-            onTypeChange={setEventTypeFilter}
-            onTimeChange={setEventTimeFilter}
-          />
-        </section>
+        <section className="marketplace-section homepage-discovery-layout" id="events" aria-labelledby="events-heading">
+          <aside className="homepage-discovery-sidebar">
+            <SectionHeader title="Browse Events" />
+            <EventFilters
+              eventTypeFilter={eventTypeFilter}
+              eventTimeFilter={eventTimeFilter}
+              eventTypeOptions={eventTypeOptions}
+              hasFilters={hasActiveEventFilters}
+              onClear={clearEventFilters}
+              onTypeChange={setEventTypeFilter}
+              onTimeChange={setEventTimeFilter}
+            />
+            <AdSlot
+              adsServed={0}
+              className="homepage-sidebar-ad"
+              device="web"
+              fallbackHidden
+              pageUrl={homepagePageUrl}
+              placementKey="WEB_LEFT_SIDEBAR"
+              variant="sidebar"
+            />
+          </aside>
 
-        <section className="marketplace-section homepage-ad-section" aria-label="Sponsored">
-          <AdSlot
-            adsServed={0}
-            fallbackHidden
-            pageUrl={homepagePageUrl}
-            placementKey="HOME_BETWEEN_RAILS"
-            railIndex={homepageAdRailIndex}
-            variant="banner"
-          />
-        </section>
-
-        {configuredHomepageRails.length > 0 ? (
-          configuredHomepageRails.map((rail, index) => (
-            <section
-              className={`marketplace-section homepage-event-rail ${expandedHomepageRailIds.has(rail.id) ? 'is-expanded' : ''}`}
-              id={`rail-${rail.id}`}
-              key={rail.id}
-              aria-labelledby={`rail-heading-${rail.id}`}
-              onMouseEnter={() => pausedHomepageRailIdsRef.current.add(rail.id)}
-              onMouseLeave={() => pausedHomepageRailIdsRef.current.delete(rail.id)}
-              onFocusCapture={() => pausedHomepageRailIdsRef.current.add(rail.id)}
-              onBlurCapture={(event) => {
-                const nextTarget = event.relatedTarget as Node | null
-                if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                  pausedHomepageRailIdsRef.current.delete(rail.id)
-                }
-              }}
-            >
-              <SectionHeader
-                title={rail.label}
-                actionLabel={expandedHomepageRailIds.has(rail.id) ? 'Show less' : 'See all'}
-                onAction={() => toggleHomepageRailExpanded(rail.id)}
-              />
-              {!expandedHomepageRailIds.has(rail.id) && rail.events.length > 4 ? (
-                <div className="homepage-rail-controls" aria-label={`${rail.label} slider controls`}>
-                  <button
-                    aria-label={`Show previous ${rail.label} events`}
-                    type="button"
-                    onClick={() => scrollHomepageRail(rail.id, 'left')}
+          <div className="homepage-discovery-main">
+            {filteredEvents.length === 0 && !isEventsLoading && (eventSearchQuery.trim() || eventLocationQuery.trim() || hasActiveEventFilters) ? (
+              <div className="events-empty-state">
+                <Search size={36} />
+                <p>No events found</p>
+                <p>Try adjusting your search or clearing the filters.</p>
+                <button type="button" onClick={() => { setEventSearchQuery(''); setEventLocationQuery(''); clearEventFilters() }}>
+                  Clear search and filters
+                </button>
+              </div>
+            ) : configuredHomepageRails.length > 0 ? (
+              configuredHomepageRails.map((rail, index) => (
+                <section
+                  className={`homepage-discovery-section homepage-event-rail ${expandedHomepageRailIds.has(rail.id) ? 'is-expanded' : ''}`}
+                  id={`rail-${rail.id}`}
+                  key={rail.id}
+                  aria-labelledby={`rail-heading-${rail.id}`}
+                  onMouseEnter={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+                  onMouseLeave={() => pausedHomepageRailIdsRef.current.delete(rail.id)}
+                  onFocusCapture={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+                  onBlurCapture={(event) => {
+                    const nextTarget = event.relatedTarget as Node | null
+                    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                      pausedHomepageRailIdsRef.current.delete(rail.id)
+                    }
+                  }}
+                >
+                  <SectionHeader
+                    title={rail.label}
+                    actionLabel={expandedHomepageRailIds.has(rail.id) ? 'Show less' : 'See all'}
+                    onAction={() => toggleHomepageRailExpanded(rail.id)}
+                  />
+                  {!expandedHomepageRailIds.has(rail.id) && rail.events.length > 4 ? (
+                    <div className="homepage-rail-controls" aria-label={`${rail.label} slider controls`}>
+                      <button
+                        aria-label={`Show previous ${rail.label} events`}
+                        type="button"
+                        onClick={() => scrollHomepageRail(rail.id, 'left')}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <button
+                        aria-label={`Show next ${rail.label} events`}
+                        type="button"
+                        onClick={() => scrollHomepageRail(rail.id, 'right')}
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  ) : null}
+                  <div
+                    className={expandedHomepageRailIds.has(rail.id) ? 'marketplace-event-grid' : 'homepage-event-slider'}
+                    ref={(element) => {
+                      homepageRailRefs.current[rail.id] = element
+                    }}
                   >
-                    <ChevronLeft size={16} />
-                  </button>
-                  <button
-                    aria-label={`Show next ${rail.label} events`}
-                    type="button"
-                    onClick={() => scrollHomepageRail(rail.id, 'right')}
-                  >
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-              ) : null}
-              <div
-                className={expandedHomepageRailIds.has(rail.id) ? 'marketplace-event-grid' : 'homepage-event-slider'}
-                ref={(element) => {
-                  homepageRailRefs.current[rail.id] = element
-                }}
-              >
-                {rail.events.map((event, eventIndex) => (
-                  <EventCard
-                    key={event.id ?? `${rail.id}-${eventIndex}`}
-                    event={event}
-                    imageUrl={getEventImageUrl(event, eventIndex)}
-                    statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
-                    onSelectTickets={() => {
-                      if (!event.id) return
-                      setSelectedEventId(event.id)
-                      setIsCheckoutOpen(true)
-                    }}
+                    {rail.events.map((event, eventIndex) => (
+                      <EventCard
+                        key={event.id ?? `${rail.id}-${eventIndex}`}
+                        event={event}
+                        imageUrl={getEventImageUrl(event, eventIndex)}
+                        statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                        onSelectTickets={() => {
+                          if (!event.id) return
+                          setSelectedEventId(event.id)
+                          setIsCheckoutOpen(true)
+                        }}
+                      />
+                    ))}
+                  </div>
+                  {index < configuredHomepageRails.length - 1 ? (
+                    <AdSlot
+                      adsServed={index + 1}
+                      className="homepage-between-rails-ad"
+                      fallbackHidden
+                      pageUrl={homepagePageUrl}
+                      placementKey="HOME_BETWEEN_RAILS"
+                      railIndex={index + 1}
+                      variant="banner"
+                    />
+                  ) : null}
+                </section>
+              ))
+            ) : (
+              <>
+                <section className="homepage-discovery-section" aria-labelledby="featured-events-heading">
+                  <SectionHeader
+                    title="Featured Events"
+                    actionLabel="Explore all"
+                    onAction={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
                   />
-                ))}
-              </div>
-              {index < configuredHomepageRails.length - 1 ? (
-                <AdSlot
-                  adsServed={index + 1}
-                  className="homepage-between-rails-ad"
-                  fallbackHidden
-                  pageUrl={homepagePageUrl}
-                  placementKey="HOME_BETWEEN_RAILS"
-                  railIndex={index + 1}
-                  variant="banner"
-                />
-              ) : null}
-            </section>
-          ))
-        ) : (
-          <>
-            <section className="marketplace-section" aria-labelledby="featured-events-heading">
-              <SectionHeader
-                title="Featured Events"
-                actionLabel="Explore all"
-                onAction={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
-              />
-              <div className="marketplace-event-grid">
-                {featuredEvents.slice(0, 4).map((event, index) => (
-                  <EventCard
-                    key={event.id ?? `featured-${index}`}
-                    event={event}
-                    imageUrl={getEventImageUrl(event, index)}
-                    statusLabel="Featured"
-                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
-                    onSelectTickets={() => {
-                      if (!event.id) return
-                      setSelectedEventId(event.id)
-                      setIsCheckoutOpen(true)
-                    }}
-                  />
-                ))}
-              </div>
-            </section>
+                  <div className="marketplace-event-grid">
+                    {featuredEvents.slice(0, 4).map((event, index) => (
+                      <EventCard
+                        key={event.id ?? `featured-${index}`}
+                        event={event}
+                        imageUrl={getEventImageUrl(event, index)}
+                        statusLabel="Featured"
+                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                        onSelectTickets={() => {
+                          if (!event.id) return
+                          setSelectedEventId(event.id)
+                          setIsCheckoutOpen(true)
+                        }}
+                      />
+                    ))}
+                  </div>
+                </section>
 
-            <section className="marketplace-section" aria-labelledby="events-heading">
-              <SectionHeader title="Trending Events" />
-              <div className="marketplace-event-grid">
-                {trendingEvents.map((event, index) => (
-                  <EventCard
-                    key={event.id ?? `trending-${index}`}
-                    event={event}
-                    imageUrl={getEventImageUrl(event, index)}
-                    statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                    onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
-                    onSelectTickets={() => {
-                      if (!event.id) return
-                      setSelectedEventId(event.id)
-                      setIsCheckoutOpen(true)
-                    }}
-                  />
-                ))}
-              </div>
-            </section>
-          </>
-        )}
-
-        <section className="seller-cta" aria-label="Sell tickets for your event">
-          <div>
-            <Ticket size={30} />
-            <div>
-              <h2>Host an event with Waah Tickets</h2>
-              <p>Create, sell, validate, and manage tickets from one simple platform.</p>
-            </div>
+                <section className="homepage-discovery-section" aria-labelledby="events-heading">
+                  <SectionHeader title="Trending Events" />
+                  <div className="marketplace-event-grid">
+                    {trendingEvents.map((event, index) => (
+                      <EventCard
+                        key={event.id ?? `trending-${index}`}
+                        event={event}
+                        imageUrl={getEventImageUrl(event, index)}
+                        statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                        onSelectTickets={() => {
+                          if (!event.id) return
+                          setSelectedEventId(event.id)
+                          setIsCheckoutOpen(true)
+                        }}
+                      />
+                    ))}
+                  </div>
+                </section>
+              </>
+            )}
           </div>
-          <button className="primary-admin-button" type="button" onClick={() => onNavigate('/admin/events')}>
-            Create Event
-          </button>
         </section>
 
         <section className="trust-strip" id="support" aria-label="Why book with Waah Tickets">
@@ -1444,6 +1489,19 @@ export default function PublicApp({
           }}
           onUpdateQuantity={(itemId, nextQty) => updateCartItemQuantity(itemId, nextQty)}
           onRemoveItem={(itemId) => removeCartItem(itemId)}
+        />
+      ) : null}
+
+      {isMobileEventFiltersOpen ? (
+        <MobileEventFiltersSheet
+          eventTimeFilter={eventTimeFilter}
+          eventTypeFilter={eventTypeFilter}
+          eventTypeOptions={eventTypeOptions}
+          hasFilters={hasActiveEventFilters}
+          onClear={clearEventFilters}
+          onClose={() => setIsMobileEventFiltersOpen(false)}
+          onTimeChange={handleMobileEventTimeChange}
+          onTypeChange={handleMobileEventTypeChange}
         />
       ) : null}
 
@@ -2528,7 +2586,31 @@ function CategoryCard({
   )
 }
 
+function CategoryChip({
+  count,
+  icon: Icon,
+  label,
+  onClick
+}: {
+  count?: number
+  icon: typeof Ticket
+  label: string
+  onClick: () => void
+}) {
+  const hasCount = typeof count === 'number' && count > 0
+  return (
+    <button className="category-chip" type="button" onClick={onClick}>
+      <span className="category-chip-icon" aria-hidden="true">
+        <Icon size={17} strokeWidth={2.15} />
+      </span>
+      <span className="category-chip-label">{label}</span>
+      {hasCount ? <span className="category-chip-count">{count}</span> : null}
+    </button>
+  )
+}
+
 function EventFilters({
+  className,
   eventTypeFilter,
   eventTimeFilter,
   eventTypeOptions,
@@ -2537,6 +2619,7 @@ function EventFilters({
   onTypeChange,
   onTimeChange
 }: {
+  className?: string
   eventTypeFilter: string
   eventTimeFilter: 'all' | 'weekend' | 'month'
   eventTypeOptions: string[]
@@ -2546,7 +2629,7 @@ function EventFilters({
   onTimeChange: (value: 'all' | 'weekend' | 'month') => void
 }) {
   return (
-    <div className="event-filter-bar" aria-label="Event filters">
+    <div className={`event-filter-bar ${className ?? ''}`.trim()} aria-label="Event filters">
       <label>
         <span>Category</span>
         <select value={eventTypeFilter} onChange={(event) => onTypeChange(event.target.value)}>
@@ -2581,6 +2664,94 @@ function EventFilters({
       <button disabled={!hasFilters} type="button" onClick={onClear}>
         Clear filters
       </button>
+    </div>
+  )
+}
+
+function MobileEventFiltersSheet({
+  eventTypeFilter,
+  eventTimeFilter,
+  eventTypeOptions,
+  hasFilters,
+  onClose,
+  onClear,
+  onTypeChange,
+  onTimeChange
+}: {
+  eventTypeFilter: string
+  eventTimeFilter: 'all' | 'weekend' | 'month'
+  eventTypeOptions: string[]
+  hasFilters: boolean
+  onClose: () => void
+  onClear: () => void
+  onTypeChange: (value: string) => void
+  onTimeChange: (value: 'all' | 'weekend' | 'month') => void
+}) {
+  return (
+    <div className="mobile-event-filter-backdrop" role="presentation" onClick={onClose}>
+      <section
+        aria-labelledby="mobile-event-filters-title"
+        className="mobile-event-filter-sheet"
+        role="dialog"
+        aria-modal="true"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="mobile-event-filter-header">
+          <div>
+            <p className="mobile-event-filter-eyebrow">Browse Events</p>
+            <h2 id="mobile-event-filters-title">Filters</h2>
+          </div>
+          <button aria-label="Close filters" type="button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="mobile-event-filter-grid">
+          <label>
+            <span>Category</span>
+            <select
+              value={eventTypeFilter}
+              onChange={(event) => {
+                onTypeChange(event.target.value)
+                onClose()
+              }}
+            >
+              <option value="all">All categories</option>
+              {eventTypeOptions.map((type) => (
+                <option key={type} value={type}>
+                  {formatResourceName(type)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Date</span>
+            <select
+              value={eventTimeFilter}
+              onChange={(event) => {
+                onTimeChange(event.target.value as 'all' | 'weekend' | 'month')
+                onClose()
+              }}
+            >
+              <option value="all">Any date</option>
+              <option value="weekend">This weekend</option>
+              <option value="month">This month</option>
+            </select>
+          </label>
+        </div>
+        <div className="mobile-event-filter-actions">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Done
+          </button>
+          <button
+            className="secondary-button mobile-event-filter-clear"
+            disabled={!hasFilters}
+            type="button"
+            onClick={onClear}
+          >
+            Clear filters
+          </button>
+        </div>
+      </section>
     </div>
   )
 }
@@ -2734,6 +2905,13 @@ export function EventDetailsModal({
               <p>{event.description?.trim() || 'This event does not have a description yet.'}</p>
             </details>
           </section>
+          <AdSlot
+            className="event-detail-between-rails-ad"
+            fallbackHidden
+            pageUrl={typeof window !== 'undefined' ? window.location.href : ''}
+            placementKey="EVENT_DETAIL_BETWEEN_RAILS"
+            variant="banner"
+          />
           <aside className="event-detail-order-summary">
             <p>Tickets from</p>
             <strong>{typeof event.starting_price_paisa === 'number' ? formatMoney(event.starting_price_paisa) : 'Announced soon'}</strong>
@@ -2922,6 +3100,13 @@ export function CheckoutModal({
               ticketTypes={ticketTypes}
               onChangeQuantity={onChangeQuantity}
               onChangeTicketType={onChangeTicketType}
+            />
+            <AdSlot
+              className="checkout-between-rails-ad"
+              fallbackHidden
+              pageUrl={typeof window !== 'undefined' ? window.location.href : ''}
+              placementKey="CHECKOUT_BETWEEN_RAILS"
+              variant="banner"
             />
           </div>
           <OrderSummary
@@ -3502,6 +3687,8 @@ export function CartCheckoutModal({
                 </div>
                 ) : null}
             </fieldset>
+          </div>
+          <aside className="cart-checkout-summary">
             <label className="terms-check">
               <input
                 checked={acceptedTerms}
@@ -3510,8 +3697,6 @@ export function CartCheckoutModal({
               />
               <span>I agree to the ticket purchase terms and refund policy.</span>
             </label>
-          </div>
-          <aside className="cart-checkout-summary">
             <div className="cart-summary-card">
               <div className="checkout-total">
                 <span>Subtotal</span>

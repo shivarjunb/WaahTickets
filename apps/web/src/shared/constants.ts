@@ -424,8 +424,24 @@ export const fieldSelectOptions: Record<string, Record<string, string[]>> = {
     role: ['admin', 'ticket-validator']
   },
   events: {
-    status: ['draft', 'published', 'cancelled', 'archived']
+    status: ['draft', 'published', 'cancelled', 'archived'],
+    event_type: ['concert', 'theatre', 'sports', 'comedy', 'festival', 'food', 'conference', 'workshop', 'other']
+  },
+  coupons: {
+    discount_type: ['percentage', 'fixed']
   }
+}
+
+export const eventTypeLabels: Record<string, string> = {
+  concert: 'Concert',
+  theatre: 'Theatre',
+  sports: 'Sports',
+  comedy: 'Comedy',
+  festival: 'Festival',
+  food: 'Food & Drink',
+  conference: 'Conference',
+  workshop: 'Workshop',
+  other: 'Other'
 }
 
 export const requiredFieldsByResource: Record<string, string[]> = {
@@ -450,7 +466,8 @@ export const requiredFieldsByResource: Record<string, string[]> = {
   payout_batches: ['batch_type', 'status', 'total_amount_paisa'],
   payout_items: ['payout_batch_id', 'beneficiary_type', 'beneficiary_id', 'amount_paisa', 'status'],
   partner_reporting_permissions: ['grantee_partner_id', 'subject_partner_id', 'permission_type'],
-  report_exports: ['report_type', 'requested_by_user_id', 'role', 'filters_json', 'status']
+  report_exports: ['report_type', 'requested_by_user_id', 'role', 'filters_json', 'status'],
+  coupons: ['event_id', 'code', 'discount_type']
 }
 
 export const emptyEventLocationDraft: EventLocationDraft = {
