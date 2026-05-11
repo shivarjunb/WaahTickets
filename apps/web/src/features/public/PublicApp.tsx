@@ -302,18 +302,8 @@ export default function PublicApp({
   const isSearchOrFilterActive = !!(eventSearchQuery.trim() || eventLocationQuery.trim() || hasActiveEventFilters)
   const dedupedRailEvents = useMemo(() => {
     if (!isSearchOrFilterActive || showAllRails) return null
-    const seen = new Set<string>()
-    const result: PublicEvent[] = []
-    for (const rail of configuredHomepageRails) {
-      for (const event of rail.events) {
-        const id = String(event.id ?? '')
-        if (seen.has(id)) continue
-        seen.add(id)
-        result.push(event)
-      }
-    }
-    return result
-  }, [isSearchOrFilterActive, showAllRails, configuredHomepageRails])
+    return filteredEvents
+  }, [isSearchOrFilterActive, showAllRails, filteredEvents])
   useEffect(() => {
     if (!isSearchOrFilterActive) setShowAllRails(false)
   }, [isSearchOrFilterActive])
@@ -1495,8 +1485,8 @@ export default function PublicApp({
               <section className="homepage-discovery-section">
                 <SectionHeader
                   title={`Results (${dedupedRailEvents.length})`}
-                  actionLabel="Show all"
-                  onAction={() => setShowAllRails(true)}
+                  actionLabel={configuredHomepageRails.length > 0 ? 'Show all' : undefined}
+                  onAction={configuredHomepageRails.length > 0 ? () => setShowAllRails(true) : undefined}
                 />
                 <div className="marketplace-event-grid">
                   {dedupedRailEvents.map((event, eventIndex) => (
