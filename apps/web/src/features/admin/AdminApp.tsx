@@ -997,6 +997,25 @@ export default function AdminApp({
     }
   }
 
+  async function cloneAdCampaign(ad: AdRecord) {
+    setAdsError('')
+    try {
+      const draft = adRecordToDraft(ad)
+      const payload = adDraftToPayload(draft)
+      await fetchJson<{ data: AdRecord }>('/api/admin/ads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, name: `Copy of ${payload.name}`, status: 'draft' })
+      })
+      setStatus('Ad cloned as draft')
+      await loadAds()
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setAdsError(message)
+      setStatus(message)
+    }
+  }
+
   async function deleteAdCampaign(ad: AdRecord) {
     setAdsError('')
     try {
@@ -3149,6 +3168,7 @@ export default function AdminApp({
               search={adSearch}
               statusFilter={adStatusFilter}
               onActivate={(ad) => void updateAdStatus(ad, 'active')}
+              onClone={(ad) => void cloneAdCampaign(ad)}
               onCreate={openCreateAdForm}
               onDelete={(ad) => void deleteAdCampaign(ad)}
               onDeviceFilterChange={setAdDeviceFilter}

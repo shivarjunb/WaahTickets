@@ -7,7 +7,7 @@ import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
-import { AdSlot } from '../../ads-ui';
+import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 
@@ -49,6 +49,7 @@ export default function PublicApp({
   const [heroSettings, setHeroSettings] = useState<HeroSettingsData>(defaultHeroSettingsData)
   const [isHeroHovered, setIsHeroHovered] = useState(false)
   const [expandedHomepageRailIds, setExpandedHomepageRailIds] = useState<Set<string>>(() => new Set())
+  const [showAllRails, setShowAllRails] = useState(false)
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [isCartCheckoutOpen, setIsCartCheckoutOpen] = useState(false)
@@ -94,6 +95,16 @@ export default function PublicApp({
   const [isCartExpiredNoticeOpen, setIsCartExpiredNoticeOpen] = useState(false)
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
+  const [confirmedOrderSummary, setConfirmedOrderSummary] = useState<{
+    orderNumber: string
+    email: string
+    cartItems: CartItem[]
+    totalPaisa: number
+    eventName: string
+    eventLocationName: string
+    eventId: string
+    startDatetime: string
+  } | null>(null)
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
   const processedPaymentCallbackRef = useRef('')
   const homepageRailRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -288,6 +299,24 @@ export default function PublicApp({
     () => new Set(configuredHomepageRails.map((rail) => rail.id)),
     [configuredHomepageRails]
   )
+  const isSearchOrFilterActive = !!(eventSearchQuery.trim() || eventLocationQuery.trim() || hasActiveEventFilters)
+  const dedupedRailEvents = useMemo(() => {
+    if (!isSearchOrFilterActive || showAllRails) return null
+    const seen = new Set<string>()
+    const result: PublicEvent[] = []
+    for (const rail of configuredHomepageRails) {
+      for (const event of rail.events) {
+        const id = String(event.id ?? '')
+        if (seen.has(id)) continue
+        seen.add(id)
+        result.push(event)
+      }
+    }
+    return result
+  }, [isSearchOrFilterActive, showAllRails, configuredHomepageRails])
+  useEffect(() => {
+    if (!isSearchOrFilterActive) setShowAllRails(false)
+  }, [isSearchOrFilterActive])
   const homepagePageUrl = typeof window === 'undefined' ? '/' : `${window.location.pathname}${window.location.search}`
   const totalPaisa = (selectedTicketType?.price_paisa ?? 0) * quantity
   const cartSubtotalPaisa = useMemo(
@@ -949,6 +978,23 @@ export default function PublicApp({
             return
           }
         }
+        const firstGroup = restored.order_groups[0]
+        const firstItem = restored.cartItems[0]
+        const confirmedEmail =
+          restored.guest_checkout_identity?.user?.email ||
+          (firstGroup?.event_id ? (restored.cartEventEmails[firstGroup.event_id] ?? '') : '') ||
+          (user?.email ?? '')
+        const confirmedEvent = firstItem?.event_id ? events.find((e) => e.id === firstItem.event_id) : null
+        setConfirmedOrderSummary({
+          orderNumber: firstGroup?.order_number ?? '',
+          email: confirmedEmail,
+          cartItems: restored.cartItems,
+          totalPaisa: restored.order_groups.reduce((s, g) => s + (g.total_amount_paisa ?? 0), 0),
+          eventName: firstItem?.event_name ?? confirmedEvent?.name ?? 'Event',
+          eventLocationName: firstItem?.event_location_name ?? '',
+          eventId: firstItem?.event_id ?? '',
+          startDatetime: String(confirmedEvent?.start_datetime ?? ''),
+        })
         setProcessPaymentPhase('success')
         setCartItems([])
         setCartEventCoupons({})
@@ -1046,6 +1092,147 @@ export default function PublicApp({
     const isProcessing = processPaymentPhase === 'processing' || isSubmittingOrder
     const isSuccess = processPaymentPhase === 'success'
     const isFailure = processPaymentPhase === 'failure'
+
+    if (isSuccess && !confirmedOrderSummary) {
+      return (
+        <main className="app-shell process-payment-shell">
+          <section className="process-payment-card is-failure">
+            <div className="process-payment-backdrop" aria-hidden="true" />
+            <div className="process-payment-visual process-payment-failure-wrap" aria-label="Error">
+              <span className="process-payment-failure-ring">
+                <AlertTriangle size={42} />
+              </span>
+            </div>
+            <p className="eyebrow">Something went wrong</p>
+            <h1 className="featured-title">Order summary unavailable</h1>
+            <p className="featured-description">
+              Your payment may have gone through, but we couldn't load your order details. Check your email for a confirmation, or visit your Tickets page.
+            </p>
+            <div className="process-payment-actions">
+              <a className="primary-admin-button process-payment-link" href="/my-tickets">
+                <Ticket size={16} />
+                View My Tickets
+              </a>
+              <button className="secondary-button" type="button" onClick={() => onNavigate('/')}>
+                Back to home
+              </button>
+            </div>
+          </section>
+        </main>
+      )
+    }
+
+    if (isSuccess && confirmedOrderSummary) {
+      const summary = confirmedOrderSummary
+      const confirmedEventObj = summary.eventId ? events.find((e) => e.id === summary.eventId) ?? null : null
+      const bannerUrl = confirmedEventObj
+        ? getEventImageUrl(confirmedEventObj, 0)
+        : null
+      const dedupedItems = summary.cartItems.reduce<Array<{ name: string; qty: number; pricePaisa: number }>>((acc, item) => {
+        const existing = acc.find((r) => r.name === item.ticket_type_name)
+        if (existing) { existing.qty += item.quantity } else { acc.push({ name: item.ticket_type_name, qty: item.quantity, pricePaisa: item.unit_price_paisa }) }
+        return acc
+      }, [])
+      return (
+        <main className="order-confirmed-shell">
+          <div className="order-confetti" aria-hidden="true">
+            {['#7c3aed','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899','#f97316','#06b6d4'].map((color, i) => (
+              <span key={i} className="order-confetti-piece" style={{ '--confetti-color': color, '--confetti-delay': `${i * 0.18}s`, '--confetti-x': `${10 + i * 11}%` } as React.CSSProperties} />
+            ))}
+          </div>
+
+          <div className="order-confirmed-layout">
+            <div className="order-confirmed-left">
+              <div className="order-confirmed-check-ring" aria-label="Order confirmed">
+                <CheckCircle2 size={46} />
+              </div>
+              <h1 className="order-confirmed-title">Order Confirmed!</h1>
+              <p className="order-confirmed-sent">Your tickets have been sent to</p>
+              <strong className="order-confirmed-email">{summary.email || 'your email'}</strong>
+              <p className="order-confirmed-number">Order #{summary.orderNumber || '—'}</p>
+              <a className="order-confirmed-cta" href="/my-tickets">
+                <Ticket size={18} />
+                View My Tickets
+              </a>
+              <p className="order-confirmed-sub">You can also download your tickets from your account.</p>
+              <button className="order-confirmed-calendar" type="button">
+                <CalendarDays size={15} />
+                Add to Calendar
+              </button>
+            </div>
+
+            <div className="order-confirmed-summary">
+              <h2 className="order-confirmed-summary-title">Order Summary</h2>
+              {(bannerUrl || summary.eventName) ? (
+                <div className="order-confirmed-event-row">
+                  {bannerUrl ? (
+                    <img className="order-confirmed-event-thumb" src={bannerUrl} alt={summary.eventName} />
+                  ) : (
+                    <div className="order-confirmed-event-thumb order-confirmed-event-thumb-placeholder">
+                      <Ticket size={22} />
+                    </div>
+                  )}
+                  <div className="order-confirmed-event-info">
+                    <strong>{summary.eventName}</strong>
+                    {summary.startDatetime ? (
+                      <span>
+                        <CalendarDays size={13} />
+                        {formatEventDate(summary.startDatetime)} · {formatEventTime(summary.startDatetime)}
+                      </span>
+                    ) : null}
+                    {summary.eventLocationName ? (
+                      <span>
+                        <MapPin size={13} />
+                        {summary.eventLocationName}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="order-confirmed-line-items">
+                {dedupedItems.map((item) => (
+                  <div key={item.name} className="order-confirmed-line-item">
+                    <span>{item.name} ({item.qty})</span>
+                    <span>{formatNpr(item.pricePaisa * item.qty)}</span>
+                  </div>
+                ))}
+                <div className="order-confirmed-line-total">
+                  <strong>Total Paid</strong>
+                  <strong>{formatNpr(summary.totalPaisa)}</strong>
+                </div>
+              </div>
+
+              <div className="order-confirmed-footer">
+                <p>Need help? <button type="button" className="order-confirmed-support-link" onClick={() => onNavigate('/#support')}>Contact Support</button></p>
+              </div>
+            </div>
+          </div>
+
+          <div className="order-whats-next">
+            <h2>What's Next?</h2>
+            <div className="order-whats-next-steps">
+              <div className="order-whats-next-step">
+                <span className="order-whats-next-icon"><Mail size={28} /></span>
+                <strong>Check your email</strong>
+                <p>Your tickets have been sent to your email.</p>
+              </div>
+              <div className="order-whats-next-step">
+                <span className="order-whats-next-icon"><Clock size={28} /></span>
+                <strong>Arrive Early</strong>
+                <p>We recommend arriving at least 30 minutes early.</p>
+              </div>
+              <div className="order-whats-next-step">
+                <span className="order-whats-next-icon"><Star size={28} /></span>
+                <strong>Enjoy the Event!</strong>
+                <p>We can't wait to see you there!</p>
+              </div>
+            </div>
+          </div>
+        </main>
+      )
+    }
+
     return (
       <main className="app-shell process-payment-shell">
         <section
@@ -1095,9 +1282,9 @@ export default function PublicApp({
                 <button className="primary-admin-button" type="button" onClick={() => onNavigate('/')}>
                   Continue to events
                 </button>
-                <a className="secondary-button process-payment-link" href="/admin">
+                <a className="secondary-button process-payment-link" href="/my-tickets">
                   <Ticket size={16} />
-                  Open Tickets
+                  View My Tickets
                 </a>
               </>
             ) : isFailure ? (
@@ -1304,80 +1491,110 @@ export default function PublicApp({
                   Clear search and filters
                 </button>
               </div>
+            ) : dedupedRailEvents !== null ? (
+              <section className="homepage-discovery-section">
+                <SectionHeader
+                  title={`Results (${dedupedRailEvents.length})`}
+                  actionLabel="Show all"
+                  onAction={() => setShowAllRails(true)}
+                />
+                <div className="marketplace-event-grid">
+                  {dedupedRailEvents.map((event, eventIndex) => (
+                    <EventCard
+                      key={event.id ?? `result-${eventIndex}`}
+                      event={event}
+                      imageUrl={getEventImageUrl(event, eventIndex)}
+                      statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                      onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                      onSelectTickets={() => {
+                        if (!event.id) return
+                        setSelectedEventId(event.id)
+                        setIsCheckoutOpen(true)
+                      }}
+                    />
+                  ))}
+                </div>
+              </section>
             ) : configuredHomepageRails.length > 0 ? (
-              configuredHomepageRails.map((rail, index) => (
-                <section
-                  className={`homepage-discovery-section homepage-event-rail ${expandedHomepageRailIds.has(rail.id) ? 'is-expanded' : ''}`}
-                  id={`rail-${rail.id}`}
-                  key={rail.id}
-                  aria-labelledby={`rail-heading-${rail.id}`}
-                  onMouseEnter={() => pausedHomepageRailIdsRef.current.add(rail.id)}
-                  onMouseLeave={() => pausedHomepageRailIdsRef.current.delete(rail.id)}
-                  onFocusCapture={() => pausedHomepageRailIdsRef.current.add(rail.id)}
-                  onBlurCapture={(event) => {
-                    const nextTarget = event.relatedTarget as Node | null
-                    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                      pausedHomepageRailIdsRef.current.delete(rail.id)
-                    }
-                  }}
-                >
-                  <SectionHeader
-                    title={rail.label}
-                    actionLabel={expandedHomepageRailIds.has(rail.id) ? 'Show less' : 'See all'}
-                    onAction={() => toggleHomepageRailExpanded(rail.id)}
-                  />
-                  {!expandedHomepageRailIds.has(rail.id) && rail.events.length > 4 ? (
-                    <div className="homepage-rail-controls" aria-label={`${rail.label} slider controls`}>
-                      <button
-                        aria-label={`Show previous ${rail.label} events`}
-                        type="button"
-                        onClick={() => scrollHomepageRail(rail.id, 'left')}
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <button
-                        aria-label={`Show next ${rail.label} events`}
-                        type="button"
-                        onClick={() => scrollHomepageRail(rail.id, 'right')}
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                  ) : null}
-                  <div
-                    className={expandedHomepageRailIds.has(rail.id) ? 'marketplace-event-grid' : 'homepage-event-slider'}
-                    ref={(element) => {
-                      homepageRailRefs.current[rail.id] = element
+              <>
+                {isSearchOrFilterActive ? (
+                  <div className="homepage-show-all-bar">
+                    <span>{filteredEvents.length} result{filteredEvents.length === 1 ? '' : 's'} across {configuredHomepageRails.length} section{configuredHomepageRails.length === 1 ? '' : 's'}</span>
+                    <button type="button" onClick={() => setShowAllRails(false)}>
+                      Show unique only
+                    </button>
+                  </div>
+                ) : null}
+                {configuredHomepageRails.map((rail, index) => (
+                  <section
+                    className={`homepage-discovery-section homepage-event-rail ${expandedHomepageRailIds.has(rail.id) ? 'is-expanded' : ''}`}
+                    id={`rail-${rail.id}`}
+                    key={rail.id}
+                    aria-labelledby={`rail-heading-${rail.id}`}
+                    onMouseEnter={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+                    onMouseLeave={() => pausedHomepageRailIdsRef.current.delete(rail.id)}
+                    onFocusCapture={() => pausedHomepageRailIdsRef.current.add(rail.id)}
+                    onBlurCapture={(event) => {
+                      const nextTarget = event.relatedTarget as Node | null
+                      if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                        pausedHomepageRailIdsRef.current.delete(rail.id)
+                      }
                     }}
                   >
-                    {rail.events.map((event, eventIndex) => (
-                      <EventCard
-                        key={event.id ?? `${rail.id}-${eventIndex}`}
-                        event={event}
-                        imageUrl={getEventImageUrl(event, eventIndex)}
-                        statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
-                        onSelectTickets={() => {
-                          if (!event.id) return
-                          setSelectedEventId(event.id)
-                          setIsCheckoutOpen(true)
-                        }}
-                      />
-                    ))}
-                  </div>
-                  {index < configuredHomepageRails.length - 1 ? (
-                    <AdSlot
-                      adsServed={index + 1}
-                      className="homepage-between-rails-ad"
-                      fallbackHidden
-                      pageUrl={homepagePageUrl}
-                      placementKey="HOME_BETWEEN_RAILS"
-                      railIndex={index + 1}
-                      variant="banner"
+                    <SectionHeader
+                      title={rail.label}
+                      actionLabel={expandedHomepageRailIds.has(rail.id) ? 'Show less' : 'See all'}
+                      onAction={() => toggleHomepageRailExpanded(rail.id)}
                     />
-                  ) : null}
-                </section>
-              ))
+                    {!expandedHomepageRailIds.has(rail.id) && rail.events.length > 4 ? (
+                      <div className="homepage-rail-controls" aria-label={`${rail.label} slider controls`}>
+                        <button
+                          aria-label={`Show previous ${rail.label} events`}
+                          type="button"
+                          onClick={() => scrollHomepageRail(rail.id, 'left')}
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <button
+                          aria-label={`Show next ${rail.label} events`}
+                          type="button"
+                          onClick={() => scrollHomepageRail(rail.id, 'right')}
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    ) : null}
+                    <div
+                      className={expandedHomepageRailIds.has(rail.id) ? 'marketplace-event-grid' : 'homepage-event-slider'}
+                      ref={(element) => {
+                        homepageRailRefs.current[rail.id] = element
+                      }}
+                    >
+                      {rail.events.map((event, eventIndex) => (
+                        <EventCard
+                          key={event.id ?? `${rail.id}-${eventIndex}`}
+                          event={event}
+                          imageUrl={getEventImageUrl(event, eventIndex)}
+                          statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
+                          onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                          onSelectTickets={() => {
+                            if (!event.id) return
+                            setSelectedEventId(event.id)
+                            setIsCheckoutOpen(true)
+                          }}
+                        />
+                      ))}
+                    </div>
+                    {(index + 1) % 2 === 0 ? (
+                      <BetweenRailsAdSlider
+                        className="homepage-between-rails-ad"
+                        pageUrl={homepagePageUrl}
+                        placement="HOME_BETWEEN_RAILS"
+                      />
+                    ) : null}
+                  </section>
+                ))}
+              </>
             ) : (
               <>
                 <section className="homepage-discovery-section" aria-labelledby="featured-events-heading">

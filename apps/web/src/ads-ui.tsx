@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEventHandler, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEventHandler, type MouseEvent } from 'react'
 import type { AdPlacement, AdRecord, AdSettings } from '@waahtickets/shared-types'
 import { shouldShowAd } from './shared/utils'
 
@@ -58,6 +58,7 @@ type AdsTableProps = {
   onDeviceFilterChange: (value: string) => void
   onCreate: () => void
   onEdit: (ad: AdRecord) => void
+  onClone: (ad: AdRecord) => void
   onPause: (ad: AdRecord) => void
   onActivate: (ad: AdRecord) => void
   onDelete: (ad: AdRecord) => void
@@ -473,6 +474,131 @@ export function AdSlot({
   )
 }
 
+export function BetweenRailsAdSlider({
+  placement = 'HOME_BETWEEN_RAILS',
+  pageUrl = '',
+  className = ''
+}: {
+  placement?: AdPlacement
+  pageUrl?: string
+  className?: string
+}) {
+  const device = useResponsiveAdDevice()
+  const [ads, setAds] = useState<AdRecord[]>([])
+  const [activeIndex, setActiveIndex] = useState(0)
+  const pausedRef = useRef(false)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const params = new URLSearchParams({ device })
+        const response = await fetch(`/api/ads/placement/${encodeURIComponent(placement)}/all?${params.toString()}`)
+        const json = (await response.json()) as { data?: AdRecord[] }
+        if (!cancelled) {
+          setAds(json.data ?? [])
+          setActiveIndex(0)
+        }
+      } catch {
+        if (!cancelled) setAds([])
+      }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [device, placement])
+
+  useEffect(() => {
+    if (ads.length <= 1) return
+    const timer = window.setInterval(() => {
+      if (!pausedRef.current) {
+        setActiveIndex((current) => (current + 1) % ads.length)
+      }
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [ads.length])
+
+  useEffect(() => {
+    const ad = ads[activeIndex]
+    if (!ad?.id) return
+    void fetch(`/api/ads/${encodeURIComponent(ad.id)}/impression`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placement, device_type: device, page_url: pageUrl }),
+      keepalive: true
+    }).catch(() => null)
+  }, [activeIndex, ads, device, pageUrl, placement])
+
+  async function handleAdClick(ad: AdRecord, event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault()
+    const navigate = () => {
+      if (ad.open_in_new_tab) {
+        window.open(ad.destination_url, '_blank', 'noopener,noreferrer')
+      } else {
+        window.location.assign(ad.destination_url)
+      }
+    }
+    const timeout = window.setTimeout(navigate, 500)
+    try {
+      await fetch(`/api/ads/${encodeURIComponent(ad.id)}/click`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ placement, device_type: device, page_url: pageUrl }),
+        keepalive: true
+      })
+    } catch {
+      // ignore
+    } finally {
+      window.clearTimeout(timeout)
+      navigate()
+    }
+  }
+
+  const nowIso = new Date().toISOString()
+  const visibleAds = ads.filter((ad) => shouldShowAd(ad, { placement, device, nowIso }))
+
+  if (visibleAds.length === 0) return null
+
+  const clampedIndex = activeIndex % visibleAds.length
+  const activeAd = visibleAds[clampedIndex]
+
+  return (
+    <div
+      className={`between-rails-ad-slider ${className}`.trim()}
+      onMouseEnter={() => { pausedRef.current = true }}
+      onMouseLeave={() => { pausedRef.current = false }}
+    >
+      <div className="between-rails-ad-track" style={{ transform: `translateX(-${clampedIndex * 100}%)` }}>
+        {visibleAds.map((ad) => (
+          <div className="between-rails-ad-slide" key={ad.id}>
+            <SponsoredAdShell
+              ad={ad}
+              className="between-rails-ad-shell"
+              placement={placement}
+              variant="banner"
+              onActivate={(event) => void handleAdClick(ad, event)}
+            />
+          </div>
+        ))}
+      </div>
+      {visibleAds.length > 1 ? (
+        <div className="between-rails-ad-dots" aria-hidden="true">
+          {visibleAds.map((ad, index) => (
+            <span
+              key={ad.id}
+              className={`between-rails-ad-dot${index === clampedIndex ? ' is-active' : ''}`}
+            />
+          ))}
+        </div>
+      ) : null}
+      {activeAd ? (
+        <p className="between-rails-ad-hint" aria-hidden="true">
+          Sponsored · {activeAd.advertiser_name}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 export function SponsoredCard({ ad, className = '' }: SponsoredAdProps) {
   if (!ad) return null
   return <SponsoredAdShell ad={ad} className={className} placement={ad.placement} variant="card" />
@@ -781,6 +907,7 @@ export function AdsTable({
   onDeviceFilterChange,
   onCreate,
   onEdit,
+  onClone,
   onPause,
   onActivate,
   onDelete
@@ -868,6 +995,9 @@ export function AdsTable({
                     <div className="tw-flex tw-flex-wrap tw-gap-2">
                       <button className="tw-rounded-full tw-border tw-border-slate-200 tw-bg-white tw-px-3 tw-py-1.5 tw-text-xs tw-font-semibold" type="button" onClick={() => onEdit(ad)}>
                         Edit
+                      </button>
+                      <button className="tw-rounded-full tw-border tw-border-slate-200 tw-bg-white tw-px-3 tw-py-1.5 tw-text-xs tw-font-semibold" type="button" onClick={() => onClone(ad)}>
+                        Clone
                       </button>
                       {ad.status === 'active' ? (
                         <button className="tw-rounded-full tw-border tw-border-amber-200 tw-bg-amber-50 tw-px-3 tw-py-1.5 tw-text-xs tw-font-semibold tw-text-amber-800" type="button" onClick={() => onPause(ad)}>

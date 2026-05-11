@@ -407,6 +407,49 @@ publicAdsRoutes.use('*', async (c, next) => {
   await next()
 })
 
+publicAdsRoutes.get('/ads/placement/:placement/all', async (c) => {
+  const placement = parsePlacement(c.req.param('placement'))
+  if (!placement) {
+    return c.json({ error: 'Invalid ad placement.' }, 400)
+  }
+  const device = parseRequestDevice(c.req.query('device'))
+  if (!device) {
+    return c.json({ error: 'device must be either "web" or "mobile".' }, 400)
+  }
+
+  const settings = await getAdSettings(c.env.DB)
+  if (!normalizeBoolean(settings.ads_enabled, true) ||
+    (device === 'web' && !normalizeBoolean(settings.web_ads_enabled, true)) ||
+    (device === 'mobile' && !normalizeBoolean(settings.mobile_ads_enabled, true))) {
+    return c.json({ data: [] })
+  }
+
+  const nowIso = new Date().toISOString()
+  const rows = await c.env.DB
+    .prepare(
+      `SELECT
+        ads.*,
+        (SELECT COUNT(*) FROM ad_impressions WHERE ad_impressions.ad_id = ads.id) AS impression_count,
+        (SELECT COUNT(*) FROM ad_clicks WHERE ad_clicks.ad_id = ads.id) AS click_count
+       FROM ads
+       WHERE ads.placement = ?
+       ORDER BY ads.priority DESC, ads.created_at ASC, ads.id ASC`
+    )
+    .bind(placement)
+    .all<AdCandidateRow>()
+
+  const eligible = rows.results
+    .map((row) => normalizeAdRecord(row))
+    .filter((ad) => {
+      if (!isEligibleAd(ad, device, nowIso)) return false
+      if (typeof ad.max_impressions === 'number' && ad.impression_count >= ad.max_impressions) return false
+      if (typeof ad.max_clicks === 'number' && ad.click_count >= ad.max_clicks) return false
+      return true
+    })
+
+  return c.json({ data: eligible })
+})
+
 publicAdsRoutes.get('/ads/placement/:placement', async (c) => {
   const placement = parsePlacement(c.req.param('placement'))
   if (!placement) {
