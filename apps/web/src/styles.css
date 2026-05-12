@@ -10266,6 +10266,10 @@ body[data-theme='light'] .admin-sidebar.collapsed {
     grid-template-columns: 1fr;
   }
 
+  .quantity-stepper {
+    width: fit-content;
+  }
+
   .event-summary-card {
     flex-direction: column;
   }
