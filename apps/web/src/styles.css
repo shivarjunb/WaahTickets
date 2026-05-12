@@ -11878,6 +11878,141 @@ body[data-theme='light'] .wizard-coupons-intro {
 }
 .my-ticket-pdf-link:hover { text-decoration: underline; }
 
+/* ── Logout button & confirmation ───────────────────────────────── */
+.marketplace-logout-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 999px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.07);
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.marketplace-logout-button:hover {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+body[data-theme='dark'] .marketplace-logout-button {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.3);
+  background: rgba(252, 165, 165, 0.08);
+}
+body[data-theme='dark'] .marketplace-logout-button:hover {
+  background: rgba(252, 165, 165, 0.15);
+  border-color: rgba(252, 165, 165, 0.55);
+}
+
+.logout-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.logout-confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(360px, 100%);
+  padding: 32px 28px 28px;
+  border-radius: 18px;
+  background: var(--bg-base, #0f172a);
+  color: var(--text-primary, #f1f5f9);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+body[data-theme='light'] .logout-confirm-dialog {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+.logout-confirm-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  flex-shrink: 0;
+}
+body[data-theme='dark'] .logout-confirm-icon {
+  background: rgba(252, 165, 165, 0.12);
+  color: #fca5a5;
+}
+
+.logout-confirm-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.logout-confirm-body {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted, #94a3b8);
+  line-height: 1.5;
+}
+body[data-theme='light'] .logout-confirm-body { color: #64748b; }
+
+.logout-confirm-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.logout-confirm-cancel {
+  flex: 1;
+  min-height: 42px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.logout-confirm-cancel:hover {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-primary, #f1f5f9);
+}
+body[data-theme='light'] .logout-confirm-cancel { color: #64748b; }
+body[data-theme='light'] .logout-confirm-cancel:hover { color: #0f172a; background: rgba(15,23,42,0.05); }
+
+.logout-confirm-proceed {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  border: none;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.logout-confirm-proceed:hover { background: #dc2626; }
+
 /* ── Admin nav button ────────────────────────────────────────────── */
 .marketplace-admin-button {
   display: inline-flex;

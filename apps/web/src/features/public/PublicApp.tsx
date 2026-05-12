@@ -748,6 +748,10 @@ export default function PublicApp({
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    // Wait until auth has settled so user?.id is accurate.
+    // Without this, a logged-in user's callback fires before the session loads,
+    // finds guest_checkout_identity: null, and shows "guest details missing".
+    if (isAuthLoading) return
     const params = new URLSearchParams(window.location.search)
     const pidx = params.get('pidx')?.trim() ?? ''
     const esewaData = params.get('data')?.trim() ?? ''
@@ -802,6 +806,8 @@ export default function PublicApp({
 
     const draftRaw = window.localStorage.getItem(draftKey)
     if (!draftRaw) {
+      window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+      window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
       setIsCartCheckoutOpen(true)
       setPaymentCallbackPhase('failure')
       setPaymentCallbackError(
@@ -866,6 +872,9 @@ export default function PublicApp({
 
     const actorKey = user?.id ?? restored.guest_checkout_identity?.user.id ?? restored.guest_checkout_identity?.token ?? ''
     if (!actorKey) {
+      // Clear both drafts so this error doesn't re-trigger on every subsequent page load.
+      window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+      window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
       setIsCartCheckoutOpen(true)
       setPaymentCallbackPhase('failure')
       setPaymentCallbackError(
@@ -1031,7 +1040,7 @@ export default function PublicApp({
         setIsSubmittingOrder(false)
       }
     })()
-  }, [user?.id, user?.webrole])
+  }, [isAuthLoading, user?.id, user?.webrole])
 
   function scrollHomepageRail(railId: string, direction: 'left' | 'right') {
     const track = homepageRailRefs.current[railId]
@@ -1068,6 +1077,13 @@ export default function PublicApp({
       return next
     })
   }
+
+  useEffect(() => {
+    if (currentPath === '/my-tickets') {
+      setIsMyTicketsOpen(true)
+      onNavigate('/')
+    }
+  }, [currentPath])
 
   if (confirmedOrderSummary) {
     const summary = confirmedOrderSummary
@@ -1179,13 +1195,6 @@ export default function PublicApp({
         </main>
       )
     }
-
-  useEffect(() => {
-    if (currentPath === '/my-tickets') {
-      setIsMyTicketsOpen(true)
-      onNavigate('/')
-    }
-  }, [currentPath])
 
   return (
     <main className="app-shell public-marketplace-shell">
@@ -1636,8 +1645,11 @@ export default function PublicApp({
           paymentCallbackError={paymentCallbackError}
           onDismissCallbackError={() => {
             window.localStorage.removeItem(paymentCallbackLockKey)
+            window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+            window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
             setPaymentCallbackPhase('idle')
             setPaymentCallbackError('')
+            setIsCartCheckoutOpen(false)
           }}
         />
       ) : null}
@@ -2711,99 +2723,128 @@ function PublicHeader({
   onNavigate: (target: string) => void
   onSearchChange: (value: string) => void
 }) {
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false)
+
   const navItems = [
     { label: 'Events', target: '#events' },
     { label: 'Venues', target: '#venues' },
     { label: 'Help', target: '#support' }
   ]
+
+  function handleLogoutRequest() {
+    setIsLogoutConfirmOpen(true)
+  }
+
+  function handleLogoutConfirm() {
+    setIsLogoutConfirmOpen(false)
+    void onLogout()
+  }
+
   return (
-    <nav className="marketplace-header" aria-label="Main navigation">
-      <div className="marketplace-header-inner">
-        <a className="marketplace-brand" href="/">
-          <span className="marketplace-brand-mark">W</span>
-          <span>Waah Tickets</span>
-        </a>
-        <label className="marketplace-nav-search">
-          <Search size={16} />
-          <input
-            aria-label="Search events, artists, or venues"
-            placeholder="Search events, artists, venues..."
-            type="search"
-            value={searchQuery}
-            onChange={(event) => onSearchChange(event.target.value)}
-          />
-        </label>
-        <div className={isMenuOpen ? 'marketplace-nav-links open' : 'marketplace-nav-links'}>
-          {navItems.map((item) => (
-            <button key={item.label} type="button" onClick={() => onNavigate(item.target)}>
-              {item.label}
-            </button>
-          ))}
-          {!isAuthLoading && user && canAccessTickets ? (
-            <button className="marketplace-mobile-only" type="button" onClick={onMyTicketsOpen}>
-              My Tickets
-            </button>
-          ) : null}
-          {!isAuthLoading && user && canAccessAdmin ? (
-            <a className="marketplace-mobile-only marketplace-admin-link" href="/admin">
-              Admin
-            </a>
-          ) : null}
-          {!isAuthLoading && user ? (
-            <button className="marketplace-mobile-only" type="button" onClick={() => void onLogout()}>
-              Log out
-            </button>
-          ) : !isAuthLoading ? (
-            <button className="marketplace-mobile-only" type="button" onClick={onLoginClick}>
-              Login / Sign Up
-            </button>
-          ) : null}
-        </div>
-        <div className="marketplace-header-actions">
-          <button
-            aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
-            className="marketplace-cart-button"
-            type="button"
-            onClick={onCartOpen}
-          >
-            <ShoppingCart size={17} />
-            <span>{cartItemCount}</span>
-          </button>
-          {isAuthLoading ? null : user ? (
-            <>
-              {canAccessAdmin ? (
-                <a className="marketplace-admin-button" href="/admin">
-                  <ShieldCheck size={15} />
-                  <span>Admin</span>
-                </a>
-              ) : null}
-              {canAccessTickets ? (
-                <button type="button" className="marketplace-login-link" onClick={onMyTicketsOpen}>
-                  My Tickets
-                </button>
-              ) : null}
-              <button className="marketplace-account-button" type="button" onClick={() => void onLogout()}>
-                <UserCog size={16} />
-                <span>{String(user.first_name ?? user.email ?? 'Account').split(' ')[0]}</span>
-                <LogOut size={15} />
+    <>
+      <nav className="marketplace-header" aria-label="Main navigation">
+        <div className="marketplace-header-inner">
+          <a className="marketplace-brand" href="/">
+            <span className="marketplace-brand-mark">W</span>
+            <span>Waah Tickets</span>
+          </a>
+          <label className="marketplace-nav-search">
+            <Search size={16} />
+            <input
+              aria-label="Search events, artists, or venues"
+              placeholder="Search events, artists, venues..."
+              type="search"
+              value={searchQuery}
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </label>
+          <div className={isMenuOpen ? 'marketplace-nav-links open' : 'marketplace-nav-links'}>
+            {navItems.map((item) => (
+              <button key={item.label} type="button" onClick={() => onNavigate(item.target)}>
+                {item.label}
               </button>
-            </>
-          ) : (
-            <>
+            ))}
+            {!isAuthLoading && user && canAccessTickets ? (
+              <button className="marketplace-mobile-only" type="button" onClick={onMyTicketsOpen}>
+                My Tickets
+              </button>
+            ) : null}
+            {!isAuthLoading && user && canAccessAdmin ? (
+              <a className="marketplace-mobile-only marketplace-admin-link" href="/admin">
+                Admin
+              </a>
+            ) : null}
+            {!isAuthLoading && user ? (
+              <button className="marketplace-mobile-only" type="button" onClick={handleLogoutRequest}>
+                Log out
+              </button>
+            ) : !isAuthLoading ? (
+              <button className="marketplace-mobile-only" type="button" onClick={onLoginClick}>
+                Login / Sign Up
+              </button>
+            ) : null}
+          </div>
+          <div className="marketplace-header-actions">
+            <button
+              aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
+              className="marketplace-cart-button"
+              type="button"
+              onClick={onCartOpen}
+            >
+              <ShoppingCart size={17} />
+              <span>{cartItemCount}</span>
+            </button>
+            {isAuthLoading ? null : user ? (
+              <>
+                {canAccessAdmin ? (
+                  <a className="marketplace-admin-button" href="/admin">
+                    <ShieldCheck size={15} />
+                    <span>Admin</span>
+                  </a>
+                ) : null}
+                {canAccessTickets ? (
+                  <button type="button" className="marketplace-login-link" onClick={onMyTicketsOpen}>
+                    My Tickets
+                  </button>
+                ) : null}
+                <button className="marketplace-logout-button" type="button" onClick={handleLogoutRequest}>
+                  <LogOut size={15} />
+                  <span>Log out</span>
+                </button>
+              </>
+            ) : (
               <button className="marketplace-login-link" type="button" onClick={onLoginClick}>
                 Log in
               </button>
-              <button className="marketplace-signup-button" type="button" onClick={onLoginClick}>
-                Sign Up
-              </button>
-            </>
-          )}
-          <button className="marketplace-menu-button" aria-label="Open menu" type="button" onClick={onMenuToggle}>
-            {isMenuOpen ? <X size={19} /> : <Menu size={19} />}
-          </button>
+            )}
+            <button className="marketplace-menu-button" aria-label="Open menu" type="button" onClick={onMenuToggle}>
+              {isMenuOpen ? <X size={19} /> : <Menu size={19} />}
+            </button>
+          </div>
         </div>
-      </div>
-    </nav>
+      </nav>
+
+      {isLogoutConfirmOpen ? (
+        <div className="logout-confirm-backdrop" onClick={() => setIsLogoutConfirmOpen(false)}>
+          <div className="logout-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title" onClick={(e) => e.stopPropagation()}>
+            <div className="logout-confirm-icon">
+              <LogOut size={28} />
+            </div>
+            <h2 id="logout-confirm-title" className="logout-confirm-title">Log out?</h2>
+            <p className="logout-confirm-body">You'll need to sign in again to access your tickets and account.</p>
+            <div className="logout-confirm-actions">
+              <button type="button" className="logout-confirm-cancel" onClick={() => setIsLogoutConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="logout-confirm-proceed" onClick={handleLogoutConfirm}>
+                <LogOut size={15} />
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
 
