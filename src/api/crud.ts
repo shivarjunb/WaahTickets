@@ -421,6 +421,9 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     completedOrders += 1
   }
 
+  await ensureUserCartItemsTable(db)
+  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(actor.userId).run()
+
   const cache = createCache(c.env)
   await Promise.all([
     cache.bumpResourceVersion('orders'),
@@ -1217,6 +1220,9 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
 
     completedOrders += 1
   }
+
+  await ensureUserCartItemsTable(db)
+  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(actor.userId).run()
 
   const cache = createCache(c.env)
   await Promise.all([
@@ -2754,6 +2760,9 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
 
     completedOrders += 1
   }
+
+  await ensureUserCartItemsTable(db)
+  await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(scope.userId).run()
 
   const cache = createCache(c.env)
   await Promise.all([
