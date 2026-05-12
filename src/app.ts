@@ -106,7 +106,7 @@ app.post('/processpayment', async (c) => {
   if (status) query.set('status', status)
 
   const suffix = query.toString()
-  return c.redirect(`/processpayment${suffix ? `?${suffix}` : ''}`, 303)
+  return c.redirect(`/${suffix ? `?${suffix}` : ''}`, 303)
 })
 
 function renderMobileReturnHtml(targetUrl: string) {

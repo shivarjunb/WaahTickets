@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "
 import type { HeroSettingsData } from "../../shared/types";
 import { defaultHeroSettingsData } from "../../shared/constants";
 import { normalizeHeroSettings } from "../../shared/utils";
-import { AlertTriangle, Building2, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, CreditCard, Drama, Filter, FilterX, Heart, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
+import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, hasAdminConsoleAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
@@ -93,7 +93,8 @@ export default function PublicApp({
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [isCartExpiredNoticeOpen, setIsCartExpiredNoticeOpen] = useState(false)
   const [publicStatus, setPublicStatus] = useState('Loading events')
-  const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
+  const [paymentCallbackPhase, setPaymentCallbackPhase] = useState<'idle' | 'processing' | 'failure'>('idle')
+  const [paymentCallbackError, setPaymentCallbackError] = useState('')
   const [confirmedOrderSummary, setConfirmedOrderSummary] = useState<{
     orderNumber: string
     email: string
@@ -331,6 +332,8 @@ export default function PublicApp({
   const cartGroups = useMemo(() => groupCartItemsByEvent(cartItems), [cartItems])
   const reserveBlockedMessage = getReserveBlockedMessage()
   const canAccessTickets = hasCustomerTicketsAccess(user)
+  const canAccessAdmin = hasAdminConsoleAccess(user)
+  const [isMyTicketsOpen, setIsMyTicketsOpen] = useState(false)
   const isProcessPaymentRoute = currentPath === '/processpayment'
   const [isVerifyingTicket, setIsVerifyingTicket] = useState(false)
   const [verifiedTicket, setVerifiedTicket] = useState<ApiRecord | null>(null)
@@ -745,12 +748,12 @@ export default function PublicApp({
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!isProcessPaymentRoute) return
     const params = new URLSearchParams(window.location.search)
     const pidx = params.get('pidx')?.trim() ?? ''
     const esewaData = params.get('data')?.trim() ?? ''
     const callbackStatus = params.get('status')?.trim() ?? ''
     const normalizedCallbackStatus = callbackStatus.toLowerCase()
+
     const isEsewaFailureReturn =
       !pidx &&
       !esewaData &&
@@ -759,19 +762,11 @@ export default function PublicApp({
         normalizedCallbackStatus === 'failure' ||
         normalizedCallbackStatus === 'canceled' ||
         normalizedCallbackStatus === 'cancelled')
-    if (isEsewaFailureReturn) {
-      setPublicStatus('eSewa payment was not completed. You can return to checkout and try again.')
-      setProcessPaymentPhase('failure')
-      return
-    }
+
     const esewaDraftRaw = window.localStorage.getItem(esewaCheckoutDraftStorageKey)
     let esewaDraftForEmptyCallback = null as null | Record<string, unknown>
     if (!pidx && !esewaData && esewaDraftRaw) {
-      try {
-        esewaDraftForEmptyCallback = JSON.parse(esewaDraftRaw) as Record<string, unknown>
-      } catch {
-        esewaDraftForEmptyCallback = null
-      }
+      try { esewaDraftForEmptyCallback = JSON.parse(esewaDraftRaw) as Record<string, unknown> } catch { /* ignore */ }
     }
     const hasEsewaDraftFallback =
       !pidx &&
@@ -780,25 +775,40 @@ export default function PublicApp({
       typeof esewaDraftForEmptyCallback?.esewa_total_amount === 'string' &&
       esewaDraftForEmptyCallback.esewa_transaction_uuid.trim() !== '' &&
       esewaDraftForEmptyCallback.esewa_total_amount.trim() !== ''
-    if (!pidx && !esewaData && !hasEsewaDraftFallback) return
+
+    // No callback params — nothing to do on normal page loads.
+    if (!pidx && !esewaData && !isEsewaFailureReturn && !hasEsewaDraftFallback) return
+
+    // Wipe params from the URL immediately so a refresh can't re-trigger processing.
+    window.history.replaceState({}, '', window.location.pathname)
+
+    const draftKey = pidx ? khaltiCheckoutDraftStorageKey : esewaCheckoutDraftStorageKey
     const provider: 'khalti' | 'esewa' = pidx ? 'khalti' : 'esewa'
-    setPublicStatus(
-      provider === 'khalti'
-        ? 'Processing Khalti return...'
-        : esewaData
-          ? 'Processing eSewa return...'
-          : 'Checking eSewa payment status...'
-    )
-    setProcessPaymentPhase('processing')
-    const draftKey = provider === 'khalti' ? khaltiCheckoutDraftStorageKey : esewaCheckoutDraftStorageKey
+
+    // eSewa told us it failed outright — restore cart and surface error in modal.
+    if (isEsewaFailureReturn) {
+      const failDraftRaw = window.localStorage.getItem(esewaCheckoutDraftStorageKey)
+      if (failDraftRaw) {
+        try {
+          const failDraft = JSON.parse(failDraftRaw) as { cartItems?: CartItem[] }
+          if (Array.isArray(failDraft.cartItems)) setCartItems(failDraft.cartItems)
+        } catch { /* ignore */ }
+      }
+      setIsCartCheckoutOpen(true)
+      setPaymentCallbackPhase('failure')
+      setPaymentCallbackError('eSewa payment was not completed. Please try again.')
+      return
+    }
+
     const draftRaw = window.localStorage.getItem(draftKey)
     if (!draftRaw) {
-      setPublicStatus(
+      setIsCartCheckoutOpen(true)
+      setPaymentCallbackPhase('failure')
+      setPaymentCallbackError(
         provider === 'khalti'
-          ? 'Khalti return detected, but checkout draft is missing on this browser.'
-          : 'eSewa return detected, but checkout draft is missing on this browser.'
+          ? 'Khalti return detected, but checkout data is missing on this browser. Please start checkout again.'
+          : 'eSewa return detected, but checkout data is missing on this browser. Please start checkout again.'
       )
-      setProcessPaymentPhase('failure')
       return
     }
 
@@ -819,17 +829,16 @@ export default function PublicApp({
       esewa_product_code?: string
       guest_checkout_identity?: GuestCheckoutIdentity | null
     }
-    try {
-      restored = JSON.parse(draftRaw)
-    } catch {
-      restored = null
-    }
+    try { restored = JSON.parse(draftRaw) } catch { restored = null }
+
     if (!restored || !Array.isArray(restored.cartItems) || !Array.isArray(restored.order_groups)) {
-      setPublicStatus(`${provider === 'khalti' ? 'Khalti' : 'eSewa'} return detected, but checkout draft is invalid.`)
-      setProcessPaymentPhase('failure')
+      setIsCartCheckoutOpen(true)
+      setPaymentCallbackPhase('failure')
+      setPaymentCallbackError(`${provider === 'khalti' ? 'Khalti' : 'eSewa'} return detected, but checkout data is invalid. Please start checkout again.`)
       return
     }
 
+    // Restore cart state from the saved draft.
     setCartItems(restored.cartItems)
     setCartEventEmails(restored.cartEventEmails ?? {})
     setCartEventCoupons(restored.cartEventCoupons ?? {})
@@ -849,28 +858,57 @@ export default function PublicApp({
     }
 
     if (provider === 'khalti' && normalizedCallbackStatus === 'user canceled') {
-      setPublicStatus('Khalti payment was canceled.')
-      setProcessPaymentPhase('failure')
-      window.history.replaceState({}, '', window.location.pathname)
+      setIsCartCheckoutOpen(true)
+      setPaymentCallbackPhase('failure')
+      setPaymentCallbackError('Khalti payment was canceled. You can try again.')
       return
     }
 
     const actorKey = user?.id ?? restored.guest_checkout_identity?.user.id ?? restored.guest_checkout_identity?.token ?? ''
     if (!actorKey) {
-      setPublicStatus(
+      setIsCartCheckoutOpen(true)
+      setPaymentCallbackPhase('failure')
+      setPaymentCallbackError(
         provider === 'khalti'
           ? 'Khalti return detected, but guest checkout details are missing. Please start checkout again.'
           : 'eSewa return detected, but guest checkout details are missing. Please start checkout again.'
       )
-      setProcessPaymentPhase('failure')
       return
     }
 
     const callbackKey = `${provider}:${pidx || esewaData || `${restored.esewa_transaction_uuid ?? ''}:${restored.esewa_total_amount ?? ''}`}:${actorKey}`
+
+    // Dedup: in-memory ref prevents double-run within the same session.
     if (processedPaymentCallbackRef.current === callbackKey) return
     processedPaymentCallbackRef.current = callbackKey
 
+    // Dedup: localStorage lock prevents duplicate processing across refreshes and tabs.
+    const existingLockRaw = window.localStorage.getItem(paymentCallbackLockKey)
+    if (existingLockRaw) {
+      try {
+        const lock = JSON.parse(existingLockRaw) as { key: string; status: string; ts: number }
+        const ageMs = Date.now() - (lock.ts ?? 0)
+        if (lock.key === callbackKey && ageMs < 10 * 60 * 1000) {
+          if (lock.status === 'done') {
+            // Already completed successfully — silently skip.
+            return
+          }
+          if (lock.status === 'processing') {
+            // Crashed or refreshed mid-flight — show spinner so user knows it's in progress.
+            setIsCartCheckoutOpen(true)
+            setPaymentCallbackPhase('processing')
+            return
+          }
+        }
+      } catch { /* ignore corrupt lock */ }
+    }
+
+    // Write the processing lock before any async work.
+    window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'processing', ts: Date.now() }))
+    setIsCartCheckoutOpen(true)
+    setPaymentCallbackPhase('processing')
     setIsSubmittingOrder(true)
+
     void (async () => {
       try {
         const guestCheckoutToken = restored.guest_checkout_identity?.token
@@ -882,14 +920,13 @@ export default function PublicApp({
           })
           const lookupStatus = String(data.data.status ?? '').trim()
           if (lookupStatus.toLowerCase() !== 'completed') {
-            setPublicStatus(
-              lookupStatus
-                ? `Khalti payment status: ${lookupStatus}. Payment was not completed. You can retry payment.`
-                : 'Khalti payment status is unknown. You can retry payment.'
-            )
-            setProcessPaymentPhase('failure')
+            const errMsg = lookupStatus
+              ? `Khalti payment status: ${lookupStatus}. Payment was not completed.`
+              : 'Khalti payment status is unknown. You can retry payment.'
+            window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'failed', ts: Date.now() }))
+            setPaymentCallbackError(errMsg)
+            setPaymentCallbackPhase('failure')
             setIsSubmittingOrder(false)
-            window.history.replaceState({}, '', window.location.pathname)
             return
           }
           const { data: completion } = await fetchJson<{ data: { completed_orders: number } }>('/api/storefront/payments/khalti/complete', {
@@ -930,10 +967,10 @@ export default function PublicApp({
               })
           const status = String(data.data.status ?? '').trim().toUpperCase()
           if (status !== 'COMPLETE') {
-            setPublicStatus(`eSewa payment status: ${status || 'UNKNOWN'}. Payment was not completed.`)
-            setProcessPaymentPhase('failure')
+            window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'failed', ts: Date.now() }))
+            setPaymentCallbackError(`eSewa payment status: ${status || 'UNKNOWN'}. Payment was not completed.`)
+            setPaymentCallbackPhase('failure')
             setIsSubmittingOrder(false)
-            window.history.replaceState({}, '', window.location.pathname)
             return
           }
           setIsSubmittingOrder(false)
@@ -949,8 +986,9 @@ export default function PublicApp({
             }
           )
           if (!completed) {
-            setProcessPaymentPhase('failure')
-            window.history.replaceState({}, '', window.location.pathname)
+            window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'failed', ts: Date.now() }))
+            setPaymentCallbackPhase('failure')
+            setPaymentCallbackError('Order could not be completed. Please contact support.')
             return
           }
         }
@@ -971,7 +1009,10 @@ export default function PublicApp({
           eventId: firstItem?.event_id ?? '',
           startDatetime: String(confirmedEvent?.start_datetime ?? ''),
         })
-        setProcessPaymentPhase('success')
+        // Mark lock as done before clearing state so any concurrent tab sees success.
+        window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'done', ts: Date.now() }))
+        window.localStorage.removeItem(draftKey)
+        setPaymentCallbackPhase('idle')
         setCartItems([])
         setCartEventCoupons({})
         setCartEventCouponMessages({})
@@ -982,51 +1023,15 @@ export default function PublicApp({
         setOrderCouponMessage('')
         setIsCartCheckoutOpen(false)
         setIsSubmittingOrder(false)
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(draftKey)
-        }
-        window.history.replaceState({}, '', window.location.pathname)
       } catch (error) {
         processedPaymentCallbackRef.current = ''
-        setPublicStatus(getErrorMessage(error))
-        setProcessPaymentPhase('failure')
+        window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'failed', ts: Date.now() }))
+        setPaymentCallbackError(getErrorMessage(error))
+        setPaymentCallbackPhase('failure')
         setIsSubmittingOrder(false)
       }
     })()
-  }, [isProcessPaymentRoute, user?.id, user?.webrole])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!isProcessPaymentRoute) return
-    const params = new URLSearchParams(window.location.search)
-    const hasKhalti = params.has('pidx')
-    const hasEsewa = params.has('data')
-    const status = params.get('status')?.trim().toLowerCase() ?? ''
-    const hasEsewaFailureReturn =
-      params.has('esewa_failed') ||
-      status === 'failed' ||
-      status === 'failure' ||
-      status === 'canceled' ||
-      status === 'cancelled'
-    let hasEsewaDraftFallback = false
-    const draftRaw = window.localStorage.getItem(esewaCheckoutDraftStorageKey)
-    if (draftRaw) {
-      try {
-        const draft = JSON.parse(draftRaw) as Record<string, unknown>
-        hasEsewaDraftFallback =
-          typeof draft.esewa_transaction_uuid === 'string' &&
-          typeof draft.esewa_total_amount === 'string' &&
-          draft.esewa_transaction_uuid.trim() !== '' &&
-          draft.esewa_total_amount.trim() !== ''
-      } catch {
-        hasEsewaDraftFallback = false
-      }
-    }
-    if (!hasKhalti && !hasEsewa && !hasEsewaFailureReturn && !hasEsewaDraftFallback) {
-      setPublicStatus('No payment callback was found. The payment was not completed. Return to checkout and try again.')
-      setProcessPaymentPhase('failure')
-    }
-  }, [isProcessPaymentRoute])
+  }, [user?.id, user?.webrole])
 
   function scrollHomepageRail(railId: string, direction: 'left' | 'right') {
     const track = homepageRailRefs.current[railId]
@@ -1064,42 +1069,8 @@ export default function PublicApp({
     })
   }
 
-  if (isProcessPaymentRoute) {
-    const isProcessing = processPaymentPhase === 'processing' || isSubmittingOrder
-    const isSuccess = processPaymentPhase === 'success'
-    const isFailure = processPaymentPhase === 'failure'
-
-    if (isSuccess && !confirmedOrderSummary) {
-      return (
-        <main className="app-shell process-payment-shell">
-          <section className="process-payment-card is-failure">
-            <div className="process-payment-backdrop" aria-hidden="true" />
-            <div className="process-payment-visual process-payment-failure-wrap" aria-label="Error">
-              <span className="process-payment-failure-ring">
-                <AlertTriangle size={42} />
-              </span>
-            </div>
-            <p className="eyebrow">Something went wrong</p>
-            <h1 className="featured-title">Order summary unavailable</h1>
-            <p className="featured-description">
-              Your payment may have gone through, but we couldn't load your order details. Check your email for a confirmation, or visit your Tickets page.
-            </p>
-            <div className="process-payment-actions">
-              <a className="primary-admin-button process-payment-link" href="/my-tickets">
-                <Ticket size={16} />
-                View My Tickets
-              </a>
-              <button className="secondary-button" type="button" onClick={() => onNavigate('/')}>
-                Back to home
-              </button>
-            </div>
-          </section>
-        </main>
-      )
-    }
-
-    if (isSuccess && confirmedOrderSummary) {
-      const summary = confirmedOrderSummary
+  if (confirmedOrderSummary) {
+    const summary = confirmedOrderSummary
       const confirmedEventObj = summary.eventId ? events.find((e) => e.id === summary.eventId) ?? null : null
       const bannerUrl = confirmedEventObj
         ? getEventImageUrl(confirmedEventObj, 0)
@@ -1126,10 +1097,10 @@ export default function PublicApp({
               <p className="order-confirmed-sent">Your tickets have been sent to</p>
               <strong className="order-confirmed-email">{summary.email || 'your email'}</strong>
               <p className="order-confirmed-number">Order #{summary.orderNumber || '—'}</p>
-              <a className="order-confirmed-cta" href="/my-tickets">
+              <button type="button" className="order-confirmed-cta" onClick={() => setIsMyTicketsOpen(true)}>
                 <Ticket size={18} />
                 View My Tickets
-              </a>
+              </button>
               <p className="order-confirmed-sub">You can also download your tickets from your account.</p>
               <button className="order-confirmed-calendar" type="button">
                 <CalendarDays size={15} />
@@ -1209,104 +1180,17 @@ export default function PublicApp({
       )
     }
 
-    return (
-      <main className="app-shell process-payment-shell">
-        <section
-          aria-busy={isProcessing}
-          className={`process-payment-card ${isSuccess ? 'is-success' : isFailure ? 'is-failure' : ''} ${
-            isProcessing ? 'is-processing' : ''
-          }`}
-        >
-          <div className="process-payment-backdrop" aria-hidden="true" />
-          {isProcessing ? (
-            <div className="process-payment-visual process-payment-spinner-wrap" aria-label="Processing payment">
-              <span className="process-payment-spinner" />
-            </div>
-          ) : isSuccess ? (
-            <div className="process-payment-visual process-payment-success-wrap" aria-label="Payment successful">
-              <span className="process-payment-success-ring">
-                <CheckCircle2 size={44} />
-              </span>
-            </div>
-          ) : (
-            <div className="process-payment-visual process-payment-failure-wrap" aria-label="Payment failed">
-              <span className="process-payment-failure-ring">
-                <AlertTriangle size={42} />
-              </span>
-            </div>
-          )}
-          <p className="eyebrow">Process Payment</p>
-          <h1 className="featured-title">
-            {isSuccess ? 'Payment Successful' : isFailure ? 'Payment Incomplete' : 'Processing Payment'}
-          </h1>
-          {!isProcessing ? <p className="featured-description">{publicStatus || 'Waiting for Khalti callback details...'}</p> : null}
-          {isSuccess ? (
-            <div className="process-payment-details">
-              <p className="process-payment-note">
-                <Mail size={16} />
-                Your ticket email is being sent and should arrive momentarily.
-              </p>
-              <p className="process-payment-note">
-                <Ticket size={16} />
-                You can also check your <strong>Tickets</strong> page. If anything looks off, contact support.
-              </p>
-            </div>
-          ) : null}
-          <div className="process-payment-actions">
-            {isSuccess ? (
-              <>
-                <button className="primary-admin-button" type="button" onClick={() => onNavigate('/')}>
-                  Continue to events
-                </button>
-                <a className="secondary-button process-payment-link" href="/my-tickets">
-                  <Ticket size={16} />
-                  View My Tickets
-                </a>
-              </>
-            ) : isFailure ? (
-              <>
-                <button
-                  className="primary-admin-button"
-                  disabled={isSubmittingOrder || cartItems.length === 0 || !publicPaymentSettings.esewa_can_initiate}
-                  type="button"
-                  onClick={() => void startEsewaCheckout()}
-                >
-                  {isSubmittingOrder ? 'Processing...' : 'Retry eSewa payment'}
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => {
-                    onNavigate('/')
-                    setIsCartCheckoutOpen(true)
-                  }}
-                >
-                  Return to checkout
-                </button>
-              </>
-            ) : (
-              <button className="secondary-button" disabled type="button">
-                Processing payment...
-              </button>
-            )}
-          </div>
-        </section>
-        {isProcessing ? (
-          <div aria-live="polite" className="process-payment-overlay" role="status">
-            <div className="process-payment-overlay-card">
-              <span aria-hidden="true" className="process-payment-spinner process-payment-overlay-spinner" />
-              <strong>{publicStatus || 'Verifying payment...'}</strong>
-              <p>Please wait while we confirm your payment and finalize your tickets.</p>
-            </div>
-          </div>
-        ) : null}
-      </main>
-    )
-  }
+  useEffect(() => {
+    if (currentPath === '/my-tickets') {
+      setIsMyTicketsOpen(true)
+      onNavigate('/')
+    }
+  }, [currentPath])
 
   return (
     <main className="app-shell public-marketplace-shell">
       <PublicHeader
+        canAccessAdmin={canAccessAdmin}
         canAccessTickets={canAccessTickets}
         cartItemCount={cartItemCount}
         isAuthLoading={isAuthLoading}
@@ -1318,6 +1202,7 @@ export default function PublicApp({
         onLoginClick={requestLoginWithGuestCartConfirmation}
         onLogout={onLogout}
         onMenuToggle={() => setIsPublicMenuOpen((current) => !current)}
+        onMyTicketsOpen={() => setIsMyTicketsOpen(true)}
         onNavigate={(target) => {
           setIsPublicMenuOpen(false)
           if (target.startsWith('#')) {
@@ -1747,6 +1632,13 @@ export default function PublicApp({
           esewaReady={publicPaymentSettings.esewa_can_initiate}
           esewaMode={publicPaymentSettings.esewa_mode}
           esewaNote={publicPaymentSettings.esewa_runtime_note}
+          paymentCallbackPhase={paymentCallbackPhase}
+          paymentCallbackError={paymentCallbackError}
+          onDismissCallbackError={() => {
+            window.localStorage.removeItem(paymentCallbackLockKey)
+            setPaymentCallbackPhase('idle')
+            setPaymentCallbackError('')
+          }}
         />
       ) : null}
 
@@ -1775,6 +1667,14 @@ export default function PublicApp({
       ) : null}
       {isCartExpiredNoticeOpen ? (
         <CartExpiredNoticeModal onClose={() => setIsCartExpiredNoticeOpen(false)} />
+      ) : null}
+      {isMyTicketsOpen ? (
+        <MyTicketsModal
+          user={user}
+          isAuthLoading={isAuthLoading}
+          onLoginClick={onLoginClick}
+          onClose={() => setIsMyTicketsOpen(false)}
+        />
       ) : null}
     </main>
   )
@@ -2162,6 +2062,7 @@ export default function PublicApp({
         customer_name: `${String(checkoutUser?.first_name ?? '').trim()} ${String(checkoutUser?.last_name ?? '').trim()}`.trim(),
         customer_email: String(checkoutUser?.email ?? '').trim(),
         customer_phone: String((checkoutUser as GuestCheckoutIdentity['user'] | AuthUser)?.phone_number ?? guestCheckoutContact.phone_number ?? '').trim(),
+        return_url: window.location.origin + '/',
         order_groups: orderGroups,
         guest_checkout_token: guestIdentity?.token
       }
@@ -2461,7 +2362,326 @@ function SectionHeader({
   )
 }
 
+type MyTicket = {
+  id: string
+  ticket_number: string
+  qr_code_value: string
+  order_id: string
+  event_id: string
+  event_start_datetime?: string | null
+  status: string
+  is_paid: number | boolean
+  redeemed_at: string | null
+  pdf_file_id: string | null
+  created_at: string
+  event_name: string
+  event_location_name: string | null
+  ticket_type_name: string | null
+}
+
+type MyTicketGroup = {
+  eventId: string
+  eventName: string
+  eventLocationName: string | null
+  eventStartDatetime: string | null
+  tickets: MyTicket[]
+}
+
+type TicketStatusFilter = 'all' | 'active' | 'pending' | 'redeemed'
+type TicketSortBy = 'event-date' | 'ticket-number' | 'status'
+
+function groupMyTicketsByEvent(tickets: MyTicket[]): MyTicketGroup[] {
+  const grouped = new Map<string, MyTicketGroup>()
+  for (const ticket of tickets) {
+    const key = ticket.event_id?.trim() || `solo:${ticket.id}`
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.tickets.push(ticket)
+    } else {
+      grouped.set(key, {
+        eventId: ticket.event_id?.trim() || key,
+        eventName: ticket.event_name?.trim() || 'Event',
+        eventLocationName: ticket.event_location_name ?? null,
+        eventStartDatetime: ticket.event_start_datetime ?? null,
+        tickets: [ticket]
+      })
+    }
+  }
+  const now = Date.now()
+  const upcoming: MyTicketGroup[] = []
+  const past: MyTicketGroup[] = []
+  for (const group of grouped.values()) {
+    const ts = group.eventStartDatetime ? new Date(group.eventStartDatetime).getTime() : null
+    if (ts !== null && Number.isFinite(ts) && ts >= now) {
+      upcoming.push(group)
+    } else {
+      past.push(group)
+    }
+  }
+  upcoming.sort((a, b) => {
+    const at = a.eventStartDatetime ? new Date(a.eventStartDatetime).getTime() : Infinity
+    const bt = b.eventStartDatetime ? new Date(b.eventStartDatetime).getTime() : Infinity
+    return at - bt
+  })
+  past.sort((a, b) => {
+    const at = a.eventStartDatetime ? new Date(a.eventStartDatetime).getTime() : 0
+    const bt = b.eventStartDatetime ? new Date(b.eventStartDatetime).getTime() : 0
+    return bt - at
+  })
+  return [...upcoming, ...past]
+}
+
+function MyTicketsModal({
+  user,
+  isAuthLoading,
+  onLoginClick,
+  onClose
+}: {
+  user: AuthUser
+  isAuthLoading: boolean
+  onLoginClick: () => void
+  onClose: () => void
+}) {
+  const [tickets, setTickets] = useState<MyTicket[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
+  const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>('all')
+  const [sortBy, setSortBy] = useState<TicketSortBy>('event-date')
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => {
+    if (!user?.id) return
+    setIsLoading(true)
+    setLoadError('')
+    fetchJson<{ data: MyTicket[] }>('/api/mobile/tickets?limit=200')
+      .then(({ data }) => {
+        const loaded = data.data ?? []
+        setTickets(loaded)
+        // auto-expand first group
+        const firstGroup = groupMyTicketsByEvent(loaded)[0]
+        if (firstGroup) setExpandedGroups(new Set([firstGroup.eventId]))
+      })
+      .catch((err) => setLoadError(getErrorMessage(err)))
+      .finally(() => setIsLoading(false))
+  }, [user?.id])
+
+  const filteredTickets = useMemo(() => {
+    let result = tickets
+    if (statusFilter !== 'all') {
+      result = result.filter((t) => {
+        const isRedeemed = Boolean(t.redeemed_at)
+        const isPaid = Boolean(t.is_paid)
+        if (statusFilter === 'redeemed') return isRedeemed
+        if (statusFilter === 'active') return !isRedeemed && isPaid
+        if (statusFilter === 'pending') return !isRedeemed && !isPaid
+        return true
+      })
+    }
+    return result
+  }, [tickets, statusFilter])
+
+  const sortedGroups = useMemo(() => {
+    const groups = groupMyTicketsByEvent(filteredTickets)
+    if (sortBy === 'ticket-number') {
+      for (const g of groups) {
+        g.tickets.sort((a, b) => (a.ticket_number ?? '').localeCompare(b.ticket_number ?? ''))
+      }
+    } else if (sortBy === 'status') {
+      for (const g of groups) {
+        g.tickets.sort((a, b) => {
+          const rank = (t: MyTicket) => (t.redeemed_at ? 2 : t.is_paid ? 0 : 1)
+          return rank(a) - rank(b)
+        })
+      }
+    }
+    return groups
+  }, [filteredTickets, sortBy])
+
+  const totalFiltered = filteredTickets.length
+
+  const statusFilters: { label: string; value: TicketStatusFilter }[] = [
+    { label: 'All', value: 'all' },
+    { label: 'Active', value: 'active' },
+    { label: 'Pending', value: 'pending' },
+    { label: 'Used', value: 'redeemed' }
+  ]
+
+  return (
+    <div className="tickets-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tickets-modal-panel" role="dialog" aria-modal="true" aria-label="My Tickets">
+        <div className="tickets-modal-header">
+          <div className="tickets-modal-title">
+            <Ticket size={20} />
+            <span>My Tickets</span>
+            {totalFiltered > 0 && <span className="tickets-modal-count">{totalFiltered}</span>}
+          </div>
+          <button type="button" className="tickets-modal-close" aria-label="Close" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {user && !isLoading && tickets.length > 0 ? (
+          <div className="tickets-modal-controls">
+            <div className="tickets-modal-filters" role="group" aria-label="Filter by status">
+              {statusFilters.map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  className={`tickets-filter-pill${statusFilter === f.value ? ' active' : ''}`}
+                  onClick={() => setStatusFilter(f.value)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className="tickets-modal-sort">
+              <label className="tickets-sort-label" htmlFor="tickets-sort-select">Sort:</label>
+              <select
+                id="tickets-sort-select"
+                className="tickets-sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as TicketSortBy)}
+              >
+                <option value="event-date">By Event Date</option>
+                <option value="ticket-number">By Ticket #</option>
+                <option value="status">By Status</option>
+              </select>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="tickets-modal-body">
+          {isAuthLoading ? (
+            <div className="my-tickets-state"><div className="thin-spinner" /></div>
+          ) : !user ? (
+            <div className="my-tickets-state">
+              <Ticket size={44} />
+              <p>Sign in to view your purchased tickets.</p>
+              <button type="button" className="khalti-pay-button" onClick={onLoginClick}>Sign In</button>
+            </div>
+          ) : isLoading ? (
+            <div className="my-tickets-state"><div className="thin-spinner" /></div>
+          ) : loadError ? (
+            <div className="my-tickets-state">
+              <p className="my-tickets-error">{loadError}</p>
+            </div>
+          ) : tickets.length === 0 ? (
+            <div className="my-tickets-state">
+              <Ticket size={44} />
+              <p>No tickets yet. Browse events and book your first ticket!</p>
+              <button type="button" className="khalti-pay-button" onClick={onClose}>Browse Events</button>
+            </div>
+          ) : sortedGroups.length === 0 ? (
+            <div className="my-tickets-state">
+              <Ticket size={44} />
+              <p>No tickets match this filter.</p>
+              <button type="button" className="tickets-clear-filter" onClick={() => setStatusFilter('all')}>Show all tickets</button>
+            </div>
+          ) : (
+            <ul className="tickets-group-list">
+              {sortedGroups.map((group) => {
+                const isGroupExpanded = expandedGroups.has(group.eventId)
+                const groupActiveCount = group.tickets.filter((t) => !t.redeemed_at && t.is_paid).length
+                const groupRedeemedCount = group.tickets.filter((t) => t.redeemed_at).length
+                return (
+                  <li key={group.eventId} className="tickets-group">
+                    <button
+                      type="button"
+                      className="tickets-group-header"
+                      onClick={() => setExpandedGroups((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(group.eventId)) { next.delete(group.eventId) } else { next.add(group.eventId) }
+                        return next
+                      })}
+                      aria-expanded={isGroupExpanded}
+                    >
+                      <div className="tickets-group-event-info">
+                        <strong className="tickets-group-event-name">{group.eventName}</strong>
+                        <div className="tickets-group-meta">
+                          {group.eventLocationName ? (
+                            <span><MapPin size={12} /> {group.eventLocationName}</span>
+                          ) : null}
+                          {group.eventStartDatetime ? (
+                            <span><Clock size={12} /> {formatEventDate(group.eventStartDatetime)}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="tickets-group-badges">
+                        <span className="tickets-group-count">{group.tickets.length} ticket{group.tickets.length === 1 ? '' : 's'}</span>
+                        {groupActiveCount > 0 && <span className="my-ticket-status active">{groupActiveCount} active</span>}
+                        {groupRedeemedCount > 0 && <span className="my-ticket-status redeemed">{groupRedeemedCount} used</span>}
+                        <ChevronDown size={16} className={`my-ticket-chevron${isGroupExpanded ? ' rotated' : ''}`} />
+                      </div>
+                    </button>
+
+                    {isGroupExpanded ? (
+                      <ul className="tickets-group-items">
+                        {group.tickets.map((ticket) => {
+                          const isExpanded = expandedId === ticket.id
+                          const isPaid = Boolean(ticket.is_paid)
+                          const isRedeemed = Boolean(ticket.redeemed_at)
+                          const pdfUrl = getTicketPdfDownloadUrl(ticket as ApiRecord)
+                          return (
+                            <li key={ticket.id} className={`my-ticket-card${isExpanded ? ' expanded' : ''}`}>
+                              <button
+                                type="button"
+                                className="my-ticket-card-summary"
+                                onClick={() => setExpandedId(isExpanded ? null : ticket.id)}
+                                aria-expanded={isExpanded}
+                              >
+                                <span className="my-ticket-icon"><Ticket size={18} /></span>
+                                <span className="my-ticket-info">
+                                  <span className="my-ticket-type">{ticket.ticket_type_name ?? 'Ticket'}</span>
+                                  <span className="my-ticket-number">#{ticket.ticket_number}</span>
+                                </span>
+                                <span className={`my-ticket-status ${isRedeemed ? 'redeemed' : isPaid ? 'active' : 'pending'}`}>
+                                  {isRedeemed ? 'Used' : isPaid ? 'Active' : 'Pending'}
+                                </span>
+                                <ChevronDown size={15} className={`my-ticket-chevron${isExpanded ? ' rotated' : ''}`} />
+                              </button>
+                              {isExpanded ? (
+                                <div className="my-ticket-detail">
+                                  <div className="my-ticket-qr-wrap">
+                                    <img
+                                      className="my-ticket-qr"
+                                      src={getQrImageUrl(ticket.qr_code_value, 220)}
+                                      alt={`QR code for ticket ${ticket.ticket_number}`}
+                                      width={220}
+                                      height={220}
+                                    />
+                                  </div>
+                                  {pdfUrl ? (
+                                    <a href={pdfUrl} download className="my-ticket-pdf-link">
+                                      <Download size={15} /> Download PDF
+                                    </a>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PublicHeader({
+  canAccessAdmin,
   canAccessTickets,
   cartItemCount,
   isAuthLoading,
@@ -2472,9 +2692,11 @@ function PublicHeader({
   onLoginClick,
   onLogout,
   onMenuToggle,
+  onMyTicketsOpen,
   onNavigate,
   onSearchChange
 }: {
+  canAccessAdmin: boolean
   canAccessTickets: boolean
   cartItemCount: number
   isAuthLoading: boolean
@@ -2485,6 +2707,7 @@ function PublicHeader({
   onLoginClick: () => void
   onLogout: () => void
   onMenuToggle: () => void
+  onMyTicketsOpen: () => void
   onNavigate: (target: string) => void
   onSearchChange: (value: string) => void
 }) {
@@ -2517,9 +2740,14 @@ function PublicHeader({
             </button>
           ))}
           {!isAuthLoading && user && canAccessTickets ? (
-            <button className="marketplace-mobile-only" type="button" onClick={() => onNavigate('/admin')}>
+            <button className="marketplace-mobile-only" type="button" onClick={onMyTicketsOpen}>
               My Tickets
             </button>
+          ) : null}
+          {!isAuthLoading && user && canAccessAdmin ? (
+            <a className="marketplace-mobile-only marketplace-admin-link" href="/admin">
+              Admin
+            </a>
           ) : null}
           {!isAuthLoading && user ? (
             <button className="marketplace-mobile-only" type="button" onClick={() => void onLogout()}>
@@ -2543,10 +2771,16 @@ function PublicHeader({
           </button>
           {isAuthLoading ? null : user ? (
             <>
-              {canAccessTickets ? (
-                <a className="marketplace-login-link" href="/admin">
-                  My Tickets
+              {canAccessAdmin ? (
+                <a className="marketplace-admin-button" href="/admin">
+                  <ShieldCheck size={15} />
+                  <span>Admin</span>
                 </a>
+              ) : null}
+              {canAccessTickets ? (
+                <button type="button" className="marketplace-login-link" onClick={onMyTicketsOpen}>
+                  My Tickets
+                </button>
               ) : null}
               <button className="marketplace-account-button" type="button" onClick={() => void onLogout()}>
                 <UserCog size={16} />
@@ -3706,7 +3940,10 @@ export function CartCheckoutModal({
   khaltiNote,
   esewaReady,
   esewaMode,
-  esewaNote
+  esewaNote,
+  paymentCallbackPhase,
+  paymentCallbackError,
+  onDismissCallbackError
 }: {
   user: AuthUser
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
@@ -3740,17 +3977,42 @@ export function CartCheckoutModal({
   esewaReady: boolean
   esewaMode: 'test' | 'live'
   esewaNote: string
+  paymentCallbackPhase: 'idle' | 'processing' | 'failure'
+  paymentCallbackError: string
+  onDismissCallbackError: () => void
 }) {
   const [acceptedTerms, setAcceptedTerms] = useState(false)
+  const isCallbackProcessing = paymentCallbackPhase === 'processing'
+  const isCallbackFailure = paymentCallbackPhase === 'failure'
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal checkout-modal cart-checkout-modern" role="dialog" aria-modal="true">
+        {isCallbackProcessing ? (
+          <div className="checkout-callback-overlay" aria-live="polite" role="status">
+            <span aria-hidden="true" className="process-payment-spinner checkout-callback-spinner" />
+            <strong>Verifying your payment…</strong>
+            <p>Please wait while we confirm and finalise your tickets.</p>
+          </div>
+        ) : isCallbackFailure ? (
+          <div className="checkout-callback-overlay checkout-callback-failure">
+            <p className="checkout-callback-error-msg">{paymentCallbackError || 'Payment could not be completed.'}</p>
+            <div className="checkout-callback-failure-actions">
+              <button className="khalti-pay-button" disabled={isSubmitting} type="button" onClick={onPayWithKhalti}>
+                <CreditCard size={16} /> Retry with Khalti
+              </button>
+              <button className="esewa-pay-button" disabled={isSubmitting} type="button" onClick={onPayWithEsewa}>
+                <CreditCard size={16} /> Retry with eSewa
+              </button>
+              <button type="button" onClick={onDismissCallbackError}>Back to checkout</button>
+            </div>
+          </div>
+        ) : null}
         <header className="record-modal-header">
           <div>
             <p className="admin-breadcrumb">Checkout</p>
             <h2>Review and place order</h2>
           </div>
-          <button aria-label="Close modal" disabled={isSubmitting} type="button" onClick={onClose}>
+          <button aria-label="Close modal" disabled={isSubmitting || isCallbackProcessing} type="button" onClick={onClose}>
             <X size={18} />
           </button>
         </header>
@@ -3848,16 +4110,6 @@ export function CartCheckoutModal({
             ))}
 
             <fieldset className="cart-checkout-group">
-              <legend>Payment method</legend>
-              <p className="checkout-hint">Choose Khalti, eSewa, or complete the order without online payment if enabled.</p>
-              <div className="payment-method-grid">
-                <span><CreditCard size={17} /> Khalti</span>
-                <span><CreditCard size={17} /> eSewa</span>
-                <span><ShieldCheck size={17} /> Manual confirmation</span>
-              </div>
-            </fieldset>
-
-            <fieldset className="cart-checkout-group">
               <legend>Order-level coupon</legend>
               <div className="cart-coupon-row">
                 <input
@@ -3904,34 +4156,36 @@ export function CartCheckoutModal({
                 <strong>{formatMoney(totalPaisa)}</strong>
               </div>
             </div>
-            <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
-            <button
-              className="khalti-pay-button"
-              disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady || !acceptedTerms}
-              type="button"
-              onClick={onPayWithKhalti}
-            >
-              <CreditCard size={17} />
-              {isSubmitting ? 'Processing...' : 'Pay with Khalti'}
-            </button>
-            <button
-              className="esewa-pay-button"
-              disabled={isSubmitting || cartGroups.length === 0 || !esewaReady || !acceptedTerms}
-              type="button"
-              onClick={onPayWithEsewa}
-            >
-              <CreditCard size={17} />
-              {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
-            </button>
-            <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0 || !acceptedTerms} type="button" onClick={onPlaceOrder}>
-              {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
-              {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
-            </button>
+            <div className="cart-checkout-note">
+              <p className="checkout-hint">{khaltiNote}</p>
+              <p className="checkout-hint">{esewaNote}</p>
+            </div>
+            <div className="cart-checkout-payment-actions">
+              <button disabled={isSubmitting} type="button" onClick={onClose}>Cancel</button>
+              <button
+                className="khalti-pay-button"
+                disabled={isSubmitting || cartGroups.length === 0 || !khaltiReady || !acceptedTerms}
+                type="button"
+                onClick={onPayWithKhalti}
+              >
+                <CreditCard size={17} />
+                {isSubmitting ? 'Processing...' : 'Pay with Khalti'}
+              </button>
+              <button
+                className="esewa-pay-button"
+                disabled={isSubmitting || cartGroups.length === 0 || !esewaReady || !acceptedTerms}
+                type="button"
+                onClick={onPayWithEsewa}
+              >
+                <CreditCard size={17} />
+                {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
+              </button>
+              <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0 || !acceptedTerms} type="button" onClick={onPlaceOrder}>
+                {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
+              </button>
+            </div>
           </aside>
-        </div>
-        <div className="cart-checkout-note">
-          <p className="checkout-hint">{khaltiNote}</p>
-          <p className="checkout-hint">{esewaNote}</p>
         </div>
       </section>
     </div>

@@ -537,6 +537,8 @@ export const cartHoldStorageKey = 'waah_cart_hold'
 
 export const cartHoldDurationMs = 15 * 60 * 1000
 
+export const paymentCallbackLockKey = 'waah_payment_callback_lock'
+
 
 export const emptyColumnFilterState: Record<string, string> = {}
 
