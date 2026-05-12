@@ -3568,6 +3568,7 @@ export function CheckoutModal({
               </div>
             </div>
             <TicketSelector
+              isLoading={isTicketTypesLoading}
               isLocked={isInteractionLocked}
               ticketQuantities={ticketQuantities}
               ticketTypes={ticketTypes}
@@ -4227,6 +4228,20 @@ export function CartCheckoutModal({
                 onClick={onPayWithEsewa}
               >
                 <CreditCard size={17} />
+                {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
+              </button>
+              <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0 || !acceptedTerms} type="button" onClick={onPlaceOrder}>
+                {isSubmitting ? <span aria-hidden="true" className="button-spinner" /> : <Save size={17} />}
+                {isSubmitting ? 'Placing order...' : 'Complete without online payment'}
+              </button>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  )
+}
+           <CreditCard size={17} />
                 {isSubmitting ? 'Processing...' : 'Pay with eSewa'}
               </button>
               <button className="primary-admin-button" disabled={isSubmitting || cartGroups.length === 0 || !acceptedTerms} type="button" onClick={onPlaceOrder}>
