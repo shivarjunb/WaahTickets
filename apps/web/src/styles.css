@@ -9610,6 +9610,33 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   color: #64748b;
 }
 
+@keyframes ticketSkeleton {
+  to { background-position: -220% 0; }
+}
+
+.ticket-skeleton-line {
+  display: block;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 220% 100%;
+  animation: ticketSkeleton 1.2s ease-in-out infinite;
+}
+
+.ticket-skeleton-line--title  { width: 55%; height: 14px; }
+.ticket-skeleton-line--desc   { width: 80%; height: 12px; margin-top: 6px; }
+.ticket-skeleton-line--avail  { width: 40%; height: 10px; margin-top: 6px; }
+.ticket-skeleton-line--price  { width: 72px; height: 14px; }
+
+.ticket-skeleton-stepper {
+  display: block;
+  width: 118px;
+  height: 38px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 220% 100%;
+  animation: ticketSkeleton 1.2s ease-in-out infinite;
+}
+
 .quantity-stepper {
   display: inline-grid;
   grid-template-columns: 38px 42px 38px;
