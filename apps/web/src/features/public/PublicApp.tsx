@@ -1021,8 +1021,12 @@ export default function PublicApp({
         // Mark lock as done before clearing state so any concurrent tab sees success.
         window.localStorage.setItem(paymentCallbackLockKey, JSON.stringify({ key: callbackKey, status: 'done', ts: Date.now() }))
         window.localStorage.removeItem(draftKey)
+        window.sessionStorage.removeItem(cartStorageKey)
+        window.sessionStorage.removeItem(cartHoldStorageKey)
         setPaymentCallbackPhase('idle')
         setCartItems([])
+        setCartHoldToken('')
+        setCartHoldExpiresAt('')
         setCartEventCoupons({})
         setCartEventCouponMessages({})
         setCartEventCouponDiscounts({})
