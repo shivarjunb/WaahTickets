@@ -47,16 +47,12 @@ export default function AdminApp({
   user,
   onLoginClick,
   onLogout,
-  theme,
-  onToggleTheme,
   buttonColorTheme,
   onButtonColorThemeChange
 }: {
   user: AuthUser
   onLoginClick: () => void
   onLogout: () => void
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
   buttonColorTheme: ButtonColorTheme
   onButtonColorThemeChange: Dispatch<SetStateAction<ButtonColorTheme>>
 }) {
@@ -2334,10 +2330,6 @@ export default function AdminApp({
                 Login
               </button>
             )}
-            <button type="button" onClick={onToggleTheme}>
-              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
             {canOpenTicketValidation ? (
               <a className="admin-link-button" href="/admin/validator">
                 <ScanLine size={17} />

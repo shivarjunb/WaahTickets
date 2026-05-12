@@ -17,10 +17,6 @@ function App() {
   const [user, setUser] = useState<AuthUser>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [isAuthOpen, setIsAuthOpen] = useState(false)
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    if (typeof window === 'undefined') return 'dark'
-    return window.localStorage.getItem('waah_theme') === 'light' ? 'light' : 'dark'
-  })
   const [buttonColorTheme, setButtonColorTheme] = useState<ButtonColorTheme>(() => loadButtonColorTheme())
 
   useEffect(() => {
@@ -30,9 +26,9 @@ function App() {
   }, [])
 
   useEffect(() => {
-    document.body.dataset.theme = theme
-    window.localStorage.setItem('waah_theme', theme)
-  }, [theme])
+    document.body.dataset.theme = 'light'
+    window.localStorage.removeItem('waah_theme')
+  }, [])
 
   useEffect(() => {
     applyButtonThemeToDocument(buttonColorTheme)
@@ -108,7 +104,6 @@ function App() {
             </section>
           </main>
         ) : user ? (
-
           user.is_active === false || !user.is_email_verified ? (
             <AccountAccessBlocked user={user} onLogout={logout} />
           ) : isValidatorRoute && canAccessValidator ? (
@@ -116,45 +111,37 @@ function App() {
               initialQrToken={null}
               user={user}
               onLogout={logout}
-              theme={theme}
-              onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
             />
           ) : (
             <AdminApp
-            user={user}
-            onLoginClick={() => setIsAuthOpen(true)}
-            onLogout={logout}
-            theme={theme}
-            onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-            buttonColorTheme={buttonColorTheme}
-            onButtonColorThemeChange={setButtonColorTheme}
-          />
+              user={user}
+              onLoginClick={() => setIsAuthOpen(true)}
+              onLogout={logout}
+              buttonColorTheme={buttonColorTheme}
+              onButtonColorThemeChange={setButtonColorTheme}
+            />
           )
         ) : (
           <LoginRequired onLoginClick={() => setIsAuthOpen(true)} />
         )
+      ) : (
+        isTicketVerifyRoute && user && canAccessValidator ? (
+          <TicketValidatorApp
+            initialQrToken={qrVerifyToken}
+            user={user}
+            onLogout={logout}
+          />
         ) : (
-          isTicketVerifyRoute && user && canAccessValidator ? (
-            <TicketValidatorApp
-              initialQrToken={qrVerifyToken}
-              user={user}
-              onLogout={logout}
-              theme={theme}
-              onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-            />
-          ) : (
-        <PublicApp
-          currentPath={path}
-          qrVerifyToken={isTicketVerifyRoute ? qrVerifyToken : null}
-          user={user}
-          isAuthLoading={isAuthLoading}
-          theme={theme}
-          onNavigate={navigate}
-          onLoginClick={() => setIsAuthOpen(true)}
-          onLogout={logout}
-          onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-        />
-          )
+          <PublicApp
+            currentPath={path}
+            qrVerifyToken={isTicketVerifyRoute ? qrVerifyToken : null}
+            user={user}
+            isAuthLoading={isAuthLoading}
+            onNavigate={navigate}
+            onLoginClick={() => setIsAuthOpen(true)}
+            onLogout={logout}
+          />
+        )
       )}
       {isAuthOpen ? (
         <AuthModal

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Camera, CheckCircle2, Home, LogOut, Moon, ScanLine, Sun, Ticket, X } from "lucide-react";
+import { AlertTriangle, Camera, CheckCircle2, Home, LogOut, ScanLine, Ticket, X } from "lucide-react";
 import jsQR from "jsqr";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
@@ -9,14 +9,10 @@ export default function TicketValidatorApp({
   initialQrToken,
   user,
   onLogout,
-  theme,
-  onToggleTheme
 }: {
   initialQrToken: string | null
   user: AuthUser
   onLogout: () => void
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
 }) {
   const [qrInput, setQrInput] = useState('')
   const [statusMessage, setStatusMessage] = useState('Ready to scan tickets.')
@@ -350,10 +346,6 @@ export default function TicketValidatorApp({
           </div>
         </div>
         <div className="admin-header-actions">
-          <button type="button" onClick={onToggleTheme}>
-            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
           <a className="admin-link-button" href="/">
             <Home size={17} />
             Public site

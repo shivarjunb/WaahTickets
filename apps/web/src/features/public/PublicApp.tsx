@@ -16,21 +16,17 @@ export default function PublicApp({
   qrVerifyToken,
   user,
   isAuthLoading,
-  theme,
   onNavigate,
   onLoginClick,
-  onLogout,
-  onToggleTheme
+  onLogout
 }: {
   currentPath: string
   qrVerifyToken: string | null
   user: AuthUser
   isAuthLoading: boolean
-  theme: 'dark' | 'light'
   onNavigate: (nextPath: string) => void
   onLoginClick: () => void
   onLogout: () => void
-  onToggleTheme: () => void
 }) {
   const [events, setEvents] = useState<PublicEvent[]>([])
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
@@ -1209,7 +1205,6 @@ export default function PublicApp({
         isAuthLoading={isAuthLoading}
         isMenuOpen={isPublicMenuOpen}
         searchQuery={eventSearchQuery}
-        theme={theme}
         user={user}
         onCartOpen={() => setIsCartOpen(true)}
         onLoginClick={requestLoginWithGuestCartConfirmation}
