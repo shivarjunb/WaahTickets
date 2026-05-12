@@ -56,6 +56,278 @@ textarea {
 }
 
 /* ============================================================
+   Homepage Loader
+   ============================================================ */
+
+.homepage-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse 80% 60% at 50% 30%, #140f2e 0%, #08080f 100%);
+  overflow: hidden;
+}
+
+/* Glowing background orbs */
+.loader-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  will-change: transform;
+}
+.loader-orb--purple {
+  width: 480px;
+  height: 320px;
+  top: -80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(124, 58, 237, 0.22);
+  animation: orb-pulse 4s ease-in-out infinite;
+}
+.loader-orb--cyan {
+  width: 320px;
+  height: 240px;
+  bottom: 10%;
+  right: 10%;
+  background: rgba(6, 182, 212, 0.14);
+  animation: orb-pulse 4s ease-in-out infinite 1.5s;
+}
+@keyframes orb-pulse {
+  0%, 100% { opacity: 0.8; transform: translateX(-50%) scale(1); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1.08); }
+}
+.loader-orb--cyan { animation-name: orb-pulse-2; }
+@keyframes orb-pulse-2 {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.12); }
+}
+
+/* Light sweep */
+.loader-sweep {
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(105deg, transparent 40%, rgba(124, 58, 237, 0.05) 50%, transparent 60%);
+  animation: sweep 3.5s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes sweep {
+  0% { left: -60%; }
+  100% { left: 140%; }
+}
+
+/* Confetti particles */
+.loader-confetti {
+  position: absolute;
+  top: -12px;
+  animation: confetti-drop linear infinite;
+  opacity: 0.75;
+  will-change: transform;
+}
+@keyframes confetti-drop {
+  0% { transform: translateY(-12px) rotate(0deg); opacity: 0; }
+  8% { opacity: 0.85; }
+  88% { opacity: 0.6; }
+  100% { transform: translateY(101vh) rotate(680deg); opacity: 0; }
+}
+
+/* Ticket stubs stage */
+.loader-tickets-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loader-ticket {
+  position: absolute;
+  width: 172px;
+  background: linear-gradient(145deg, #1c1836 0%, #13112a 100%);
+  border: 1px solid rgba(124, 58, 237, 0.28);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 24px rgba(124, 58, 237, 0.12);
+}
+
+.loader-ticket--left {
+  top: 18%;
+  left: 6%;
+}
+.loader-ticket--center {
+  top: 12%;
+  left: 50%;
+  width: 192px;
+  transform-origin: center bottom;
+}
+.loader-ticket--right {
+  top: 22%;
+  right: 6%;
+}
+
+/* Ticket chrome */
+.loader-ticket-notch {
+  position: absolute;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #08080f;
+  transform: translateY(-50%);
+}
+.loader-ticket-notch--l { left: -7px; }
+.loader-ticket-notch--r { right: -7px; }
+
+.loader-ticket-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.loader-ticket-label {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  color: rgba(255, 255, 255, 0.42);
+  text-transform: uppercase;
+}
+.loader-ticket-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.loader-dot--purple { background: #7c3aed; box-shadow: 0 0 7px #7c3aed; }
+.loader-dot--cyan   { background: #06b6d4; box-shadow: 0 0 7px #06b6d4; }
+.loader-dot--amber  { background: #f59e0b; box-shadow: 0 0 7px #f59e0b; }
+.loader-dot--pink   { background: #ec4899; box-shadow: 0 0 7px #ec4899; }
+.loader-dot--green  { background: #10b981; box-shadow: 0 0 7px #10b981; }
+
+.loader-ticket-event {
+  font-size: 22px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.88);
+  letter-spacing: -0.03em;
+  font-family: 'Space Grotesk', sans-serif;
+  margin: 3px 0;
+  line-height: 1.1;
+}
+.loader-ticket-seat {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+/* QR code grid (CSS-only) */
+.loader-ticket-qr-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 6px;
+}
+.loader-qr-grid {
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  background:
+    repeating-conic-gradient(rgba(255,255,255,0.85) 0% 25%, transparent 0% 50%)
+    0 0 / 7px 7px;
+}
+
+/* Center logo + status */
+.loader-center {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.loader-logo-ring {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: logo-glow 2.2s ease-in-out infinite;
+  will-change: box-shadow, transform;
+}
+@keyframes logo-glow {
+  0%, 100% {
+    box-shadow: 0 0 28px rgba(124, 58, 237, 0.55), 0 0 60px rgba(124, 58, 237, 0.22);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(124, 58, 237, 0.75), 0 0 90px rgba(124, 58, 237, 0.35);
+    transform: scale(1.06);
+  }
+}
+
+.loader-brand {
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.loader-bar-track {
+  width: 200px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.loader-bar-scanner {
+  height: 100%;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, #7c3aed 35%, #06b6d4 65%, transparent);
+  border-radius: 99px;
+  animation: bar-scan 1.6s ease-in-out infinite;
+}
+@keyframes bar-scan {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+.loader-message-wrap {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loader-message {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+  .loader-ticket--left,
+  .loader-ticket--right { display: none; }
+  .loader-ticket--center { top: 8%; left: 50%; transform-origin: center bottom; }
+  .loader-center { top: 62%; }
+}
+@media (max-width: 380px) {
+  .loader-ticket--center { display: none; }
+  .loader-center { top: 50%; }
+}
+
+/* ============================================================
    Order Confirmed Page
    ============================================================ */
 

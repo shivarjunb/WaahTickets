@@ -10,6 +10,7 @@ import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerP
 import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
+import { HomepageLoader } from './HomepageLoader';
 
 export default function PublicApp({
   currentPath,
@@ -1206,6 +1207,8 @@ export default function PublicApp({
     }
 
   return (
+    <>
+    <HomepageLoader isLoading={isEventsLoading} />
     <main className="app-shell public-marketplace-shell">
       <PublicHeader
         canAccessAdmin={canAccessAdmin}
@@ -1697,6 +1700,7 @@ export default function PublicApp({
         />
       ) : null}
     </main>
+    </>
   )
 
   async function addCurrentSelectionToCart() {
