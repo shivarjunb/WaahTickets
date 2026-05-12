@@ -441,9 +441,14 @@ authRoutes.get('/verify-email', async (c) => {
     .bind(now, tokenRow.user_id)
     .run()
 
+  const verifiedUser = await c.env.DB.prepare('SELECT webrole FROM users WHERE id = ? LIMIT 1')
+    .bind(tokenRow.user_id)
+    .first<{ webrole: string | null }>()
+  const postVerifyRedirect = verifiedUser?.webrole && verifiedUser.webrole !== 'Customers' ? '/admin' : '/'
+
   const session = await createSession(c.env.DB, tokenRow.user_id, 'email-verification')
   c.header('Set-Cookie', sessionCookie(session.token, isSecureOrigin(new URL(c.req.url).origin)))
-  return c.redirect('/admin')
+  return c.redirect(postVerifyRedirect)
 })
 
 authRoutes.get('/google/config', (c) => {
@@ -579,7 +584,8 @@ authRoutes.get('/google/callback', async (c) => {
 
   const isSecure = isSecureOrigin(origin)
   c.header('Set-Cookie', sessionCookie(session.token, isSecure))
-  return c.redirect('/admin')
+  const googleRedirect = user.webrole && user.webrole !== 'Customers' ? '/admin' : '/'
+  return c.redirect(googleRedirect)
 })
 
 async function upsertGoogleUser(db: D1Database, profile: GoogleUserInfo) {

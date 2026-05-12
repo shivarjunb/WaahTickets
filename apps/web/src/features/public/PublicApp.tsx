@@ -493,22 +493,37 @@ export default function PublicApp({
     if (isAuthLoading) return
     if (isEventsLoading) return
 
+    // Don't restore cart state when the payment callback is about to handle it.
+    // Khalti redirects back to / with ?pidx=...; eSewa uses /processpayment.
+    // The payment callback useEffect (defined below) fires after this one and wipes
+    // the URL params, so reading window.location.search here sees the original params.
+    const isPaymentCallback =
+      isProcessPaymentRoute ||
+      (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('pidx'))
+
     if (!user?.id) {
-      const persistedItems = readPersistedCartItems()
-      if (persistedItems.length > 0) {
-        const persistedHold = readPersistedCartHold()
-        setCartHoldToken(persistedHold.hold_token)
-        setCartHoldExpiresAt(persistedHold.hold_expires_at)
-        void validatePersistedCartItems(persistedItems, {
-          preserveExpiresAt: true,
-          holdToken: persistedHold.hold_token,
-          holdExpiresAt: persistedHold.hold_expires_at
-        })
-      } else {
-        setCartItems([])
-        setCartHoldToken('')
-        setCartHoldExpiresAt('')
+      if (!isPaymentCallback) {
+        const persistedItems = readPersistedCartItems()
+        if (persistedItems.length > 0) {
+          const persistedHold = readPersistedCartHold()
+          setCartHoldToken(persistedHold.hold_token)
+          setCartHoldExpiresAt(persistedHold.hold_expires_at)
+          void validatePersistedCartItems(persistedItems, {
+            preserveExpiresAt: true,
+            holdToken: persistedHold.hold_token,
+            holdExpiresAt: persistedHold.hold_expires_at
+          })
+        } else {
+          setCartItems([])
+          setCartHoldToken('')
+          setCartHoldExpiresAt('')
+        }
       }
+      isCartStorageReadyRef.current = true
+      return
+    }
+
+    if (isPaymentCallback) {
       isCartStorageReadyRef.current = true
       return
     }
@@ -1086,6 +1101,20 @@ export default function PublicApp({
     }
   }, [currentPath])
 
+  useEffect(() => {
+    if (!confirmedOrderSummary) return
+    setCartItems([])
+    setCartHoldToken('')
+    setCartHoldExpiresAt('')
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(cartStorageKey)
+      window.sessionStorage.removeItem(cartHoldStorageKey)
+      window.localStorage.removeItem(khaltiCheckoutDraftStorageKey)
+      window.localStorage.removeItem(esewaCheckoutDraftStorageKey)
+    }
+    void syncCartHold([])
+  }, [confirmedOrderSummary])
+
   if (confirmedOrderSummary) {
     const summary = confirmedOrderSummary
       const confirmedEventObj = summary.eventId ? events.find((e) => e.id === summary.eventId) ?? null : null
@@ -1116,6 +1145,11 @@ export default function PublicApp({
               <p className="order-confirmed-number">Order #{summary.orderNumber || '—'}</p>
               <div className="order-confirmed-actions">
                 <button type="button" className="order-confirmed-cta" onClick={() => {
+                  setCartItems([])
+                  setCartHoldToken('')
+                  setCartHoldExpiresAt('')
+                  persistCartSnapshot([])
+                  void syncCartHold([])
                   setConfirmedOrderSummary(null)
                   onNavigate('/')
                   setIsMyTicketsOpen(true)
@@ -1124,6 +1158,11 @@ export default function PublicApp({
                   View My Tickets
                 </button>
                 <button type="button" className="order-confirmed-home" onClick={() => {
+                  setCartItems([])
+                  setCartHoldToken('')
+                  setCartHoldExpiresAt('')
+                  persistCartSnapshot([])
+                  void syncCartHold([])
                   setConfirmedOrderSummary(null)
                   onNavigate('/')
                 }}>

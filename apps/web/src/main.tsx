@@ -4,7 +4,7 @@ import { ReportsApp, isReportsRoute } from './reports'
 import './styles.css'
 import type { ButtonColorTheme, AuthUser } from "./shared/types";
 import { defaultButtonColorTheme } from "./shared/constants";
-import { loadButtonColorTheme, applyButtonThemeToDocument, fetchJson } from "./shared/utils";
+import { loadButtonColorTheme, applyButtonThemeToDocument, fetchJson, hasAdminConsoleAccess } from "./shared/utils";
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "./shared/components/Auth";
 
 // Lazy-loaded feature modules
@@ -149,6 +149,9 @@ function App() {
           onAuthenticated={(nextUser) => {
             setUser(nextUser)
             setIsAuthOpen(false)
+            if (hasAdminConsoleAccess(nextUser) && !window.location.pathname.startsWith('/admin')) {
+              navigate('/admin')
+            }
           }}
         />
       ) : null}
