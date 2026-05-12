@@ -388,7 +388,8 @@ export const roleAccess: Record<
       ])
     ),
     orders: { can_create: false, can_edit: true, can_delete: true },
-    order_items: { can_create: false, can_edit: true, can_delete: true }
+    order_items: { can_create: false, can_edit: true, can_delete: true },
+    tickets: { can_create: false, can_edit: true, can_delete: true }
   } as Record<string, { can_create: boolean; can_edit: boolean; can_delete: boolean }>
 }
 

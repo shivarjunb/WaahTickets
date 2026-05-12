@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "
 import type { HeroSettingsData } from "../../shared/types";
 import { defaultHeroSettingsData } from "../../shared/constants";
 import { normalizeHeroSettings } from "../../shared/utils";
-import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
+import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Home, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
@@ -1113,15 +1113,24 @@ export default function PublicApp({
               <p className="order-confirmed-sent">Your tickets have been sent to</p>
               <strong className="order-confirmed-email">{summary.email || 'your email'}</strong>
               <p className="order-confirmed-number">Order #{summary.orderNumber || '—'}</p>
-              <button type="button" className="order-confirmed-cta" onClick={() => setIsMyTicketsOpen(true)}>
-                <Ticket size={18} />
-                View My Tickets
-              </button>
+              <div className="order-confirmed-actions">
+                <button type="button" className="order-confirmed-cta" onClick={() => {
+                  setConfirmedOrderSummary(null)
+                  onNavigate('/')
+                  setIsMyTicketsOpen(true)
+                }}>
+                  <Ticket size={18} />
+                  View My Tickets
+                </button>
+                <button type="button" className="order-confirmed-home" onClick={() => {
+                  setConfirmedOrderSummary(null)
+                  onNavigate('/')
+                }}>
+                  <Home size={18} />
+                  Go to Home
+                </button>
+              </div>
               <p className="order-confirmed-sub">You can also download your tickets from your account.</p>
-              <button className="order-confirmed-calendar" type="button">
-                <CalendarDays size={15} />
-                Add to Calendar
-              </button>
             </div>
 
             <div className="order-confirmed-summary">

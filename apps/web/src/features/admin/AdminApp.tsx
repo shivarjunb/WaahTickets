@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Tag, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, MoreHorizontal, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Tag, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
@@ -2307,22 +2307,6 @@ export default function AdminApp({
                     : resourceConfig.description}
             </p>
           </div>
-          <form
-            className="admin-global-search"
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault()
-              runGlobalSearch(filter)
-            }}
-          >
-            <Search size={17} />
-            <input
-              aria-label="Global admin search"
-              placeholder="Search events, orders, partners..."
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-            />
-          </form>
           <div className="admin-header-actions">
             {user ? null : (
               <button type="button" onClick={onLoginClick}>
@@ -2340,16 +2324,13 @@ export default function AdminApp({
               <Home size={17} />
               Public site
             </a>
-            <button type="button" onClick={() => setConfirmLogoutOpen(true)}>
-              <LogOut size={17} />
-              Logout
-            </button>
             <button type="button" onClick={() => void seedStarterData()}>
               <Database size={17} />
               Seed
             </button>
-            <button className="admin-user-menu-button" type="button" aria-label="User menu" title={user?.email ?? 'User menu'}>
-              <MoreHorizontal size={17} />
+            <button className="admin-logout-button" type="button" onClick={() => setConfirmLogoutOpen(true)}>
+              <LogOut size={17} />
+              Logout
             </button>
           </div>
         </header>
@@ -2379,12 +2360,6 @@ export default function AdminApp({
                   <button className="primary-admin-button" type="button" onClick={() => openCreateModal('events')}>
                     <Plus size={17} />
                     Create event
-                  </button>
-                ) : null}
-                {visibleResources.includes('ticket_types') && roleAccess[selectedWebRole].ticket_types?.can_create ? (
-                  <button type="button" onClick={() => openCreateModal('ticket_types')}>
-                    <Ticket size={17} />
-                    Create ticket type
                   </button>
                 ) : null}
                 <button type="button" onClick={() => setSelectedResource('orders')}>
@@ -3947,13 +3922,20 @@ export default function AdminApp({
       ) : null}
 
       {confirmLogoutOpen ? (
-        <ConfirmDialog
-          message="Are you sure you want to log out?"
-          confirmLabel="Log out"
-          isDanger={false}
-          onConfirm={() => { setConfirmLogoutOpen(false); void onLogout() }}
-          onCancel={() => setConfirmLogoutOpen(false)}
-        />
+        <div className="logout-confirm-backdrop" role="presentation" onClick={() => setConfirmLogoutOpen(false)}>
+          <div className="logout-confirm-dialog" role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="logout-confirm-icon"><LogOut size={26} /></div>
+            <h2 className="logout-confirm-title">Log out?</h2>
+            <p className="logout-confirm-body">You'll need to sign in again to access the admin console.</p>
+            <div className="logout-confirm-actions">
+              <button className="logout-confirm-cancel" type="button" onClick={() => setConfirmLogoutOpen(false)}>Cancel</button>
+              <button className="logout-confirm-proceed" type="button" onClick={() => { setConfirmLogoutOpen(false); void onLogout() }}>
+                <LogOut size={16} />
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

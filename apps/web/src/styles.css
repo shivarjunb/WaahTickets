@@ -165,6 +165,13 @@ textarea {
   letter-spacing: 0.01em;
 }
 
+.order-confirmed-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
 .order-confirmed-cta {
   display: inline-flex;
   align-items: center;
@@ -179,11 +186,30 @@ textarea {
   border: none;
   cursor: pointer;
   transition: background 0.15s, transform 0.12s;
-  margin-bottom: 20px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 .order-confirmed-cta:hover {
   background: #ede9fe;
+  transform: translateY(-1px);
+}
+
+.order-confirmed-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 26px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.12s;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.order-confirmed-home:hover {
+  background: rgba(255, 255, 255, 0.25);
   transform: translateY(-1px);
 }
 
@@ -192,24 +218,6 @@ textarea {
   font-size: 0.8125rem;
   color: rgba(255, 255, 255, 0.6);
   line-height: 1.5;
-}
-
-.order-confirmed-calendar {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.875rem;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  transition: color 0.15s;
-}
-.order-confirmed-calendar:hover {
-  color: #fff;
 }
 
 /* Right — summary card */
@@ -2124,6 +2132,16 @@ h1 {
 .record-modal-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.admin-logout-button {
+  border-color: rgba(239, 68, 68, 0.35) !important;
+  color: #ef4444 !important;
+  background: rgba(239, 68, 68, 0.07) !important;
+}
+.admin-logout-button:hover {
+  background: rgba(239, 68, 68, 0.14) !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
 }
 
 .primary-admin-button,
