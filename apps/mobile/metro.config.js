@@ -13,9 +13,9 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 config.resolver.extraNodeModules = {
-  expo: path.resolve(projectRoot, "node_modules/expo"),
-  react: path.resolve(workspaceRoot, "node_modules/react"),
-  "react-native": path.resolve(workspaceRoot, "node_modules/react-native"),
+  expo: path.resolve(workspaceRoot, "node_modules/expo"),
+  react: path.resolve(projectRoot, "node_modules/react"),
+  "react-native": path.resolve(projectRoot, "node_modules/react-native"),
 };
 
 module.exports = config;

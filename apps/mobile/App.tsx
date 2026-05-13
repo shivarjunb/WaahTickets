@@ -8,6 +8,8 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  BackHandler,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -18,6 +20,7 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar as NativeStatusBar,
+  ToastAndroid,
   type ImageStyle,
   type StyleProp,
   type ViewStyle,
@@ -262,6 +265,11 @@ export default function App() {
   const lastValidatedCartSignatureRef = useRef('')
   const [activeView, setActiveView] = useState<MobileView>('home')
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const headerAnimY = useRef(new Animated.Value(0)).current
+  const headerHeightRef = useRef(64)
+  const [headerHeight, setHeaderHeight] = useState(64)
+  const lastScrollYRef = useRef(0)
+  const headerVisibleRef = useRef(true)
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [isSessionRestored, setIsSessionRestored] = useState(false)
   const [session, setSession] = useState<MobileSessionState>(emptySession)
@@ -1859,6 +1867,20 @@ export default function App() {
   const topInset = Platform.OS === 'android' ? Math.max(NativeStatusBar.currentHeight ?? 0, 18) : 18
   const bottomInset = Platform.OS === 'android' ? 18 : 12
 
+  const lastBackPressRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      const now = Date.now()
+      if (now - lastBackPressRef.current < 2000) return false
+      lastBackPressRef.current = now
+      ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT)
+      return true
+    })
+    return () => handler.remove()
+  }, [])
+
   useEffect(() => {
     if (activeView !== 'tickets') return
     setExpandedTicketGroups({})
@@ -1922,6 +1944,43 @@ export default function App() {
     }
   }
 
+  function showHeader() {
+    if (headerVisibleRef.current) return
+    headerVisibleRef.current = true
+    Animated.spring(headerAnimY, {
+      toValue: 0,
+      useNativeDriver: true,
+      tension: 140,
+      friction: 9,
+    }).start()
+  }
+
+  function hideHeader() {
+    if (!headerVisibleRef.current) return
+    headerVisibleRef.current = false
+    Animated.spring(headerAnimY, {
+      toValue: -headerHeightRef.current,
+      useNativeDriver: true,
+      tension: 140,
+      friction: 9,
+    }).start()
+  }
+
+  function handleScroll(event: { nativeEvent: { contentOffset: { y: number } } }) {
+    const y = event.nativeEvent.contentOffset.y
+    const dy = y - lastScrollYRef.current
+    lastScrollYRef.current = y
+    if (y <= 10) { showHeader(); return }
+    if (dy > 4) hideHeader()
+    else if (dy < -4) showHeader()
+  }
+
+  // Show header whenever the active view changes (tab switch)
+  useEffect(() => {
+    showHeader()
+    lastScrollYRef.current = 0
+  }, [activeView])
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
@@ -1931,38 +1990,44 @@ export default function App() {
           keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 24}
           style={styles.root}
         >
-      <View
+      <Animated.View
         style={[
           styles.appChrome,
           {
-            paddingTop: Math.max(topInset - 4, 0)
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 10,
+            transform: [{ translateY: headerAnimY }],
           }
         ]}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height
+          headerHeightRef.current = h
+          setHeaderHeight(h)
+        }}
       >
         <AppHeader
-          isLoggedIn={Boolean(session.user)}
-          onAccountPress={() => session.user ? requestLogoutConfirmation() : navigateTo('account')}
           onMenuPress={() => setIsMenuOpen(true)}
+          onScanPress={() => navigateTo('validator')}
           subtitle={currentSubtitle}
           title={currentTitle}
-        />
-        <QuickAccessRow
-          activeView={activeView}
-          cartCount={cartTicketCount}
-          onSelect={navigateTo}
-          signedIn={Boolean(session.user)}
           validatorAllowed={validatorAllowed}
         />
-      </View>
+      </Animated.View>
       <ScrollView
         ref={screenScrollRef}
         automaticallyAdjustKeyboardInsets
         contentContainerStyle={[
           styles.screen,
           {
+            paddingTop: headerHeight + 8,
             paddingBottom: bottomInset + 20
           }
         ]}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         keyboardShouldPersistTaps="handled"
         refreshControl={
@@ -2542,14 +2607,20 @@ export default function App() {
           }))
         }
       />
+      <BottomNavBar
+        activeView={activeView}
+        cartCount={cartTicketCount}
+        onSelect={navigateTo}
+      />
       {isMenuOpen ? (
         <>
           <Pressable style={styles.drawerScrim} onPress={() => setIsMenuOpen(false)} />
           <SideDrawer
             activeView={activeView}
             api={api}
-            cartCount={cartTicketCount}
             onClose={() => setIsMenuOpen(false)}
+            onLogin={() => navigateTo('account')}
+            onLogout={requestLogoutConfirmation}
             onRefreshFeed={() => void Promise.all([loadPublicEvents(), loadRailsSettings()])}
             onSelect={navigateTo}
             sessionLabel={session.user ? session.user.email : 'Guest browsing'}
@@ -2616,9 +2687,6 @@ function HeroCard({
     <View style={styles.hero}>
       <Text style={styles.heroEyebrow}>WaahTickets Mobile</Text>
       <Text style={styles.heroTitle}>{featuredEvent?.name ?? 'Find live events on mobile.'}</Text>
-      <Text style={styles.heroBody}>
-        Discover what’s happening next, grab tickets in a few taps, and keep everything in one place.
-      </Text>
       <View style={styles.heroPoster}>
         <EventImage
           apiBaseUrl={apiBaseUrl}
@@ -2688,15 +2756,15 @@ function AppIcon({
 function AppHeader({
   title,
   subtitle,
-  isLoggedIn,
+  validatorAllowed,
   onMenuPress,
-  onAccountPress
+  onScanPress
 }: {
   title: string
   subtitle: string
-  isLoggedIn: boolean
+  validatorAllowed: boolean
   onMenuPress: () => void
-  onAccountPress: () => void
+  onScanPress: () => void
 }) {
   return (
     <View style={styles.appHeader}>
@@ -2707,9 +2775,13 @@ function AppHeader({
         <Text style={styles.appHeaderTitle}>{title}</Text>
         <Text numberOfLines={1} style={styles.appHeaderSubtitle}>{subtitle}</Text>
       </View>
-      <Pressable onPress={onAccountPress} style={styles.iconButton}>
-        <AppIcon color="#f8fafc" name={isLoggedIn ? 'logout' : 'login'} size={20} />
-      </Pressable>
+      {validatorAllowed ? (
+        <Pressable onPress={onScanPress} style={styles.iconButton}>
+          <AppIcon color="#f8fafc" name="scan" size={20} />
+        </Pressable>
+      ) : (
+        <View style={styles.iconButton} />
+      )}
     </View>
   )
 }
@@ -2745,6 +2817,51 @@ function QuickAccessRow({
           </Pressable>
         ))}
     </ScrollView>
+  )
+}
+
+function BottomNavBar({
+  activeView,
+  cartCount,
+  onSelect
+}: {
+  activeView: MobileView
+  cartCount: number
+  onSelect: (view: MobileView) => void
+}) {
+  const tabs: Array<{ view: MobileView; label: string; icon: AppIconName }> = [
+    { view: 'home',    label: 'Home',    icon: 'home'    },
+    { view: 'tickets', label: 'Tickets', icon: 'tickets' },
+    { view: 'cart',    label: 'Cart',    icon: 'cart'    },
+    { view: 'account', label: 'Account', icon: 'account' }
+  ]
+
+  return (
+    <View style={styles.bottomNav}>
+      {tabs.map((tab) => (
+        <Pressable
+          key={tab.view}
+          onPress={() => onSelect(tab.view)}
+          style={styles.bottomNavTab}
+        >
+          {tab.view === 'cart' && cartCount > 0 ? (
+            <View style={styles.bottomNavBadge}>
+              <Text style={styles.bottomNavBadgeText}>
+                {cartCount > 9 ? '9+' : String(cartCount)}
+              </Text>
+            </View>
+          ) : null}
+          <AppIcon
+            name={tab.icon}
+            color={activeView === tab.view ? '#f97316' : '#64748b'}
+            size={22}
+          />
+          <Text style={[styles.bottomNavLabel, activeView === tab.view ? styles.bottomNavLabelActive : null]}>
+            {tab.label}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
   )
 }
 
@@ -2840,27 +2957,31 @@ function SideDrawer({
   activeView,
   api,
   bottomInset,
-  cartCount,
   sessionLabel,
   signedIn,
   topInset,
   validatorAllowed,
   onClose,
+  onLogin,
+  onLogout,
   onRefreshFeed,
   onSelect
 }: {
   activeView: MobileView
   api: ReturnType<typeof createApiClient>
   bottomInset: number
-  cartCount: number
   sessionLabel: string
   signedIn: boolean
   topInset: number
   validatorAllowed: boolean
   onClose: () => void
+  onLogin: () => void
+  onLogout: () => void
   onRefreshFeed: () => void
   onSelect: (view: MobileView) => void
 }) {
+  const avatarLetter = sessionLabel ? sessionLabel[0].toUpperCase() : 'G'
+
   return (
     <View
       style={[
@@ -2878,30 +2999,53 @@ function SideDrawer({
           </View>
           <View>
             <Text style={styles.drawerTitle}>WaahTickets</Text>
-            <Text numberOfLines={1} style={styles.drawerSubtitle}>{sessionLabel}</Text>
           </View>
         </View>
         <Pressable onPress={onClose} style={styles.drawerCloseButton}>
           <AppIcon color="#0f172a" name="close" size={18} />
         </Pressable>
       </View>
-      <View style={styles.drawerMenu}>
-        {mobileViews
-          .filter((item) => validatorAllowed || item.view !== 'validator')
-          .filter((item) => signedIn || item.view !== 'tickets')
-          .map((item) => (
-            <Pressable
-              key={item.view}
-              onPress={() => onSelect(item.view)}
-              style={[styles.drawerMenuItem, activeView === item.view ? styles.drawerMenuItemActive : null]}
-            >
-              <AppIcon color={activeView === item.view ? '#9a3412' : '#0f172a'} name={item.icon} size={15} />
-              <Text style={[styles.drawerMenuText, activeView === item.view ? styles.drawerMenuTextActive : null]}>
-                {item.view === 'cart' ? `${item.label}${cartCount > 0 ? ` (${cartCount})` : ''}` : item.label}
-              </Text>
-            </Pressable>
-          ))}
+
+      <View style={styles.drawerProfile}>
+        <View style={styles.drawerAvatar}>
+          <Text style={styles.drawerAvatarText}>{avatarLetter}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.drawerProfileName} numberOfLines={1}>
+            {signedIn ? sessionLabel.split('@')[0] : 'Guest'}
+          </Text>
+          <Text style={styles.drawerProfileEmail} numberOfLines={1}>
+            {signedIn ? sessionLabel : 'Browsing as guest'}
+          </Text>
+        </View>
       </View>
+
+      <View style={styles.drawerMenu}>
+        {validatorAllowed ? (
+          <Pressable
+            onPress={() => onSelect('validator')}
+            style={[styles.drawerMenuItem, activeView === 'validator' ? styles.drawerMenuItemActive : null]}
+          >
+            <AppIcon color={activeView === 'validator' ? '#9a3412' : '#0f172a'} name="scan" size={15} />
+            <Text style={[styles.drawerMenuText, activeView === 'validator' ? styles.drawerMenuTextActive : null]}>
+              Scan Tickets
+            </Text>
+          </Pressable>
+        ) : null}
+        <View style={styles.drawerDivider} />
+        {signedIn ? (
+          <Pressable onPress={onLogout} style={styles.drawerLogoutRow}>
+            <AppIcon color="#be123c" name="logout" size={15} />
+            <Text style={styles.drawerLogoutText}>Log out</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={onLogin} style={styles.drawerLoginRow}>
+            <AppIcon color="#166534" name="login" size={15} />
+            <Text style={styles.drawerLoginText}>Log in / Sign up</Text>
+          </Pressable>
+        )}
+      </View>
+
       <MobileAdSlot
         api={api}
         adsServed={0}
@@ -3799,8 +3943,7 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   appChrome: {
     paddingHorizontal: 18,
-    paddingBottom: 8,
-    gap: 10,
+    paddingBottom: 10,
     backgroundColor: '#0b1220',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)'
@@ -3846,6 +3989,37 @@ const styles = StyleSheet.create({
   quickAccessChipActive: { backgroundColor: '#f97316', borderColor: '#fb923c' },
   quickAccessChipText: { color: '#cbd5e1', fontSize: 13, fontWeight: '700' },
   quickAccessChipTextActive: { color: '#fff7ed' },
+  bottomNav: {
+    flexDirection: 'row',
+    backgroundColor: '#0b1220',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+    paddingTop: 8,
+  },
+  bottomNavTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    gap: 3,
+    position: 'relative',
+  },
+  bottomNavBadge: {
+    position: 'absolute',
+    top: 0,
+    right: '20%',
+    minWidth: 18,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: '#f97316',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    zIndex: 1,
+  },
+  bottomNavBadgeText: { color: '#fff7ed', fontSize: 10, fontWeight: '800' },
+  bottomNavLabel: { color: '#64748b', fontSize: 11, fontWeight: '700' },
+  bottomNavLabelActive: { color: '#f97316' },
   screen: { paddingHorizontal: 18, paddingTop: 16, gap: 16 },
   drawerScrim: {
     position: 'absolute',
@@ -3888,6 +4062,48 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#f1f5f9'
   },
+  drawerProfile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    marginBottom: 4,
+  },
+  drawerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f97316',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  drawerAvatarText: { color: '#fff7ed', fontSize: 18, fontWeight: '800' },
+  drawerProfileName: { color: '#0f172a', fontSize: 15, fontWeight: '800' },
+  drawerProfileEmail: { color: '#64748b', fontSize: 12, marginTop: 1 },
+  drawerDivider: { height: 1, backgroundColor: '#f1f5f9', marginVertical: 6 },
+  drawerLogoutRow: {
+    minHeight: 50,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#fff1f2',
+  },
+  drawerLogoutText: { color: '#be123c', fontSize: 15, fontWeight: '700' },
+  drawerLoginRow: {
+    minHeight: 50,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#f0fdf4',
+  },
+  drawerLoginText: { color: '#166534', fontSize: 15, fontWeight: '700' },
   drawerMenu: { gap: 10 },
   drawerAdSlot: { marginTop: 14 },
   drawerMenuItem: {
@@ -3906,7 +4122,7 @@ const styles = StyleSheet.create({
   drawerBackendTitle: { color: '#0f172a', fontSize: 15, fontWeight: '800' },
   drawerBackendHint: { color: '#64748b', fontSize: 12, lineHeight: 17 },
   drawerInput: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#d7e1ea', paddingHorizontal: 12, color: '#0f172a', backgroundColor: '#f8fafc' },
-  hero: { borderRadius: 24, padding: 18, backgroundColor: '#101827', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', gap: 14 },
+  hero: { borderRadius: 24, padding: 18, backgroundColor: '#101827', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', gap: 10 },
   heroEyebrow: { color: '#fbbf24', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1.4 },
   heroTitle: { color: '#f8fafc', fontSize: 28, lineHeight: 34, fontWeight: '800' },
   heroBody: { color: '#cbd5e1', fontSize: 15, lineHeight: 22 },
