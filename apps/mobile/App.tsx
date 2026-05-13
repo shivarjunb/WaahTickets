@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import Constants from 'expo-constants'
+import * as Device from 'expo-device'
 import * as ExpoLinking from 'expo-linking'
 import * as FileSystem from 'expo-file-system'
+import * as Notifications from 'expo-notifications'
 import * as Sharing from 'expo-sharing'
 import { StatusBar } from 'expo-status-bar'
 import { CameraView, useCameraPermissions } from 'expo-camera'
@@ -273,6 +276,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [isSessionRestored, setIsSessionRestored] = useState(false)
   const [session, setSession] = useState<MobileSessionState>(emptySession)
+  const registeredPushTokenRef = useRef<string | null>(null)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [events, setEvents] = useState<PublicEventState>(() => createInitialEventState())
   const [ticketTypes, setTicketTypes] = useState<TicketTypeState>(() => createInitialTicketTypeState())
@@ -810,6 +814,14 @@ export default function App() {
   async function logout() {
     try {
       if (session.tokens?.accessToken) {
+        if (registeredPushTokenRef.current) {
+          try {
+            await api.unregisterPushToken({ token: registeredPushTokenRef.current })
+          } catch {
+            // Best-effort — don't block logout
+          }
+          registeredPushTokenRef.current = null
+        }
         await api.logout()
       }
     } catch {
@@ -1909,6 +1921,100 @@ export default function App() {
     const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
   }, [cartHoldExpiresAt])
+
+  // Push notification registration — runs when a user session is available
+  useEffect(() => {
+    if (!session.user?.id || !session.tokens?.accessToken) return
+
+    async function registerPush() {
+      try {
+        console.log('[push] starting — appOwnership:', Constants.appOwnership, 'isDevice:', Device.isDevice)
+
+        // Expo Go (appOwnership === 'expo') does not support push notifications on
+        // Android SDK 53+. Skip silently so the rest of the app works in Expo Go.
+        // Real dev builds and production builds proceed normally.
+        if (Constants.appOwnership === 'expo') {
+          console.log('[push] skipped — running in Expo Go')
+          return
+        }
+
+        // Push notifications require a physical device.
+        if (!Device.isDevice) {
+          console.log('[push] skipped — not a physical device')
+          return
+        }
+
+        // Android requires a notification channel before requesting a token.
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'WaahTickets',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#f97316',
+          })
+        }
+
+        const { status: existing } = await Notifications.getPermissionsAsync()
+        const finalStatus =
+          existing === 'granted'
+            ? existing
+            : (await Notifications.requestPermissionsAsync()).status
+
+        console.log('[push] permission status:', finalStatus)
+        if (finalStatus !== 'granted') return
+
+        // projectId is required for getExpoPushTokenAsync in SDK 53+
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined
+        console.log('[push] projectId:', projectId)
+        if (!projectId) return
+
+        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId })
+        const token = tokenData.data
+        console.log('[push] token obtained:', token?.slice(0, 30), '...')
+
+        if (!token || token === registeredPushTokenRef.current) return
+        registeredPushTokenRef.current = token
+
+        await api.registerPushToken({
+          token,
+          platform: Platform.OS,
+          provider: 'expo',
+          app_version: Constants.expoConfig?.version ?? '0.0.1',
+        })
+        console.log('[push] token registered with backend ✓')
+      } catch (err) {
+        console.log('[push] error:', err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    void registerPush()
+  }, [session.user?.id, session.tokens?.accessToken, api])
+
+  // Handle notification taps — navigate to the relevant event
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    })
+
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as Record<string, unknown> | undefined
+      const eventId = typeof data?.eventId === 'string' ? data.eventId : null
+      if (eventId) {
+        navigateTo('home')
+        setSelectedEventId(eventId)
+        openTicketPicker(eventId)
+      }
+    })
+
+    return () => sub.remove()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function navigateTo(view: MobileView) {
     if (view === 'tickets' && !session.user) {

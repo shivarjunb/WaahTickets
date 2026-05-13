@@ -83,6 +83,8 @@ export const SETTINGS_VIEW = '__settings__'
 
 export const ADS_VIEW = '__ads__'
 
+export const PUSH_VIEW = '__push__'
+
 export const featuredSlideImages = [
   'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=1600&q=80',
   'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=1600&q=80',

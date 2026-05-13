@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { publicAdsRoutes } from './api/ads.js'
 import { authRoutes, handleGoogleMobileStart } from './api/auth.js'
 import { crudRoutes, storefrontRoutes } from './api/crud.js'
+import { adminPushRoutes, mobilePushRoutes } from './api/push.js'
 import { reportsRoutes } from './api/reports.js'
 import { createCache } from './cache/upstash.js'
 import type { Bindings } from './types/bindings.js'
@@ -844,6 +845,8 @@ app.get('/api/cache/status', async (c) => {
 
 app.get('/api/auth/google/mobile/start', handleGoogleMobileStart)
 app.route('/api/auth', authRoutes)
+app.route('/api/mobile/push', mobilePushRoutes)
+app.route('/api/admin/push', adminPushRoutes)
 app.route('/api/storefront', storefrontRoutes)
 app.route('/api', reportsRoutes)
 app.route('/api', crudRoutes)

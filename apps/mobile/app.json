@@ -31,13 +31,26 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#183f35"
       },
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
       ]
     },
     "plugins": [
+      "expo-dev-client",
       "expo-camera",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/adaptive-icon.png",
+          "color": "#183f35",
+          "defaultChannel": "default"
+        }
+      ],
       "expo-secure-store",
       "expo-sharing"
     ],

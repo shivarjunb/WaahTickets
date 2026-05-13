@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
 import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Tag, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, PUSH_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
 import { HeroSettingsForm } from "./HeroSettingsForm";
 import { CreateEventWizard } from "./CreateEventWizard";
+import { PushNotificationsPage } from "./PushNotificationsPage";
 
 function readAdminResourceFromPath() {
   if (typeof window === 'undefined') return DASHBOARD_VIEW
@@ -17,6 +18,7 @@ function readAdminResourceFromPath() {
   if (!page || page === 'dashboard') return DASHBOARD_VIEW
   if (page === 'settings') return SETTINGS_VIEW
   if (page === 'ads') return ADS_VIEW
+  if (page === 'push') return PUSH_VIEW
   return page
 }
 
@@ -24,13 +26,14 @@ function getAdminResourcePath(resource: string) {
   if (resource === DASHBOARD_VIEW) return '/admin/dashboard'
   if (resource === SETTINGS_VIEW) return '/admin/settings'
   if (resource === ADS_VIEW) return '/admin/ads'
+  if (resource === PUSH_VIEW) return '/admin/push'
   return `/admin/${encodeURIComponent(resource)}`
 }
 
 function inferSearchResource(query: string, fallbackResource: string, availableResources: string[]) {
   const normalizedQuery = query.trim().toLowerCase()
   const searchableResource =
-    fallbackResource !== DASHBOARD_VIEW && fallbackResource !== SETTINGS_VIEW && fallbackResource !== ADS_VIEW
+    fallbackResource !== DASHBOARD_VIEW && fallbackResource !== SETTINGS_VIEW && fallbackResource !== ADS_VIEW && fallbackResource !== PUSH_VIEW
       ? fallbackResource
       : ''
   if (!normalizedQuery) return searchableResource || availableResources[0] || 'events'
@@ -159,6 +162,7 @@ export default function AdminApp({
   const isDashboardView = selectedResource === DASHBOARD_VIEW
   const isSettingsView = selectedResource === SETTINGS_VIEW
   const isAdsView = selectedResource === ADS_VIEW
+  const isPushView = selectedResource === PUSH_VIEW
   const activeButtonPreset =
     buttonColorPresets.find((preset) => preset.id === buttonColorTheme.presetId) ?? null
 
@@ -268,10 +272,11 @@ export default function AdminApp({
       { id: 'payout_batches', label: 'Settlements', icon: CreditCard },
       { id: 'report_exports', label: 'Reports', icon: FileText },
       { id: ADS_VIEW, label: 'Ads', icon: Megaphone },
+      { id: PUSH_VIEW, label: 'Push Notifications', icon: Bell },
       { id: SETTINGS_VIEW, label: 'Settings', icon: Settings2 }
     ].filter((item) => {
       if (item.id === DASHBOARD_VIEW) return true
-      if (item.id === ADS_VIEW || item.id === SETTINGS_VIEW) return isAdminUser
+      if (item.id === ADS_VIEW || item.id === PUSH_VIEW || item.id === SETTINGS_VIEW) return isAdminUser
       return visibleResources.includes(item.id)
     }),
     [isAdminUser, visibleResources]
@@ -394,11 +399,17 @@ export default function AdminApp({
       setStatus('Ads management')
       return
     }
+    if (isPushView) {
+      setRecords([])
+      setStatus('Push notifications')
+      return
+    }
     void loadRecords(selectedResource, currentTablePage)
   }, [
     isSettingsView,
     isDashboardView,
     isAdsView,
+    isPushView,
     selectedResource,
     currentTablePage,
     tableRowsPerPage,
@@ -430,7 +441,7 @@ export default function AdminApp({
 
   useEffect(() => {
     if (selectedResource === DASHBOARD_VIEW) return
-    if (selectedResource === SETTINGS_VIEW || selectedResource === ADS_VIEW) {
+    if (selectedResource === SETTINGS_VIEW || selectedResource === ADS_VIEW || selectedResource === PUSH_VIEW) {
       if (isAdminUser && selectedWebRole === 'Admin') {
         return
       }
@@ -478,7 +489,7 @@ export default function AdminApp({
   }, [subgridPage.menuItems, totalMenuSubgridPages])
 
   useEffect(() => {
-    if (isSettingsView || isAdsView) return
+    if (isSettingsView || isAdsView || isPushView) return
     if (!isAdminUser || selectedWebRole !== 'Admin') return
     if (availableColumns.length === 0) return
     if (selectedColumnsByResource[selectedResource]?.length) return
@@ -493,6 +504,7 @@ export default function AdminApp({
     isAdminUser,
     isSettingsView,
     isAdsView,
+    isPushView,
     selectedColumnsByResource,
     selectedResource,
     selectedWebRole
@@ -2140,7 +2152,7 @@ export default function AdminApp({
   }
 
   let adminMenuItemIndex = 0
-  const viewLabel = isDashboardView ? 'Dashboard' : isSettingsView ? 'Settings' : isAdsView ? 'Ads' : resourceConfig.title
+  const viewLabel = isDashboardView ? 'Dashboard' : isSettingsView ? 'Settings' : isAdsView ? 'Ads' : isPushView ? 'Push Notifications' : resourceConfig.title
 
   return (
     <div
@@ -3405,6 +3417,8 @@ export default function AdminApp({
               />
             ) : null}
           </div>
+        ) : isPushView ? (
+          <PushNotificationsPage />
         ) : (
           <>
             <section className="admin-card">

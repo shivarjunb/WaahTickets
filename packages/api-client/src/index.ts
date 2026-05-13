@@ -306,6 +306,39 @@ export function createApiClient(options: ApiClientOptions) {
         total_amount?: string
       }>('/api/storefront/payments/esewa/status', withJsonBody(body, { method: 'POST' }))
     },
+    // --- Push notifications ---
+    registerPushToken(body: { token: string; platform: string; provider?: string; app_version?: string }) {
+      return request<{ ok: boolean; id: string }>(
+        '/api/mobile/push/register',
+        withJsonBody(body as unknown as JsonBody, { method: 'POST' })
+      )
+    },
+    unregisterPushToken(body: { token: string }) {
+      return request<{ ok: boolean }>(
+        '/api/mobile/push/unregister',
+        withJsonBody(body as unknown as JsonBody, { method: 'POST' })
+      )
+    },
+    listPushCampaigns(query?: { limit?: number; offset?: number }) {
+      const params = new URLSearchParams()
+      if (typeof query?.limit === 'number') params.set('limit', String(query.limit))
+      if (typeof query?.offset === 'number') params.set('offset', String(query.offset))
+      const suffix = params.toString()
+      return fetchJson<{ data: Record<string, unknown>[]; meta: { limit: number; offset: number } }>(
+        `/api/admin/push/campaigns${suffix ? `?${suffix}` : ''}`
+      )
+    },
+    sendPushCampaign(body: {
+      title: string
+      body: string
+      event_id?: string | null
+      audience_type?: string
+    }) {
+      return request<{ ok: boolean; campaign_id: string; sent: number; delivered: number; failed: number }>(
+        '/api/admin/push/send',
+        withJsonBody(body as unknown as JsonBody, { method: 'POST' })
+      )
+    },
     postJson<T>(path: string, body: JsonBody, init?: RequestInit) {
       return request<T>(path, withJsonBody(body, { ...init, method: init?.method ?? 'POST' }))
     }

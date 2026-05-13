@@ -1,0 +1,316 @@
+import { useEffect, useRef, useState } from "react"
+import { Bell, Send, RefreshCw } from "lucide-react"
+import { fetchJson } from "../../shared/utils"
+
+type Campaign = {
+  id: string
+  title: string
+  body: string
+  event_id: string | null
+  audience_type: string
+  status: string
+  sent_at: string | null
+  created_at: string
+  created_by_email: string
+  delivery_count: number
+  delivered_count: number
+}
+
+type PublicEventRow = {
+  id: string
+  name: string
+}
+
+type SendResult = {
+  ok: boolean
+  campaign_id: string
+  sent: number
+  delivered: number
+  failed: number
+}
+
+export function PushNotificationsPage() {
+  const [title, setTitle] = useState("")
+  const [body, setBody] = useState("")
+  const [eventId, setEventId] = useState("")
+  const [isSending, setIsSending] = useState(false)
+  const [sendError, setSendError] = useState("")
+  const [sendResult, setSendResult] = useState<SendResult | null>(null)
+
+  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [campaignsLoading, setCampaignsLoading] = useState(false)
+  const [campaignsError, setCampaignsError] = useState("")
+
+  const [events, setEvents] = useState<PublicEventRow[]>([])
+
+  const didInit = useRef(false)
+
+  useEffect(() => {
+    if (didInit.current) return
+    didInit.current = true
+    void loadCampaigns()
+    void loadEvents()
+  }, [])
+
+  async function loadEvents() {
+    try {
+      // fetchJson returns { data: parsedJson, response }
+      const { data } = await fetchJson<{ data: PublicEventRow[] }>("/api/public/events")
+      setEvents(data.data ?? [])
+    } catch {
+      // Optional — don't block the page
+    }
+  }
+
+  async function loadCampaigns() {
+    setCampaignsLoading(true)
+    setCampaignsError("")
+    try {
+      const { data } = await fetchJson<{ data: Campaign[]; meta: { limit: number; offset: number } }>(
+        "/api/admin/push/campaigns?limit=20"
+      )
+      setCampaigns(data.data ?? [])
+    } catch (err) {
+      setCampaignsError(err instanceof Error ? err.message : "Failed to load campaigns.")
+    } finally {
+      setCampaignsLoading(false)
+    }
+  }
+
+  async function handleSend() {
+    if (!title.trim() || !body.trim()) {
+      setSendError("Title and body are required.")
+      return
+    }
+    setIsSending(true)
+    setSendError("")
+    setSendResult(null)
+    try {
+      const { data } = await fetchJson<SendResult>("/api/admin/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          body: body.trim(),
+          event_id: eventId || null,
+          audience_type: "all",
+        }),
+      })
+      setSendResult(data)
+      setTitle("")
+      setBody("")
+      setEventId("")
+      void loadCampaigns()
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Failed to send notification.")
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  function formatDate(iso: string | null) {
+    if (!iso) return "—"
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
+  return (
+    <div className="tw-grid tw-gap-6">
+      {/* Compose */}
+      <section className="admin-card settings-card">
+        <div className="admin-card-header">
+          <div>
+            <h2>Send Push Notification</h2>
+            <p>Compose and send a push notification to all registered devices.</p>
+          </div>
+          <Bell size={20} style={{ opacity: 0.4 }} />
+        </div>
+
+        <div className="settings-grid" style={{ maxWidth: 560 }}>
+          <label>
+            <span>Title</span>
+            <input
+              maxLength={100}
+              placeholder="e.g. New Event in Thamel"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+
+          <label>
+            <span>Body</span>
+            <textarea
+              maxLength={300}
+              rows={3}
+              placeholder="e.g. Tickets are now live. Tap to book before they sell out."
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              style={{ resize: "vertical", padding: "8px 10px", minHeight: 72 }}
+            />
+          </label>
+
+          <label>
+            <span>
+              Link to event{" "}
+              <span style={{ fontWeight: 400, opacity: 0.55 }}>(optional)</span>
+            </span>
+            <select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+              <option value="">No event — general notification</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <span>Audience</span>
+            <select disabled value="all">
+              <option value="all">All registered users</option>
+            </select>
+          </label>
+        </div>
+
+        {sendError ? (
+          <div className="admin-table-alert" role="alert" style={{ marginTop: 12 }}>
+            {sendError}
+          </div>
+        ) : null}
+
+        {sendResult ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 10,
+              background: "rgba(34,197,94,0.1)",
+              border: "1px solid rgba(34,197,94,0.3)",
+              fontSize: 13,
+              color: "#166534",
+            }}
+          >
+            Sent to <strong>{sendResult.sent}</strong> device
+            {sendResult.sent !== 1 ? "s" : ""} —{" "}
+            <strong>{sendResult.delivered}</strong> delivered
+            {sendResult.failed > 0 ? `, ${sendResult.failed} failed` : ""}.
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: 16 }}>
+          <button
+            className="primary-admin-button"
+            type="button"
+            disabled={isSending || !title.trim() || !body.trim()}
+            onClick={() => void handleSend()}
+            style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+          >
+            <Send size={15} />
+            {isSending ? "Sending…" : "Send Now"}
+          </button>
+        </div>
+      </section>
+
+      {/* History */}
+      <section className="admin-card">
+        <div className="admin-card-header">
+          <div>
+            <h2>Recent Campaigns</h2>
+            <p>Last 20 notifications sent from the admin panel.</p>
+          </div>
+          <button
+            type="button"
+            title="Refresh"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              opacity: 0.5,
+              padding: 4,
+            }}
+            onClick={() => void loadCampaigns()}
+          >
+            <RefreshCw size={16} />
+          </button>
+        </div>
+
+        {campaignsLoading ? (
+          <p style={{ opacity: 0.5, fontSize: 14 }}>Loading…</p>
+        ) : campaignsError ? (
+          <div className="admin-table-alert" role="alert">
+            {campaignsError}
+          </div>
+        ) : campaigns.length === 0 ? (
+          <p style={{ opacity: 0.5, fontSize: 14 }}>No campaigns sent yet.</p>
+        ) : (
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Body</th>
+                  <th>Status</th>
+                  <th>Sent</th>
+                  <th style={{ textAlign: "right" }}>Delivered</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{c.title}</td>
+                    <td
+                      style={{
+                        maxWidth: 260,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {c.body}
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "2px 9px",
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          background:
+                            c.status === "sent"
+                              ? "rgba(34,197,94,0.12)"
+                              : c.status === "failed"
+                                ? "rgba(239,68,68,0.12)"
+                                : "rgba(234,179,8,0.12)",
+                          color:
+                            c.status === "sent"
+                              ? "#166534"
+                              : c.status === "failed"
+                                ? "#991b1b"
+                                : "#854d0e",
+                        }}
+                      >
+                        {c.status}
+                      </span>
+                    </td>
+                    <td style={{ whiteSpace: "nowrap", opacity: 0.7 }}>
+                      {formatDate(c.sent_at ?? c.created_at)}
+                    </td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {c.delivered_count} / {c.delivery_count}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
