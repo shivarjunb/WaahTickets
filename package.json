@@ -43,7 +43,8 @@
     "qrcode": "^1.5.4",
     "react": "19.1.4",
     "react-dom": "19.1.4",
-    "react-native": "0.81.6"
+    "react-native": "0.81.6",
+    "expo": "~55.0.23"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260425.1",
