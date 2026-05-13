@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "869550303961",
+    "project_id": "waah-tickets",
+    "storage_bucket": "waah-tickets.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:869550303961:android:f58452944ad3012c78ecc8",
+        "android_client_info": {
+          "package_name": "com.waahtickets.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCh1-z8h8Ac6By9cDmaioeN7tl2L9_PC-E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
