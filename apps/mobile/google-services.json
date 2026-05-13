@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:869550303961:android:c9b23a2acc08f8d878ecc8",
+        "android_client_info": {
+          "package_name": "com.shivarjun1.waahtickets"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCh1-z8h8Ac6By9cDmaioeN7tl2L9_PC-E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:869550303961:android:f58452944ad3012c78ecc8",
         "android_client_info": {
           "package_name": "com.waahtickets.mobile"
