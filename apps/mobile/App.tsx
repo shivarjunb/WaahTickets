@@ -1974,7 +1974,6 @@ export default function App() {
         console.log('[push] token obtained:', token?.slice(0, 30), '...')
 
         if (!token || token === registeredPushTokenRef.current) return
-        registeredPushTokenRef.current = token
 
         await api.registerPushToken({
           token,
@@ -1982,6 +1981,7 @@ export default function App() {
           provider: 'expo',
           app_version: Constants.expoConfig?.version ?? '0.0.1',
         })
+        registeredPushTokenRef.current = token
         console.log('[push] token registered with backend ✓')
       } catch (err) {
         console.log('[push] error:', err instanceof Error ? err.message : String(err))
