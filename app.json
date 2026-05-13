@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "4e217854-7efe-4ba3-979d-57d7bdad2580"
+      }
+    },
+    "android": {
+      "package": "com.shivarjun1.waahtickets"
+    }
+  }
+}

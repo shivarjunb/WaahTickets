@@ -14,6 +14,7 @@ type Campaign = {
   created_by_email: string
   delivery_count: number
   delivered_count: number
+  sample_error: string | null
 }
 
 type PublicEventRow = {
@@ -27,6 +28,19 @@ type SendResult = {
   sent: number
   delivered: number
   failed: number
+  failure_reasons?: string[]
+}
+
+function parseErrorMessage(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (typeof parsed.message === "string") return parsed.message
+    if (parsed.details && typeof (parsed.details as Record<string, unknown>).error === "string")
+      return (parsed.details as Record<string, unknown>).error as string
+  } catch {
+    // not JSON
+  }
+  return raw
 }
 
 export function PushNotificationsPage() {
@@ -184,21 +198,41 @@ export function PushNotificationsPage() {
         ) : null}
 
         {sendResult ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: "10px 14px",
-              borderRadius: 10,
-              background: "rgba(34,197,94,0.1)",
-              border: "1px solid rgba(34,197,94,0.3)",
-              fontSize: 13,
-              color: "#166534",
-            }}
-          >
-            Sent to <strong>{sendResult.sent}</strong> device
-            {sendResult.sent !== 1 ? "s" : ""} —{" "}
-            <strong>{sendResult.delivered}</strong> delivered
-            {sendResult.failed > 0 ? `, ${sendResult.failed} failed` : ""}.
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                background: sendResult.failed > 0 ? "rgba(234,179,8,0.1)" : "rgba(34,197,94,0.1)",
+                border: `1px solid ${sendResult.failed > 0 ? "rgba(234,179,8,0.4)" : "rgba(34,197,94,0.3)"}`,
+                fontSize: 13,
+                color: sendResult.failed > 0 ? "#854d0e" : "#166534",
+              }}
+            >
+              Sent to <strong>{sendResult.sent}</strong> device
+              {sendResult.sent !== 1 ? "s" : ""} —{" "}
+              <strong>{sendResult.delivered}</strong> delivered
+              {sendResult.failed > 0 ? `, ${sendResult.failed} failed` : ""}.
+            </div>
+            {sendResult.failure_reasons && sendResult.failure_reasons.length > 0 ? (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.25)",
+                  fontSize: 12,
+                  color: "#991b1b",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: 4 }}>Failure reason:</strong>
+                {sendResult.failure_reasons.map((r, i) => (
+                  <div key={i} style={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+                    {r}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -297,6 +331,23 @@ export function PushNotificationsPage() {
                       >
                         {c.status}
                       </span>
+                      {c.sample_error ? (
+                        <div
+                          title={parseErrorMessage(c.sample_error)}
+                          style={{
+                            marginTop: 3,
+                            fontSize: 11,
+                            color: "#991b1b",
+                            maxWidth: 140,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            cursor: "help",
+                          }}
+                        >
+                          {parseErrorMessage(c.sample_error)}
+                        </div>
+                      ) : null}
                     </td>
                     <td style={{ whiteSpace: "nowrap", opacity: 0.7 }}>
                       {formatDate(c.sent_at ?? c.created_at)}

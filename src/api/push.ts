@@ -188,7 +188,8 @@ adminPushRoutes.get('/campaigns', async (c: AppContext) => {
               nc.status, nc.sent_at, nc.created_at,
               u.email AS created_by_email,
               (SELECT COUNT(*) FROM notification_deliveries nd WHERE nd.campaign_id = nc.id) AS delivery_count,
-              (SELECT COUNT(*) FROM notification_deliveries nd WHERE nd.campaign_id = nc.id AND nd.delivery_status = 'ok') AS delivered_count
+              (SELECT COUNT(*) FROM notification_deliveries nd WHERE nd.campaign_id = nc.id AND nd.delivery_status = 'ok') AS delivered_count,
+              (SELECT nd.provider_response FROM notification_deliveries nd WHERE nd.campaign_id = nc.id AND nd.delivery_status = 'error' LIMIT 1) AS sample_error
        FROM notification_campaigns nc
        JOIN users u ON u.id = nc.created_by
        ORDER BY nc.created_at DESC
@@ -304,11 +305,21 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
 
   const deliveredCount = allTickets.filter((t) => t.status === 'ok').length
 
+  // Collect unique failure reasons to surface in the API response
+  const failureReasons = Array.from(
+    new Set(
+      allTickets
+        .filter((t) => t.status === 'error')
+        .map((t) => t.message ?? t.details?.error ?? 'Unknown error')
+    )
+  )
+
   return c.json({
     ok: true,
     campaign_id: campaignId,
     sent: tokens.length,
     delivered: deliveredCount,
     failed: tokens.length - deliveredCount,
+    failure_reasons: failureReasons.length > 0 ? failureReasons : undefined,
   })
 })

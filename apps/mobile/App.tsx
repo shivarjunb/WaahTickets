@@ -337,6 +337,7 @@ export default function App() {
   })
   const validationBusyRef = useRef(false)
   const [resolvedApiBaseUrl, setResolvedApiBaseUrl] = useState(defaultMobileApiBaseUrl)
+  const [apiUrlDraft, setApiUrlDraft] = useState(defaultMobileApiBaseUrl)
   const [isTicketPickerOpen, setIsTicketPickerOpen] = useState(false)
   const [ticketPickerEventId, setTicketPickerEventId] = useState('')
 
@@ -2686,6 +2687,38 @@ export default function App() {
                 </ScrollView>
               </Card>
             ) : null}
+
+            <Card title="Dev server" subtitle="Switch between local and remote API. Tap Apply to reload events.">
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={apiUrlDraft}
+                onChangeText={setApiUrlDraft}
+                style={styles.input}
+                placeholder="https://your-api.workers.dev"
+                placeholderTextColor="#90a3b8"
+              />
+              <Text style={styles.mutedText} numberOfLines={1}>{`Active: ${resolvedApiBaseUrl}`}</Text>
+              <View style={styles.inlineActions}>
+                <ActionButton
+                  label="Apply & reload"
+                  onPress={() => {
+                    const trimmed = apiUrlDraft.trim().replace(/\/$/, '')
+                    if (!trimmed) return
+                    setResolvedApiBaseUrl(trimmed)
+                    void loadPublicEvents(createApiClient({ baseUrl: trimmed, getAccessToken: () => session.tokens?.accessToken ?? null }))
+                  }}
+                />
+                <ActionButton
+                  label="Reset"
+                  secondary
+                  onPress={() => {
+                    setApiUrlDraft(defaultMobileApiBaseUrl)
+                    setResolvedApiBaseUrl(defaultMobileApiBaseUrl)
+                  }}
+                />
+              </View>
+            </Card>
           </View>
         ) : null}
       </ScrollView>
