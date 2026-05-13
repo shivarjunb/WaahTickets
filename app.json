@@ -6,7 +6,7 @@
       }
     },
     "android": {
-      "package": "com.shivarjun1.waahtickets"
+      "package": "com.waahtickets.mobile"
     },
     "plugins": [
       "./with-main-application-fix.cjs"
