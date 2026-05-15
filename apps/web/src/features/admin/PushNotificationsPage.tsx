@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Bell, Send, RefreshCw } from "lucide-react"
 import { fetchJson } from "../../shared/utils"
+import type { ApiListResponse } from "../../shared/types"
 
 type Campaign = {
   id: string
@@ -9,6 +10,7 @@ type Campaign = {
   event_id: string | null
   image_url: string | null
   audience_type: string
+  audience_user_id: string | null
   status: string
   sent_at: string | null
   created_at: string
@@ -21,6 +23,13 @@ type Campaign = {
 type PublicEventRow = {
   id: string
   name: string
+}
+
+type UserOption = {
+  id: string
+  email: string
+  first_name: string | null
+  last_name: string | null
 }
 
 type SendResult = {
@@ -49,6 +58,8 @@ export function PushNotificationsPage() {
   const [body, setBody] = useState("")
   const [eventId, setEventId] = useState("")
   const [imageUrl, setImageUrl] = useState("")
+  const [audienceType, setAudienceType] = useState<"all" | "user">("all")
+  const [audienceUserId, setAudienceUserId] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState("")
   const [sendResult, setSendResult] = useState<SendResult | null>(null)
@@ -58,6 +69,7 @@ export function PushNotificationsPage() {
   const [campaignsError, setCampaignsError] = useState("")
 
   const [events, setEvents] = useState<PublicEventRow[]>([])
+  const [users, setUsers] = useState<UserOption[]>([])
 
   const didInit = useRef(false)
 
@@ -66,6 +78,7 @@ export function PushNotificationsPage() {
     didInit.current = true
     void loadCampaigns()
     void loadEvents()
+    void loadUsers()
   }, [])
 
   async function loadEvents() {
@@ -93,9 +106,31 @@ export function PushNotificationsPage() {
     }
   }
 
+  async function loadUsers() {
+    try {
+      const { data } = await fetchJson<ApiListResponse>("/api/users?limit=1000")
+      const rows = Array.isArray(data.data) ? data.data : []
+      const mapped = rows
+        .map((row) => ({
+          id: String(row.id ?? ""),
+          email: String(row.email ?? ""),
+          first_name: row.first_name ? String(row.first_name) : null,
+          last_name: row.last_name ? String(row.last_name) : null,
+        }))
+        .filter((row) => row.id && row.email)
+      setUsers(mapped)
+    } catch {
+      setUsers([])
+    }
+  }
+
   async function handleSend() {
     if (!title.trim() || !body.trim()) {
       setSendError("Title and body are required.")
+      return
+    }
+    if (audienceType === "user" && !audienceUserId) {
+      setSendError("Select a registered user.")
       return
     }
     setIsSending(true)
@@ -110,7 +145,8 @@ export function PushNotificationsPage() {
           body: body.trim(),
           event_id: eventId || null,
           image_url: imageUrl.trim() || null,
-          audience_type: "all",
+          audience_type: audienceType,
+          audience_user_id: audienceType === "user" ? audienceUserId : null,
         }),
       })
       setSendResult(data)
@@ -118,6 +154,8 @@ export function PushNotificationsPage() {
       setBody("")
       setEventId("")
       setImageUrl("")
+      setAudienceType("all")
+      setAudienceUserId("")
       void loadCampaigns()
     } catch (err) {
       setSendError(err instanceof Error ? err.message : "Failed to send notification.")
@@ -201,10 +239,27 @@ export function PushNotificationsPage() {
 
           <label>
             <span>Audience</span>
-            <select disabled value="all">
+            <select value={audienceType} onChange={(e) => setAudienceType(e.target.value === "user" ? "user" : "all")}>
               <option value="all">All registered users</option>
+              <option value="user">Single registered user</option>
             </select>
           </label>
+          {audienceType === "user" ? (
+            <label>
+              <span>Registered user</span>
+              <select value={audienceUserId} onChange={(e) => setAudienceUserId(e.target.value)}>
+                <option value="">Select user</option>
+                {users.map((user) => {
+                  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim()
+                  return (
+                    <option key={user.id} value={user.id}>
+                      {name ? `${name} (${user.email})` : user.email}
+                    </option>
+                  )
+                })}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         {sendError ? (

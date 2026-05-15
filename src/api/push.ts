@@ -244,7 +244,7 @@ adminPushRoutes.get('/campaigns', async (c: AppContext) => {
 
   const rows = await c.env.DB
     .prepare(
-      `SELECT nc.id, nc.title, nc.body, nc.event_id, nc.image_url, nc.audience_type,
+      `SELECT nc.id, nc.title, nc.body, nc.event_id, nc.image_url, nc.audience_type, nc.audience_user_id,
               nc.status, nc.sent_at, nc.created_at,
               u.email AS created_by_email,
               (SELECT COUNT(*) FROM notification_deliveries nd WHERE nd.campaign_id = nc.id) AS delivery_count,
@@ -269,6 +269,7 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
     event_id?: unknown
     image_url?: unknown
     audience_type?: unknown
+    audience_user_id?: unknown
   }>()
 
   const title = typeof body.title === 'string' ? body.title.trim() : ''
@@ -276,10 +277,16 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
   const eventId = typeof body.event_id === 'string' ? body.event_id.trim() : null
   const imageUrlRaw = typeof body.image_url === 'string' ? body.image_url.trim() : ''
   const imageUrl = imageUrlRaw.length > 0 ? imageUrlRaw : null
-  const audienceType = typeof body.audience_type === 'string' ? body.audience_type.trim() : 'all'
+  const audienceTypeRaw = typeof body.audience_type === 'string' ? body.audience_type.trim() : 'all'
+  const audienceType = audienceTypeRaw === 'user' ? 'user' : 'all'
+  const audienceUserIdRaw = typeof body.audience_user_id === 'string' ? body.audience_user_id.trim() : ''
+  const audienceUserId = audienceType === 'user' && audienceUserIdRaw ? audienceUserIdRaw : null
 
   if (!title || !messageBody) {
     return c.json({ error: 'title and body are required.' }, 400)
+  }
+  if (audienceType === 'user' && !audienceUserId) {
+    return c.json({ error: 'audience_user_id is required when audience_type is user.' }, 400)
   }
   if (imageUrl) {
     try {
@@ -299,21 +306,29 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
   // Create campaign record
   await c.env.DB
     .prepare(
-      `INSERT INTO notification_campaigns (id, title, body, event_id, image_url, audience_type, created_by, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'sending', ?)`
+      `INSERT INTO notification_campaigns (id, title, body, event_id, image_url, audience_type, audience_user_id, created_by, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sending', ?)`
     )
-    .bind(campaignId, title, messageBody, eventId, imageUrl, audienceType, scope.userId, now)
+    .bind(campaignId, title, messageBody, eventId, imageUrl, audienceType, audienceUserId, scope.userId, now)
     .run()
 
   // Fetch enabled tokens (audience_type = 'all' for MVP)
-  const tokenRows = await c.env.DB
-    .prepare(
-      `SELECT pt.id AS push_token_id, pt.user_id, pt.token
-              ,pt.provider, pt.platform
-       FROM push_tokens pt
-       WHERE pt.enabled = 1`
-    )
-    .all<PushTokenRow>()
+  const tokenRows = audienceType === 'user' && audienceUserId
+    ? await c.env.DB
+      .prepare(
+        `SELECT pt.id AS push_token_id, pt.user_id, pt.token, pt.provider, pt.platform
+         FROM push_tokens pt
+         WHERE pt.enabled = 1 AND pt.user_id = ?`
+      )
+      .bind(audienceUserId)
+      .all<PushTokenRow>()
+    : await c.env.DB
+      .prepare(
+        `SELECT pt.id AS push_token_id, pt.user_id, pt.token, pt.provider, pt.platform
+         FROM push_tokens pt
+         WHERE pt.enabled = 1`
+      )
+      .all<PushTokenRow>()
 
   const tokens = tokenRows.results ?? []
 

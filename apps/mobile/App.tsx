@@ -1993,6 +1993,24 @@ export default function App() {
 
   // Handle notification taps — navigate to the relevant event
   useEffect(() => {
+    const getEventIdFromNotificationData = (data?: Record<string, unknown>): string | null => {
+      const raw =
+        (typeof data?.eventId === 'string' && data.eventId) ||
+        (typeof data?.event_id === 'string' && data.event_id) ||
+        (typeof data?.eventID === 'string' && data.eventID) ||
+        ''
+      const normalized = raw.trim()
+      return normalized.length > 0 ? normalized : null
+    }
+
+    const handleNotificationEventNavigation = (data?: Record<string, unknown>) => {
+      const eventId = getEventIdFromNotificationData(data)
+      if (!eventId) return
+      navigateTo('home')
+      setSelectedEventId(eventId)
+      openTicketPicker(eventId)
+    }
+
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: true,
@@ -2005,12 +2023,12 @@ export default function App() {
 
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data as Record<string, unknown> | undefined
-      const eventId = typeof data?.eventId === 'string' ? data.eventId : null
-      if (eventId) {
-        navigateTo('home')
-        setSelectedEventId(eventId)
-        openTicketPicker(eventId)
-      }
+      handleNotificationEventNavigation(data)
+    })
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (!response) return
+      const data = response.notification.request.content.data as Record<string, unknown> | undefined
+      handleNotificationEventNavigation(data)
     })
 
     return () => sub.remove()
@@ -2663,7 +2681,16 @@ export default function App() {
                     </View>
                   ) : null}
                   <TextInput value={authForm.email} onChangeText={(value) => setAuthForm((current) => ({ ...current, email: value }))} style={styles.input} placeholder="Email address" placeholderTextColor="#90a3b8" autoCapitalize="none" keyboardType="email-address" />
-                  <TextInput value={authForm.password} onChangeText={(value) => setAuthForm((current) => ({ ...current, password: value }))} style={styles.input} placeholder="Password" placeholderTextColor="#90a3b8" secureTextEntry />
+                  <TextInput
+                    value={authForm.password}
+                    onChangeText={(value) => setAuthForm((current) => ({ ...current, password: value }))}
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor="#90a3b8"
+                    secureTextEntry
+                    returnKeyType="go"
+                    onSubmitEditing={() => void submitAuth()}
+                  />
                   <ActionButton label={isSubmittingAuth ? 'Please wait...' : authMode === 'login' ? 'Login' : 'Create account'} onPress={() => void submitAuth()} />
                 </View>
               )}
