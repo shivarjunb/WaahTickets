@@ -14,6 +14,8 @@ The mobile foundation is now in its second phase: the Expo app has moved beyond 
 
 The mobile workspace is now targeting `Expo SDK 54` so it can be tested more easily with the current store-distributed Expo Go app.
 
+Push notifications are now in a transition phase: Expo token delivery is still active, and the backend now includes provider-aware scaffolding (`expo`, `fcm`, `apns`) plus optional campaign `image_url` fields for rich-notification rollout.
+
 ## Documentation Rule
 
 Moving forward, every meaningful structural or architectural change should also update this `README.md`.
@@ -318,6 +320,12 @@ See [API.md](./API.md) for:
 - authentication endpoints
 - public events endpoints
 - notification behavior
+
+Push notification endpoints now support a phased native rollout:
+
+- `POST /api/mobile/push/register` accepts `provider` (`expo` / `fcm` / `apns`) and optional device metadata (`device_id`, `app_bundle_id`, `environment`).
+- `POST /api/admin/push/send` accepts optional `image_url` in addition to `title`, `body`, and `event_id`.
+- Current delivery behavior is still Expo-first; native provider senders are scaffolded for subsequent phases.
 
 ## Database Overview
 

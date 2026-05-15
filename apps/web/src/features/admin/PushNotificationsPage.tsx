@@ -7,6 +7,7 @@ type Campaign = {
   title: string
   body: string
   event_id: string | null
+  image_url: string | null
   audience_type: string
   status: string
   sent_at: string | null
@@ -47,6 +48,7 @@ export function PushNotificationsPage() {
   const [title, setTitle] = useState("")
   const [body, setBody] = useState("")
   const [eventId, setEventId] = useState("")
+  const [imageUrl, setImageUrl] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState("")
   const [sendResult, setSendResult] = useState<SendResult | null>(null)
@@ -107,6 +109,7 @@ export function PushNotificationsPage() {
           title: title.trim(),
           body: body.trim(),
           event_id: eventId || null,
+          image_url: imageUrl.trim() || null,
           audience_type: "all",
         }),
       })
@@ -114,6 +117,7 @@ export function PushNotificationsPage() {
       setTitle("")
       setBody("")
       setEventId("")
+      setImageUrl("")
       void loadCampaigns()
     } catch (err) {
       setSendError(err instanceof Error ? err.message : "Failed to send notification.")
@@ -181,6 +185,18 @@ export function PushNotificationsPage() {
                 </option>
               ))}
             </select>
+          </label>
+
+          <label>
+            <span>
+              Image URL <span style={{ fontWeight: 400, opacity: 0.55 }}>(optional)</span>
+            </span>
+            <input
+              type="url"
+              placeholder="https://example.com/promo.jpg"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+            />
           </label>
 
           <label>

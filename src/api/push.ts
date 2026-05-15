@@ -59,6 +59,7 @@ type ExpoMessage = {
   data?: Record<string, unknown>
   sound?: 'default'
   badge?: number
+  imageUrl?: string
 }
 
 type ExpoPushTicket = {
@@ -75,7 +76,17 @@ async function sendExpoPushBatch(messages: ExpoMessage[]): Promise<ExpoPushTicke
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify(messages),
+    body: JSON.stringify(
+      messages.map((message) => ({
+        to: message.to,
+        title: message.title,
+        body: message.body,
+        data: message.data,
+        sound: message.sound,
+        badge: message.badge,
+        ...(message.imageUrl ? { richContent: { image: message.imageUrl } } : {}),
+      }))
+    ),
   })
 
   if (!response.ok) {
@@ -85,6 +96,34 @@ async function sendExpoPushBatch(messages: ExpoMessage[]): Promise<ExpoPushTicke
 
   const json = (await response.json()) as { data: ExpoPushTicket[] }
   return json.data ?? []
+}
+
+type PushTokenRow = {
+  push_token_id: string
+  user_id: string
+  token: string
+  provider: string
+  platform: string
+}
+
+type DeliveryResult = {
+  token: PushTokenRow
+  ticket?: ExpoPushTicket
+  error?: string
+}
+
+async function sendViaExpo(messages: ExpoMessage[]): Promise<ExpoPushTicket[]> {
+  return sendExpoPushBatch(messages)
+}
+
+async function sendNativeProviderPlaceholder(
+  provider: 'fcm' | 'apns',
+  tokens: PushTokenRow[]
+): Promise<DeliveryResult[]> {
+  return tokens.map((token) => ({
+    token,
+    error: `${provider.toUpperCase()} sender is not configured yet in this phase.`,
+  }))
 }
 
 // ---- routers ----
@@ -106,12 +145,18 @@ mobilePushRoutes.post('/register', async (c: AppContext) => {
     platform?: unknown
     provider?: unknown
     app_version?: unknown
+    device_id?: unknown
+    app_bundle_id?: unknown
+    environment?: unknown
   }>()
 
   const token = typeof body.token === 'string' ? body.token.trim() : ''
   const platform = typeof body.platform === 'string' ? body.platform.trim() : ''
   const provider = typeof body.provider === 'string' ? body.provider.trim() : 'expo'
   const appVersion = typeof body.app_version === 'string' ? body.app_version.trim() : null
+  const deviceId = typeof body.device_id === 'string' ? body.device_id.trim() : null
+  const appBundleId = typeof body.app_bundle_id === 'string' ? body.app_bundle_id.trim() : null
+  const environment = typeof body.environment === 'string' ? body.environment.trim() : null
 
   if (!token || !platform) {
     return c.json({ error: 'token and platform are required.' }, 400)
@@ -130,10 +175,10 @@ mobilePushRoutes.post('/register', async (c: AppContext) => {
     await c.env.DB
       .prepare(
         `UPDATE push_tokens
-         SET enabled = 1, platform = ?, provider = ?, app_version = ?, updated_at = ?
+         SET enabled = 1, platform = ?, provider = ?, app_version = ?, device_id = ?, app_bundle_id = ?, environment = ?, last_seen_at = ?, updated_at = ?
          WHERE id = ?`
       )
-      .bind(platform, provider, appVersion, now, existing.id)
+      .bind(platform, provider, appVersion, deviceId, appBundleId, environment, now, now, existing.id)
       .run()
 
     return c.json({ ok: true, id: existing.id })
@@ -142,10 +187,25 @@ mobilePushRoutes.post('/register', async (c: AppContext) => {
   const id = crypto.randomUUID()
   await c.env.DB
     .prepare(
-      `INSERT INTO push_tokens (id, user_id, provider, token, platform, enabled, app_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`
+      `INSERT INTO push_tokens (
+         id, user_id, provider, token, platform, enabled, app_version, device_id, app_bundle_id, environment, last_seen_at, created_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(id, scope.userId, provider, token, platform, appVersion, now, now)
+    .bind(
+      id,
+      scope.userId,
+      provider,
+      token,
+      platform,
+      appVersion,
+      deviceId,
+      appBundleId,
+      environment,
+      now,
+      now,
+      now
+    )
     .run()
 
   return c.json({ ok: true, id })
@@ -184,7 +244,7 @@ adminPushRoutes.get('/campaigns', async (c: AppContext) => {
 
   const rows = await c.env.DB
     .prepare(
-      `SELECT nc.id, nc.title, nc.body, nc.event_id, nc.audience_type,
+      `SELECT nc.id, nc.title, nc.body, nc.event_id, nc.image_url, nc.audience_type,
               nc.status, nc.sent_at, nc.created_at,
               u.email AS created_by_email,
               (SELECT COUNT(*) FROM notification_deliveries nd WHERE nd.campaign_id = nc.id) AS delivery_count,
@@ -207,16 +267,29 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
     title?: unknown
     body?: unknown
     event_id?: unknown
+    image_url?: unknown
     audience_type?: unknown
   }>()
 
   const title = typeof body.title === 'string' ? body.title.trim() : ''
   const messageBody = typeof body.body === 'string' ? body.body.trim() : ''
   const eventId = typeof body.event_id === 'string' ? body.event_id.trim() : null
+  const imageUrlRaw = typeof body.image_url === 'string' ? body.image_url.trim() : ''
+  const imageUrl = imageUrlRaw.length > 0 ? imageUrlRaw : null
   const audienceType = typeof body.audience_type === 'string' ? body.audience_type.trim() : 'all'
 
   if (!title || !messageBody) {
     return c.json({ error: 'title and body are required.' }, 400)
+  }
+  if (imageUrl) {
+    try {
+      const parsed = new URL(imageUrl)
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return c.json({ error: 'image_url must be an http(s) URL.' }, 400)
+      }
+    } catch {
+      return c.json({ error: 'image_url must be a valid URL.' }, 400)
+    }
   }
 
   const scope = c.get('authScope')
@@ -226,20 +299,21 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
   // Create campaign record
   await c.env.DB
     .prepare(
-      `INSERT INTO notification_campaigns (id, title, body, event_id, audience_type, created_by, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'sending', ?)`
+      `INSERT INTO notification_campaigns (id, title, body, event_id, image_url, audience_type, created_by, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'sending', ?)`
     )
-    .bind(campaignId, title, messageBody, eventId, audienceType, scope.userId, now)
+    .bind(campaignId, title, messageBody, eventId, imageUrl, audienceType, scope.userId, now)
     .run()
 
   // Fetch enabled tokens (audience_type = 'all' for MVP)
   const tokenRows = await c.env.DB
     .prepare(
       `SELECT pt.id AS push_token_id, pt.user_id, pt.token
+              ,pt.provider, pt.platform
        FROM push_tokens pt
        WHERE pt.enabled = 1`
     )
-    .all<{ push_token_id: string; user_id: string; token: string }>()
+    .all<PushTokenRow>()
 
   const tokens = tokenRows.results ?? []
 
@@ -251,39 +325,76 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
     return c.json({ ok: true, campaign_id: campaignId, sent: 0 })
   }
 
-  // Build Expo messages (batch of up to 100 per Expo recommendation)
+  // Build shared notification data used across providers.
   const notificationData: Record<string, unknown> = { type: 'campaign', campaignId }
   if (eventId) notificationData.eventId = eventId
 
-  const messages: ExpoMessage[] = tokens.map((t) => ({
-    to: t.token,
-    title,
-    body: messageBody,
-    sound: 'default',
-    data: notificationData,
-  }))
+  const expoTokens = tokens.filter((token) => token.provider === 'expo')
+  const fcmTokens = tokens.filter((token) => token.provider === 'fcm')
+  const apnsTokens = tokens.filter((token) => token.provider === 'apns')
+  const unknownTokens = tokens.filter(
+    (token) => token.provider !== 'expo' && token.provider !== 'fcm' && token.provider !== 'apns'
+  )
 
-  // Send in chunks of 100
-  const BATCH_SIZE = 100
-  const allTickets: ExpoPushTicket[] = []
-  let sendError: string | null = null
+  const deliveryResults: DeliveryResult[] = []
 
-  try {
-    for (let i = 0; i < messages.length; i += BATCH_SIZE) {
-      const batch = messages.slice(i, i + BATCH_SIZE)
-      const tickets = await sendExpoPushBatch(batch)
-      allTickets.push(...tickets)
+  if (expoTokens.length > 0) {
+    const messages: ExpoMessage[] = expoTokens.map((t) => ({
+      to: t.token,
+      title,
+      body: messageBody,
+      sound: 'default',
+      data: notificationData,
+      imageUrl: imageUrl ?? undefined,
+    }))
+    const BATCH_SIZE = 100
+    let cursor = 0
+    try {
+      while (cursor < messages.length) {
+        const batchMessages = messages.slice(cursor, cursor + BATCH_SIZE)
+        const tickets = await sendViaExpo(batchMessages)
+        batchMessages.forEach((_, index) => {
+          deliveryResults.push({
+            token: expoTokens[cursor + index],
+            ticket: tickets[index] ?? { status: 'error', message: 'Missing Expo ticket response' },
+          })
+        })
+        cursor += BATCH_SIZE
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Expo push send failed.'
+      console.error('Push send error:', message)
+      for (let i = cursor; i < expoTokens.length; i += 1) {
+        deliveryResults.push({ token: expoTokens[i], error: message })
+      }
     }
-  } catch (err) {
-    sendError = err instanceof Error ? err.message : 'Push send failed.'
-    console.error('Push send error:', sendError)
+  }
+
+  if (fcmTokens.length > 0) {
+    deliveryResults.push(...(await sendNativeProviderPlaceholder('fcm', fcmTokens)))
+  }
+  if (apnsTokens.length > 0) {
+    deliveryResults.push(...(await sendNativeProviderPlaceholder('apns', apnsTokens)))
+  }
+  if (unknownTokens.length > 0) {
+    deliveryResults.push(
+      ...unknownTokens.map((token) => ({
+        token,
+        error: `Unsupported push provider: ${token.provider}`,
+      }))
+    )
   }
 
   // Persist delivery records
-  const deliveryInserts = tokens.map((t, idx) => {
-    const ticket = allTickets[idx]
+  const deliveryInserts = deliveryResults.map((result) => {
+    const ticket = result.ticket
+    const t = result.token
     const status = ticket?.status === 'ok' ? 'ok' : 'error'
-    const providerResponse = ticket ? JSON.stringify(ticket) : sendError ?? 'no_response'
+    const providerResponse = result.error
+      ? JSON.stringify({ status: 'error', message: result.error, provider: t.provider })
+      : ticket
+        ? JSON.stringify(ticket)
+        : JSON.stringify({ status: 'error', message: 'no_response', provider: t.provider })
     return c.env.DB
       .prepare(
         `INSERT INTO notification_deliveries (id, campaign_id, user_id, push_token_id, delivery_status, provider_response, created_at)
@@ -297,20 +408,22 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
     await c.env.DB.batch(deliveryInserts.slice(i, i + 100))
   }
 
-  const finalStatus = sendError && allTickets.length === 0 ? 'failed' : 'sent'
+  const hasAnyDelivery = deliveryResults.length > 0
+  const hasAnySuccess = deliveryResults.some((result) => result.ticket?.status === 'ok')
+  const finalStatus = hasAnyDelivery && !hasAnySuccess ? 'failed' : 'sent'
   await c.env.DB
     .prepare('UPDATE notification_campaigns SET status = ?, sent_at = ? WHERE id = ?')
     .bind(finalStatus, now, campaignId)
     .run()
 
-  const deliveredCount = allTickets.filter((t) => t.status === 'ok').length
+  const deliveredCount = deliveryResults.filter((result) => result.ticket?.status === 'ok').length
 
   // Collect unique failure reasons to surface in the API response
   const failureReasons = Array.from(
     new Set(
-      allTickets
-        .filter((t) => t.status === 'error')
-        .map((t) => t.message ?? t.details?.error ?? 'Unknown error')
+      deliveryResults
+        .filter((result) => result.ticket?.status === 'error' || result.error)
+        .map((result) => result.error ?? result.ticket?.message ?? result.ticket?.details?.error ?? 'Unknown error')
     )
   )
 
