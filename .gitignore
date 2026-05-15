@@ -10,3 +10,4 @@ apps/mobile/.expo/*
 android/
 ios/
 .expo/
+apps/mobile/.expo/devices.json
