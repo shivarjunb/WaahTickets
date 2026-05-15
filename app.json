@@ -9,6 +9,18 @@
       "package": "com.waahtickets.mobile"
     },
     "plugins": [
+      "expo-dev-client",
+      [
+        "expo-notifications",
+        {
+          "icon": "./apps/mobile/assets/adaptive-icon.png",
+          "color": "#183f35",
+          "defaultChannel": "default"
+        }
+      ],
+      "expo-camera",
+      "expo-secure-store",
+      "expo-sharing",
       "./with-main-application-fix.cjs"
     ]
   }
