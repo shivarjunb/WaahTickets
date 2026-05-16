@@ -4,7 +4,7 @@ import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Chevro
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, hasAdminConsoleAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, hasAdminConsoleAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
@@ -13,6 +13,7 @@ import { HeroLiveMap, toMapEvent } from './HeroLiveMap';
 import { EventMapPopup } from './EventMapPopup';
 import { KathmanduMap, CATEGORY_CONFIG } from './KathmanduMap';
 import './heroMapStyles.css';
+import { buildCheckoutCouponPayload, discountForEvent } from './coupon-checkout';
 
 export default function PublicApp({
   currentPath,
@@ -59,12 +60,9 @@ export default function PublicApp({
   const [pendingSingleEventCartItem, setPendingSingleEventCartItem] = useState<CartItem | null>(null)
   const [isSingleEventCartReplacing, setIsSingleEventCartReplacing] = useState(false)
   const [cartEventEmails, setCartEventEmails] = useState<Record<string, string>>({})
-  const [cartEventCoupons, setCartEventCoupons] = useState<Record<string, string>>({})
-  const [cartEventCouponMessages, setCartEventCouponMessages] = useState<Record<string, string>>({})
-  const [cartEventCouponDiscounts, setCartEventCouponDiscounts] = useState<Record<string, { couponId: string; discount: number }>>({})
   const [orderCouponCode, setOrderCouponCode] = useState('')
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
-  const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; eventId: string; discount: number } | null>(null)
+  const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; discount: number; allocations: Record<string, number> } | null>(null)
   const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(() => {
     if (typeof window === 'undefined') {
       return { first_name: '', last_name: '', email: '', phone_number: '' }
@@ -296,10 +294,7 @@ export default function PublicApp({
     }
     return totals
   }, [cartItems])
-  const cartEventDiscountTotal = useMemo(
-    () => Object.values(cartEventCouponDiscounts).reduce((sum, item) => sum + item.discount, 0),
-    [cartEventCouponDiscounts]
-  )
+  const cartEventDiscountTotal = 0
   const cartOrderDiscount = orderCouponDiscount?.discount ?? 0
   const cartGrandTotalPaisa = Math.max(0, cartSubtotalPaisa - cartEventDiscountTotal - cartOrderDiscount)
   const cartItemCount = useMemo(
@@ -572,13 +567,13 @@ export default function PublicApp({
 
   useEffect(() => {
     const eventIds = new Set(cartGroups.map((group) => group.event_id))
-    setCartEventCoupons((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
     setCartEventEmails((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
-    setCartEventCouponMessages((current) => Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId))))
-    setCartEventCouponDiscounts((current) =>
-      Object.fromEntries(Object.entries(current).filter(([eventId]) => eventIds.has(eventId)))
-    )
-    setOrderCouponDiscount((current) => (current && !eventIds.has(current.eventId) ? null : current))
+    setOrderCouponDiscount((current) => {
+      if (!current) return current
+      const allocations = Object.fromEntries(Object.entries(current.allocations).filter(([eventId]) => eventIds.has(eventId)))
+      const discount = Object.values(allocations).reduce((sum, value) => sum + value, 0)
+      return discount > 0 ? { ...current, allocations, discount } : null
+    })
   }, [cartGroups])
 
   useEffect(() => {
@@ -795,11 +790,8 @@ export default function PublicApp({
     let restored = null as null | {
       cartItems: CartItem[]
       cartEventEmails: Record<string, string>
-      cartEventCoupons: Record<string, string>
-      cartEventCouponMessages: Record<string, string>
-      cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
       orderCouponCode: string
-      orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+      orderCouponDiscount: { couponId: string; discount: number; allocations: Record<string, number> } | null
       orderCouponMessage: string
       order_groups: KhaltiCheckoutOrderGroup[]
       pidx?: string
@@ -821,9 +813,6 @@ export default function PublicApp({
     // Restore cart state from the saved draft.
     setCartItems(restored.cartItems)
     setCartEventEmails(restored.cartEventEmails ?? {})
-    setCartEventCoupons(restored.cartEventCoupons ?? {})
-    setCartEventCouponMessages(restored.cartEventCouponMessages ?? {})
-    setCartEventCouponDiscounts(restored.cartEventCouponDiscounts ?? {})
     setOrderCouponCode(restored.orderCouponCode ?? '')
     setOrderCouponDiscount(restored.orderCouponDiscount ?? null)
     setOrderCouponMessage(restored.orderCouponMessage ?? '')
@@ -919,6 +908,7 @@ export default function PublicApp({
               pidx,
               transaction_id: data.data.transaction_id ?? '',
               order_groups: restored.order_groups,
+              coupon: restored.orderCouponDiscount ? buildCheckoutCouponPayload(restored.orderCouponCode ?? '') : undefined,
               guest_checkout_token: guestCheckoutToken
             })
           })
@@ -962,7 +952,7 @@ export default function PublicApp({
             {
               cartItems: restored.cartItems,
               cartEventEmails: restored.cartEventEmails ?? {},
-              cartEventCouponDiscounts: restored.cartEventCouponDiscounts ?? {},
+              orderCouponCode: restored.orderCouponCode ?? '',
               orderCouponDiscount: restored.orderCouponDiscount ?? null,
               order_groups: restored.order_groups,
               guest_checkout_identity: restored.guest_checkout_identity ?? null
@@ -1001,9 +991,6 @@ export default function PublicApp({
         setCartItems([])
         setCartHoldToken('')
         setCartHoldExpiresAt('')
-        setCartEventCoupons({})
-        setCartEventCouponMessages({})
-        setCartEventCouponDiscounts({})
         setCartEventEmails({})
         setOrderCouponCode('')
         setOrderCouponDiscount(null)
@@ -1596,9 +1583,6 @@ export default function PublicApp({
           cartGroups={cartGroups}
           eventSubtotals={eventSubtotals}
           eventEmails={cartEventEmails}
-          eventCoupons={cartEventCoupons}
-          eventCouponMessages={cartEventCouponMessages}
-          eventCouponDiscounts={cartEventCouponDiscounts}
           orderCouponCode={orderCouponCode}
           orderCouponDiscount={orderCouponDiscount}
           orderCouponMessage={orderCouponMessage}
@@ -1612,11 +1596,11 @@ export default function PublicApp({
           onChangeEventEmail={(eventId, value) =>
             setCartEventEmails((current) => ({ ...current, [eventId]: value }))
           }
-          onChangeEventCoupon={(eventId, value) =>
-            setCartEventCoupons((current) => ({ ...current, [eventId]: value }))
-          }
-          onApplyEventCoupon={(eventId) => void applyEventCoupon(eventId)}
-          onChangeOrderCoupon={setOrderCouponCode}
+          onChangeOrderCoupon={(value) => {
+            setOrderCouponCode(value)
+            setOrderCouponDiscount(null)
+            setOrderCouponMessage('')
+          }}
           onApplyOrderCoupon={() => void applyOrderCouponAcrossCart()}
           onChangeGuestCheckoutField={updateGuestCheckoutContactField}
           onPlaceOrder={() => void submitCartCheckout()}
@@ -1828,9 +1812,6 @@ export default function PublicApp({
     setCartItems([])
     setCartHoldToken('')
     setCartHoldExpiresAt('')
-    setCartEventCoupons({})
-    setCartEventCouponMessages({})
-    setCartEventCouponDiscounts({})
     setCartEventEmails({})
     setOrderCouponCode('')
     setOrderCouponDiscount(null)
@@ -1913,10 +1894,8 @@ export default function PublicApp({
       const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${group.event_id.slice(0, 6)}`
       const orderId = `order-${suffix}`
       const subtotal = group.items.reduce((sum, item) => sum + item.unit_price_paisa * item.quantity, 0)
-      const eventCoupon = cartEventCouponDiscounts[group.event_id]
-      const eventDiscount = eventCoupon?.discount ?? 0
-      const orderDiscountShare = allocateOrderDiscountShare(group.event_id, eventGroups, orderCouponDiscount)
-      const totalDiscount = Math.max(0, Math.min(subtotal, eventDiscount + orderDiscountShare))
+      const orderDiscountShare = discountForEvent(orderCouponDiscount, group.event_id)
+      const totalDiscount = Math.max(0, Math.min(subtotal, orderDiscountShare))
       const total = Math.max(0, subtotal - totalDiscount)
       const currency = group.items[0]?.currency ?? 'NPR'
 
@@ -1936,16 +1915,8 @@ export default function PublicApp({
           subtotal_amount_paisa: item.unit_price_paisa * item.quantity,
           total_amount_paisa: item.unit_price_paisa * item.quantity
         })),
-        event_coupon_id: eventCoupon?.couponId,
-        event_coupon_discount_paisa: eventDiscount,
-        order_coupon_id:
-          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
-            ? orderCouponDiscount.couponId
-            : undefined,
-        order_coupon_discount_paisa:
-          orderCouponDiscount && orderDiscountShare > 0 && orderCouponDiscount.eventId === group.event_id
-            ? orderDiscountShare
-            : 0,
+        order_coupon_id: orderCouponDiscount && orderDiscountShare > 0 ? orderCouponDiscount.couponId : undefined,
+        order_coupon_discount_paisa: orderCouponDiscount && orderDiscountShare > 0 ? orderDiscountShare : 0,
         extra_email: (cartEventEmails[group.event_id] ?? '').trim() || undefined
       }
       return draft
@@ -2044,9 +2015,6 @@ export default function PublicApp({
       const draft = {
         cartItems,
         cartEventEmails,
-        cartEventCoupons,
-        cartEventCouponMessages,
-        cartEventCouponDiscounts,
         orderCouponCode,
         orderCouponDiscount,
         orderCouponMessage,
@@ -2069,6 +2037,7 @@ export default function PublicApp({
         customer_phone: String((checkoutUser as GuestCheckoutIdentity['user'] | AuthUser)?.phone_number ?? guestCheckoutContact.phone_number ?? '').trim(),
         return_url: window.location.origin + '/',
         order_groups: orderGroups,
+        coupon: orderCouponDiscount ? buildCheckoutCouponPayload(orderCouponCode) : undefined,
         guest_checkout_token: guestIdentity?.token
       }
       const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/storefront/payments/khalti/initiate', {
@@ -2114,9 +2083,6 @@ export default function PublicApp({
       const draft = {
         cartItems,
         cartEventEmails,
-        cartEventCoupons,
-        cartEventCouponMessages,
-        cartEventCouponDiscounts,
         orderCouponCode,
         orderCouponDiscount,
         orderCouponMessage,
@@ -2136,6 +2102,7 @@ export default function PublicApp({
         body: JSON.stringify({
           amount_paisa: cartGrandTotalPaisa,
           order_groups: orderGroups,
+          coupon: orderCouponDiscount ? buildCheckoutCouponPayload(orderCouponCode) : undefined,
           guest_checkout_token: guestIdentity?.token
         })
       })
@@ -2185,6 +2152,7 @@ export default function PublicApp({
     try {
       const guestIdentity = snapshot?.guest_checkout_identity ?? (await ensureGuestCheckoutIdentity())
       const orderGroups = snapshot?.order_groups ?? buildKhaltiCheckoutOrderGroups()
+      const submissionCouponCode = snapshot?.orderCouponDiscount ? snapshot.orderCouponCode ?? '' : orderCouponDiscount ? orderCouponCode : ''
       const requestTimeoutMs = paymentContext?.provider ? 20000 : undefined
       const { data } = await fetchJson<{ data: { completed_orders: number } }>('/api/storefront/checkout/complete', {
         method: 'POST',
@@ -2192,6 +2160,7 @@ export default function PublicApp({
         body: JSON.stringify({
           order_groups: orderGroups,
           payment: paymentContext ?? { provider: 'manual' },
+          coupon: buildCheckoutCouponPayload(submissionCouponCode),
           guest_checkout_token: guestIdentity?.token
         }),
         timeoutMs: requestTimeoutMs
@@ -2203,9 +2172,6 @@ export default function PublicApp({
       setCartHoldToken('')
       setCartHoldExpiresAt('')
       persistCartSnapshot([])
-      setCartEventCoupons({})
-      setCartEventCouponMessages({})
-      setCartEventCouponDiscounts({})
       setCartEventEmails({})
       setOrderCouponCode('')
       setOrderCouponDiscount(null)
@@ -2227,65 +2193,11 @@ export default function PublicApp({
     }
   }
 
-  async function applyEventCoupon(eventId: string) {
-    const code = cartEventCoupons[eventId]?.trim()
-    const subtotal = eventSubtotals[eventId] ?? 0
-    if (!code) {
-      setCartEventCouponMessages((current) => ({ ...current, [eventId]: 'Enter a coupon code.' }))
-      setCartEventCouponDiscounts((current) => {
-        const next = { ...current }
-        delete next[eventId]
-        return next
-      })
-      return
-    }
-    if (subtotal <= 0) {
-      setCartEventCouponMessages((current) => ({ ...current, [eventId]: 'No items for this event.' }))
-      return
-    }
-
-    try {
-      const { data } = await fetchJson<CouponValidationResponse>('/api/public/coupons/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          event_id: eventId,
-          subtotal_amount_paisa: subtotal
-        })
-      })
-      if (!data.valid || !data.data) {
-        throw new Error(data.error ?? 'Coupon is invalid.')
-      }
-      setCartEventCouponDiscounts((current) => ({
-        ...current,
-        [eventId]: {
-          couponId: data.data.coupon_id,
-          discount: data.data.discount_amount_paisa
-        }
-      }))
-      setCartEventCouponMessages((current) => ({
-        ...current,
-        [eventId]: `Coupon applied: -${formatMoney(data.data.discount_amount_paisa)}`
-      }))
-    } catch (error) {
-      setCartEventCouponMessages((current) => ({
-        ...current,
-        [eventId]: getErrorMessage(error)
-      }))
-      setCartEventCouponDiscounts((current) => {
-        const next = { ...current }
-        delete next[eventId]
-        return next
-      })
-    }
-  }
-
   async function applyOrderCouponAcrossCart() {
     const code = orderCouponCode.trim()
     if (!code) {
       setOrderCouponDiscount(null)
-      setOrderCouponMessage('Enter an order-level coupon code.')
+      setOrderCouponMessage('Enter a coupon code or QR payload.')
       return
     }
     if (cartGroups.length === 0) {
@@ -2294,43 +2206,36 @@ export default function PublicApp({
       return
     }
 
-    let best: { couponId: string; eventId: string; discount: number } | null = null
-    const failures: string[] = []
-
-    for (const group of cartGroups) {
-      const subtotal = eventSubtotals[group.event_id] ?? 0
-      if (subtotal <= 0) continue
-      try {
-        const { data } = await fetchJson<CouponValidationResponse>('/api/public/coupons/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code,
-            event_id: group.event_id,
-            subtotal_amount_paisa: subtotal
-          })
+    try {
+      const orderGroups = buildKhaltiCheckoutOrderGroups()
+      const { data } = await fetchJson<CouponValidationResponse>('/api/storefront/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coupon: buildCheckoutCouponPayload(code),
+          order_groups: orderGroups.map((group) => ({
+            ...group,
+            discount_amount_paisa: 0,
+            total_amount_paisa: group.subtotal_amount_paisa,
+            order_coupon_id: undefined,
+            order_coupon_discount_paisa: 0
+          }))
         })
-        if (!data.valid || !data.data) continue
-        if (!best || data.data.discount_amount_paisa > best.discount) {
-          best = {
-            couponId: data.data.coupon_id,
-            eventId: group.event_id,
-            discount: data.data.discount_amount_paisa
-          }
-        }
-      } catch (error) {
-        failures.push(getErrorMessage(error))
+      })
+      if (!data.valid || !data.data) {
+        throw new Error(data.error ?? 'Coupon is invalid.')
       }
-    }
-
-    if (!best) {
+      const discount = Number(data.data.discount_amount_paisa ?? 0)
+      setOrderCouponDiscount({
+        couponId: data.data.coupon_id,
+        discount,
+        allocations: data.data.allocations ?? {}
+      })
+      setOrderCouponMessage(discount > 0 ? `Coupon applied: -${formatMoney(discount)}` : 'Coupon applied.')
+    } catch (error) {
       setOrderCouponDiscount(null)
-      setOrderCouponMessage(failures[0] ?? 'Order-level coupon is invalid for the events in your cart.')
-      return
+      setOrderCouponMessage(getErrorMessage(error))
     }
-
-    setOrderCouponDiscount(best)
-    setOrderCouponMessage(`Order coupon applied: -${formatMoney(best.discount)}`)
   }
 
   function getReserveBlockedMessage() {
@@ -3930,9 +3835,6 @@ export function CartCheckoutModal({
   cartGroups,
   eventSubtotals,
   eventEmails,
-  eventCoupons,
-  eventCouponMessages,
-  eventCouponDiscounts,
   orderCouponCode,
   orderCouponDiscount,
   orderCouponMessage,
@@ -3944,8 +3846,6 @@ export function CartCheckoutModal({
   isSubmitting,
   onClose,
   onChangeEventEmail,
-  onChangeEventCoupon,
-  onApplyEventCoupon,
   onChangeOrderCoupon,
   onApplyOrderCoupon,
   onChangeGuestCheckoutField,
@@ -3966,11 +3866,8 @@ export function CartCheckoutModal({
   cartGroups: Array<{ event_id: string; event_name: string; event_location_id: string; event_location_name: string; items: CartItem[] }>
   eventSubtotals: Record<string, number>
   eventEmails: Record<string, string>
-  eventCoupons: Record<string, string>
-  eventCouponMessages: Record<string, string>
-  eventCouponDiscounts: Record<string, { couponId: string; discount: number }>
   orderCouponCode: string
-  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+  orderCouponDiscount: { couponId: string; discount: number; allocations: Record<string, number> } | null
   orderCouponMessage: string
   guestCheckoutContact: GuestCheckoutContact
   subtotalPaisa: number
@@ -3980,8 +3877,6 @@ export function CartCheckoutModal({
   isSubmitting: boolean
   onClose: () => void
   onChangeEventEmail: (eventId: string, value: string) => void
-  onChangeEventCoupon: (eventId: string, value: string) => void
-  onApplyEventCoupon: (eventId: string) => void
   onChangeOrderCoupon: (value: string) => void
   onApplyOrderCoupon: () => void
   onChangeGuestCheckoutField: (field: keyof GuestCheckoutContact, value: string) => void
@@ -4107,30 +4002,14 @@ export function CartCheckoutModal({
                     onChange={(event) => onChangeEventEmail(group.event_id, event.target.value)}
                   />
                 </label>
-                <div className="cart-coupon-row">
-                  <input
-                    placeholder="Event coupon code"
-                    type="text"
-                    value={eventCoupons[group.event_id] ?? ''}
-                    onChange={(event) => onChangeEventCoupon(group.event_id, event.target.value)}
-                  />
-                  <button type="button" onClick={() => onApplyEventCoupon(group.event_id)}>Apply</button>
-                </div>
-                {eventCouponMessages[group.event_id] ? <p className="checkout-hint">{eventCouponMessages[group.event_id]}</p> : null}
-                {(eventCouponDiscounts[group.event_id]?.discount ?? 0) > 0 ? (
-                  <div className="checkout-line">
-                    <span>Event discount</span>
-                    <strong>-{formatMoney(eventCouponDiscounts[group.event_id].discount)}</strong>
-                  </div>
-                ) : null}
               </fieldset>
             ))}
 
             <fieldset className="cart-checkout-group">
-              <legend>Order-level coupon</legend>
+              <legend>Coupon</legend>
               <div className="cart-coupon-row">
                 <input
-                  placeholder="Order coupon code"
+                  placeholder="Coupon code or QR payload"
                   type="text"
                   value={orderCouponCode}
                   onChange={(event) => onChangeOrderCoupon(event.target.value)}
@@ -4140,7 +4019,7 @@ export function CartCheckoutModal({
               {orderCouponMessage ? <p className="checkout-hint">{orderCouponMessage}</p> : null}
               {orderCouponDiscount ? (
                 <div className="checkout-line">
-                  <span>Order-level discount</span>
+                  <span>Coupon discount</span>
                   <strong>-{formatMoney(orderCouponDiscount.discount)}</strong>
                 </div>
                 ) : null}
@@ -4161,11 +4040,7 @@ export function CartCheckoutModal({
                 <strong>{formatMoney(subtotalPaisa)}</strong>
               </div>
               <div className="checkout-line">
-                <span>Event discounts</span>
-                <strong>-{formatMoney(eventDiscountTotalPaisa)}</strong>
-              </div>
-              <div className="checkout-line">
-                <span>Order discount</span>
+                <span>Coupon discount</span>
                 <strong>-{formatMoney(orderDiscountPaisa)}</strong>
               </div>
               <div className="checkout-total grand">

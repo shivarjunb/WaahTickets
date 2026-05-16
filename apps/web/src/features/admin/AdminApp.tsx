@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "
 import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Download, BarChart3, Bell, Building2, CalendarDays, Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Edit3, Eye, FileText, FilterX, Home, LayoutDashboard, LogIn, LogOut, Mail, Menu, Moon, Plus, RefreshCw, Save, Search, ScanLine, Settings2, ShieldCheck, ShoppingCart, SquareMinus, SquarePlus, Sun, Star, Tag, Ticket, Trash2, Upload, AlertTriangle, Banknote, HandCoins, Megaphone, Receipt, SlidersHorizontal, UserCog, Users, X } from "lucide-react";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, RailConfigItem, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, HeroSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { buildLastMonthLabels, formatMonthLabel, fallbackResources, adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, PUSH_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultHeroSettingsData, defaultAdSettingsData, eventImagePlaceholder, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
-import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
+import { readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizeRailId, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, normalizeHeroSettings, buildConfiguredRails, buildDefaultEventRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getVisibleFormFields, getFormFieldLabel, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasAdminConsoleAccess, hasTicketValidationAccess, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
@@ -1614,6 +1614,23 @@ export default function AdminApp({
     if (resource === 'organization_users' && selectedWebRole === 'Organizations') {
       delete values.user_id
       values.email = ''
+    }
+    if (resource === 'coupons' && selectedWebRole === 'Organizations') {
+      const selectedOrganizationId = selectedOrgId || String(userOrganizations[0]?.id ?? '')
+      values.coupon_type = 'organizer'
+      if (selectedOrganizationId) {
+        values.organization_id = selectedOrganizationId
+      }
+      if (String(values.public_code ?? '').startsWith('ORG-')) {
+        values.public_code = ''
+      }
+    }
+    if (resource === 'coupons' && selectedWebRole === 'Admin') {
+      values.coupon_type = 'waahcoupon'
+      values.organization_id = ''
+      if (String(values.public_code ?? '').startsWith('ORG-')) {
+        values.public_code = ''
+      }
     }
     if (resource === 'users') {
       setPendingUserOrgMembership(null)
@@ -4031,10 +4048,11 @@ export function RecordModal({
 
   const supportsUpload = resource === 'files' || resource === 'events'
   const isUploadOnlyModal = resource === 'files'
-  const fields = getOrderedFormFields(resource, formValues)
+  const fields = getVisibleFormFields(resource, formValues, { webRole })
   const canCreateEventLocation = resource === 'events' && Boolean(onOpenCreateEventLocation)
   const canEditField = (field: string) =>
     !isFieldReadOnly(field, mode) && canEditFieldForRole(field, resource, webRole, currentUser, record, formValues)
+  const getFieldLabel = (field: string) => getFormFieldLabel(resource, field)
 
   async function uploadToR2() {
     if (!supportsUpload || !uploadFile || isUploading || isSaving) return
@@ -4155,7 +4173,7 @@ export function RecordModal({
               {fields.map((field) => (
                 <label key={field}>
                   <span>
-                    {formatResourceName(field)}
+                    {getFieldLabel(field)}
                     {isRequiredField(resource, field) ? <em className="required-indicator">*</em> : null}
                   </span>
                   {getFieldSelectOptions(resource, field).length ? (
@@ -4165,7 +4183,12 @@ export function RecordModal({
                       onChange={(event) =>
                         setFormValues((current) => ({
                           ...current,
-                          [field]: event.target.value
+                          [field]: event.target.value,
+                          ...(resource === 'coupons' && field === 'discount_type'
+                            ? event.target.value === 'fixed'
+                              ? { discount_amount_paisa: current.discount_amount_paisa ?? '', discount_percentage: '' }
+                              : { discount_percentage: current.discount_percentage ?? '', discount_amount_paisa: '' }
+                            : {})
                         }))
                       }
                     >

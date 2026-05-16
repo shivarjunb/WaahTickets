@@ -1022,6 +1022,10 @@ export function canEditFieldForRole(
   record: ApiRecord | null,
   formValues: Record<string, string>
 ) {
+  if (webRole === 'Organizations' && resource === 'coupons' && field === 'coupon_type') {
+    return false
+  }
+
   if (!(webRole === 'Customers' && resource === 'customers')) return true
 
   const ownerUserId = String(record?.user_id ?? formValues.user_id ?? '')
@@ -1142,6 +1146,35 @@ export function getOrderedFormFields(resource: string, values: Record<string, st
 }
 
 
+export function getVisibleFormFields(
+  resource: string,
+  values: Record<string, string>,
+  options?: { webRole?: WebRoleName }
+) {
+  const hiddenFields = new Set(
+    options?.webRole === 'Organizations' && resource === 'coupons'
+      ? ['coupon_type', 'organization_id']
+      : []
+  )
+
+  return getOrderedFormFields(resource, values)
+    .map((field) => {
+      if (resource !== 'coupons') return field
+      if (field === 'discount_percentage' && values.discount_type === 'fixed') return 'discount_amount_paisa'
+      if (field === 'discount_amount_paisa' && values.discount_type !== 'fixed') return 'discount_percentage'
+      return field
+    })
+    .filter((field, index, list) => !hiddenFields.has(field) && list.indexOf(field) === index)
+}
+
+
+export function getFormFieldLabel(resource: string, field: string) {
+  if (resource === 'coupons' && field === 'discount_percentage') return 'Discount Percentage'
+  if (resource === 'coupons' && field === 'discount_amount_paisa') return 'Discount Amount'
+  return formatResourceName(field)
+}
+
+
 export function validateForm(
   values: Record<string, string>,
   resource: string,
@@ -1176,6 +1209,12 @@ export function validateForm(
       }
     } else if (!String(values.user_id ?? '').trim() && !String(values.email ?? '').trim()) {
       messages.push('user id or email is required.')
+    }
+  }
+
+  if (resource === 'coupons' && options?.mode === 'create' && options.webRole === 'Organizations') {
+    if (!String(values.organization_id ?? '').trim() && !String(values.event_id ?? '').trim()) {
+      messages.push('organization or event is required for organizer coupons.')
     }
   }
 

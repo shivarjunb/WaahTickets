@@ -258,10 +258,13 @@ export type CartHoldResponse = {
 
 export type CouponValidationData = {
   coupon_id: string
-  event_id: string
-  code: string
+  public_code?: string
+  event_id?: string
+  code?: string
+  coupon_type?: string
   discount_type: string
   discount_amount_paisa: number
+  allocations?: Record<string, number>
 }
 
 export type CouponValidationResponse = {

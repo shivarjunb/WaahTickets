@@ -5,8 +5,26 @@ import { adminAdsRoutes } from './ads.js'
 import { getGuestCheckoutSession } from '../auth/guest-checkout.js'
 import { hashToken } from '../auth/password.js'
 import { createCache } from '../cache/upstash.js'
+import {
+  COUPON_EXPIRY_YEARS,
+  addCouponExpiryYears,
+  allocateDiscountAcrossOrderGroups,
+  buildCouponBatchCode,
+  buildCouponPublicCode,
+  buildCouponQrPayload,
+  calculateCouponDiscount,
+  getEligibleCouponOrderGroups,
+  MAX_COUPON_CREATE_QUANTITY,
+  normalizeCouponCreateQuantity,
+  normalizeCouponPublicCode,
+  normalizeCouponType,
+  parseCouponCheckoutInput,
+  parseCouponQrPayload,
+  type CouponCheckoutInput,
+  type CouponType
+} from '../coupons.js'
 import { listResources, resolveTable } from '../db/schema.js'
-import type { TableName } from '../db/schema.js'
+import type { TableConfig, TableName } from '../db/schema.js'
 import {
   enqueueOrderCopyNotification,
   enqueueAccountDeletedNotification,
@@ -196,6 +214,14 @@ type KhaltiOrderGroupDraft = {
   order_coupon_discount_paisa?: number
   extra_email?: string
 }
+type AppliedCheckoutCoupon = {
+  couponId: string
+  publicCode: string
+  couponType: CouponType
+  discountType: string
+  totalDiscountPaisa: number
+  allocatedByOrderId: Map<string, number>
+}
 type EsewaSuccessPayload = {
   transaction_code?: string
   status?: string
@@ -238,6 +264,18 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     : null
 
   const now = new Date().toISOString()
+  let appliedCoupon: AppliedCheckoutCoupon | null = null
+  try {
+    appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: now
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
+  }
   let completedOrders = 0
 
   for (const group of orderGroups.value) {
@@ -296,62 +334,6 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
             item.unit_price_paisa,
             item.subtotal_amount_paisa,
             item.total_amount_paisa,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.event_coupon_id && (group.event_coupon_discount_paisa ?? 0) > 0) {
-      const existingEventCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.event_coupon_id, group.order_id, actor.userId)
-        .first<{ id: string }>()
-      if (!existingEventCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.event_coupon_id,
-            group.order_id,
-            actor.userId,
-            group.event_coupon_discount_paisa ?? 0,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.order_coupon_id && (group.order_coupon_discount_paisa ?? 0) > 0) {
-      const existingOrderCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.order_coupon_id, group.order_id, actor.userId)
-        .first<{ id: string }>()
-      if (!existingOrderCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.order_coupon_id,
-            group.order_id,
-            actor.userId,
-            group.order_coupon_discount_paisa ?? 0,
             now
           )
           .run()
@@ -421,6 +403,12 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     completedOrders += 1
   }
 
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
+  }
+
   await ensureUserCartItemsTable(db)
   await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(actor.userId).run()
 
@@ -433,6 +421,54 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
   ])
 
   return c.json({ data: { completed_orders: completedOrders } })
+})
+
+storefrontRoutes.post('/coupons/validate', async (c) => {
+  const db = getDatabase(c.env)
+  if (!db) {
+    return missingDatabaseResponse(c)
+  }
+
+  const payload = await readJsonBody(c.req)
+  if (!payload) {
+    return c.json({ valid: false, error: 'Expected a JSON object request body.' }, 400)
+  }
+
+  const orderGroups = parseKhaltiOrderGroupsPayload(payload.order_groups)
+  if (!orderGroups.ok) {
+    return c.json({ valid: false, error: orderGroups.error }, 400)
+  }
+  if (orderGroups.value.length === 0) {
+    return c.json({ valid: false, error: 'order_groups is required.' }, 400)
+  }
+
+  try {
+    const coupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: new Date().toISOString()
+    })
+    if (!coupon) {
+      return c.json({ valid: false, error: 'Coupon code or QR payload is required.' }, 400)
+    }
+
+    return c.json({
+      valid: true,
+      data: {
+        coupon_id: coupon.couponId,
+        public_code: coupon.publicCode,
+        coupon_type: coupon.couponType,
+        discount_type: coupon.discountType,
+        discount_amount_paisa: coupon.totalDiscountPaisa,
+        allocations: Object.fromEntries(
+          orderGroups.value.map((group) => [group.event_id, coupon.allocatedByOrderId.get(group.order_id) ?? 0])
+        )
+      }
+    })
+  } catch (error) {
+    return c.json({ valid: false, error: error instanceof Error ? error.message : 'Coupon is invalid.' }, 409)
+  }
 })
 
 storefrontRoutes.post('/payments/khalti/initiate', async (c) => {
@@ -470,6 +506,17 @@ storefrontRoutes.post('/payments/khalti/initiate', async (c) => {
   const computedAmount = orderGroups.value.reduce((sum, group) => sum + group.total_amount_paisa, 0)
   if (computedAmount !== Math.floor(amountPaisa)) {
     return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
+  }
+  try {
+    const appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: new Date().toISOString()
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
 
   await ensureAppSettingsTable(db)
@@ -682,6 +729,17 @@ storefrontRoutes.post('/payments/esewa/initiate', async (c) => {
   const computedAmount = orderGroups.value.reduce((sum, group) => sum + group.total_amount_paisa, 0)
   if (computedAmount !== Math.floor(amountPaisa)) {
     return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
+  }
+  try {
+    const appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: new Date().toISOString()
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
 
   await ensureAppSettingsTable(db)
@@ -1076,6 +1134,18 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
   }
 
   const now = new Date().toISOString()
+  let appliedCoupon: AppliedCheckoutCoupon | null = null
+  try {
+    appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: now
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
+  }
   let completedOrders = 0
 
   for (const payment of linkedPayments.results) {
@@ -1110,62 +1180,6 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
             item.unit_price_paisa,
             item.subtotal_amount_paisa,
             item.total_amount_paisa,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.event_coupon_id && (group.event_coupon_discount_paisa ?? 0) > 0) {
-      const existingEventCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.event_coupon_id, order.id, actor.userId)
-        .first<{ id: string }>()
-      if (!existingEventCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.event_coupon_id,
-            order.id,
-            actor.userId,
-            group.event_coupon_discount_paisa ?? 0,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.order_coupon_id && (group.order_coupon_discount_paisa ?? 0) > 0) {
-      const existingOrderCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.order_coupon_id, order.id, actor.userId)
-        .first<{ id: string }>()
-      if (!existingOrderCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.order_coupon_id,
-            order.id,
-            actor.userId,
-            group.order_coupon_discount_paisa ?? 0,
             now
           )
           .run()
@@ -1219,6 +1233,12 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
     }
 
     completedOrders += 1
+  }
+
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
   }
 
   await ensureUserCartItemsTable(db)
@@ -2019,6 +2039,17 @@ crudRoutes.post('/payments/khalti/initiate', async (c) => {
   if (computedAmount !== Math.floor(amountPaisa)) {
     return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
   }
+  try {
+    const appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: new Date().toISOString()
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
+  }
 
   await ensureAppSettingsTable(db)
   const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
@@ -2230,6 +2261,17 @@ crudRoutes.post('/payments/esewa/initiate', async (c) => {
   const computedAmount = orderGroups.value.reduce((sum, group) => sum + group.total_amount_paisa, 0)
   if (computedAmount !== Math.floor(amountPaisa)) {
     return c.json({ error: 'amount_paisa does not match order_groups total.' }, 409)
+  }
+  try {
+    const appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: new Date().toISOString()
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
 
   await ensureAppSettingsTable(db)
@@ -2616,6 +2658,18 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
   }
 
   const now = new Date().toISOString()
+  let appliedCoupon: AppliedCheckoutCoupon | null = null
+  try {
+    appliedCoupon = await resolveAppliedCheckoutCoupon({
+      db,
+      input: parseCheckoutCouponFromPayload(payload),
+      orderGroups: orderGroups.value,
+      nowIso: now
+    })
+    assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
+  }
   let completedOrders = 0
 
   for (const payment of linkedPayments.results) {
@@ -2650,62 +2704,6 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
             item.unit_price_paisa,
             item.subtotal_amount_paisa,
             item.total_amount_paisa,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.event_coupon_id && (group.event_coupon_discount_paisa ?? 0) > 0) {
-      const existingEventCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.event_coupon_id, order.id, scope.userId)
-        .first<{ id: string }>()
-      if (!existingEventCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.event_coupon_id,
-            order.id,
-            scope.userId,
-            group.event_coupon_discount_paisa ?? 0,
-            now
-          )
-          .run()
-      }
-    }
-
-    if (group.order_coupon_id && (group.order_coupon_discount_paisa ?? 0) > 0) {
-      const existingOrderCoupon = await db
-        .prepare(
-          `SELECT id
-           FROM coupon_redemptions
-           WHERE coupon_id = ? AND order_id = ? AND customer_id = ?
-           LIMIT 1`
-        )
-        .bind(group.order_coupon_id, order.id, scope.userId)
-        .first<{ id: string }>()
-      if (!existingOrderCoupon?.id) {
-        await db
-          .prepare(
-            `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            group.order_coupon_id,
-            order.id,
-            scope.userId,
-            group.order_coupon_discount_paisa ?? 0,
             now
           )
           .run()
@@ -2759,6 +2757,12 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
     }
 
     completedOrders += 1
+  }
+
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: scope.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
   }
 
   await ensureUserCartItemsTable(db)
@@ -3476,6 +3480,10 @@ crudRoutes.post('/:resource', async (c) => {
     record.role = normalizedRole
   }
 
+  if (table.table === 'coupons') {
+    return createCouponRecords(c, db, scope, table, record, payload, now)
+  }
+
   const columns = Object.keys(record)
   if (columns.length === 0) {
     return c.json({ error: 'No valid columns were provided.' }, 400)
@@ -3597,6 +3605,13 @@ crudRoutes.patch('/:resource/:id', async (c) => {
 
   if (table.columns.includes('updated_at')) {
     record.updated_at = new Date().toISOString()
+  }
+
+  if (table.table === 'coupons') {
+    const normalizedCoupon = await normalizeCouponRecordForMutation(c, db, scope, record, payload, String(record.updated_at), false, c.req.param('id'))
+    if (normalizedCoupon instanceof Response) {
+      return normalizedCoupon
+    }
   }
 
   const columns = Object.keys(record)
@@ -4120,6 +4135,391 @@ function parseKhaltiOrderGroupsPayload(
   }
 
   return { ok: true, value: groups }
+}
+
+function parseCheckoutCouponFromPayload(payload: JsonRecord) {
+  return parseCouponCheckoutInput(payload.coupon ?? payload.coupon_code ?? payload.qr_payload ?? null)
+}
+
+async function resolveAppliedCheckoutCoupon(args: {
+  db: D1Database
+  input: CouponCheckoutInput | null
+  orderGroups: KhaltiOrderGroupDraft[]
+  nowIso: string
+}): Promise<AppliedCheckoutCoupon | null> {
+  if (!args.input) return null
+
+  const lookupCode = args.input.source === 'qr_payload'
+    ? parseCouponQrPayload(args.input.value)
+    : normalizeCouponPublicCode(args.input.value)
+  const rawCode = args.input.value.trim()
+  if (!lookupCode && !rawCode) {
+    throw new Error('Coupon code or QR payload is required.')
+  }
+
+  const coupon = await args.db
+    .prepare(
+      `SELECT
+         coupons.id,
+         coupons.coupon_type,
+         coupons.public_code,
+         coupons.qr_payload,
+         coupons.event_id,
+         coupons.organization_id,
+         coupons.code,
+         coupons.discount_type,
+         coupons.discount_amount_paisa,
+         coupons.discount_percentage,
+         coupons.min_order_amount_paisa,
+         coupons.start_datetime,
+         coupons.expires_at,
+         coupons.is_active,
+         coupons.redeemed_count,
+         events.end_datetime AS event_end_datetime
+       FROM coupons
+       LEFT JOIN events ON events.id = coupons.event_id
+       WHERE lower(coupons.public_code) = lower(?)
+          OR lower(coupons.code) = lower(?)
+          OR coupons.qr_payload = ?
+       LIMIT 1`
+    )
+    .bind(lookupCode, rawCode, rawCode)
+    .first<{
+      id: string
+      coupon_type: string
+      public_code: string
+      qr_payload: string | null
+      event_id: string | null
+      organization_id: string | null
+      code: string
+      discount_type: string
+      discount_amount_paisa: number | null
+      discount_percentage: number | null
+      min_order_amount_paisa: number | null
+      start_datetime: string | null
+      expires_at: string | null
+      is_active: number
+      redeemed_count: number
+      event_end_datetime: string | null
+    }>()
+
+  if (!coupon?.id) {
+    throw new Error('Coupon was not found.')
+  }
+  const couponType = normalizeCouponType(coupon.coupon_type)
+  if (!couponType) {
+    throw new Error('Coupon type is invalid.')
+  }
+  if (!coupon.is_active) {
+    throw new Error('Coupon is inactive.')
+  }
+  if (Number(coupon.redeemed_count ?? 0) > 0) {
+    throw new Error('Coupon has already been redeemed.')
+  }
+  const existingRedemption = await args.db
+    .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
+    .bind(coupon.id)
+    .first<{ id: string }>()
+  if (existingRedemption?.id) {
+    throw new Error('Coupon has already been redeemed.')
+  }
+
+  const eventIds = [...new Set(args.orderGroups.map((group) => group.event_id))]
+  const eventRows = await selectCheckoutEvents(args.db, eventIds)
+  const eligibility = getEligibleCouponOrderGroups({
+    couponType,
+    eventId: coupon.event_id,
+    organizationId: coupon.organization_id,
+    expiresAt: coupon.expires_at,
+    eventEndDatetime: coupon.event_end_datetime,
+    startDatetime: coupon.start_datetime,
+    isActive: Boolean(coupon.is_active),
+    redeemed: false,
+    minOrderAmountPaisa: coupon.min_order_amount_paisa
+  }, args.orderGroups, eventRows, args.nowIso)
+  if (!eligibility.ok) {
+    throw new Error(eligibility.error)
+  }
+
+  const totalDiscount = calculateCouponDiscount(
+    {
+      discountType: coupon.discount_type,
+      discountAmountPaisa: coupon.discount_amount_paisa,
+      discountPercentage: coupon.discount_percentage
+    },
+    eligibility.eligibleSubtotal
+  )
+  const allocatedByOrderId = allocateDiscountAcrossOrderGroups(eligibility.eligibleGroups, totalDiscount)
+
+  return {
+    couponId: coupon.id,
+    publicCode: coupon.public_code,
+    couponType,
+    discountType: coupon.discount_type,
+    totalDiscountPaisa: totalDiscount,
+    allocatedByOrderId
+  }
+}
+
+async function selectCheckoutEvents(db: D1Database, eventIds: string[]) {
+  if (eventIds.length === 0) return new Map<string, { id: string; organization_id: string | null }>()
+  const placeholders = eventIds.map(() => '?').join(', ')
+  const rows = await db
+    .prepare(`SELECT id, organization_id FROM events WHERE id IN (${placeholders})`)
+    .bind(...eventIds)
+    .all<{ id: string; organization_id: string | null }>()
+  return new Map(rows.results.map((row) => [row.id, row]))
+}
+
+function assertCheckoutCouponTotals(orderGroups: KhaltiOrderGroupDraft[], coupon: AppliedCheckoutCoupon | null) {
+  for (const group of orderGroups) {
+    const expectedDiscount = coupon?.allocatedByOrderId.get(group.order_id) ?? 0
+    const expectedTotal = Math.max(0, group.subtotal_amount_paisa - expectedDiscount)
+    if (group.discount_amount_paisa !== expectedDiscount || group.total_amount_paisa !== expectedTotal) {
+      throw new Error('Checkout totals do not match the applied coupon.')
+    }
+    if ((group.event_coupon_id || group.event_coupon_discount_paisa || group.order_coupon_id || group.order_coupon_discount_paisa) && !coupon) {
+      throw new Error('Checkout includes coupon fields without an applied coupon.')
+    }
+  }
+}
+
+async function redeemCheckoutCoupon(args: {
+  db: D1Database
+  coupon: AppliedCheckoutCoupon | null
+  customerId: string
+  orderGroups: KhaltiOrderGroupDraft[]
+  nowIso: string
+}) {
+  if (!args.coupon) return
+
+  const existingRedemption = await args.db
+    .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
+    .bind(args.coupon.couponId)
+    .first<{ id: string }>()
+  if (existingRedemption?.id) {
+    throw new Error('Coupon has already been redeemed.')
+  }
+
+  const primaryOrder = args.orderGroups.find((group) => (args.coupon?.allocatedByOrderId.get(group.order_id) ?? 0) > 0) ?? args.orderGroups[0]
+  await args.db
+    .prepare(
+      `INSERT INTO coupon_redemptions (id, coupon_id, order_id, customer_id, discount_amount_paisa, redeemed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(crypto.randomUUID(), args.coupon.couponId, primaryOrder.order_id, args.customerId, args.coupon.totalDiscountPaisa, args.nowIso)
+    .run()
+
+  await args.db
+    .prepare(
+      `UPDATE coupons
+       SET redeemed_count = 1,
+           updated_at = ?
+       WHERE id = ?
+         AND redeemed_count = 0`
+    )
+    .bind(args.nowIso, args.coupon.couponId)
+    .run()
+}
+
+async function createCouponRecords(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  table: TableConfig,
+  baseRecord: JsonRecord,
+  payload: JsonRecord,
+  now: string
+) {
+  const quantity = normalizeCouponCreateQuantity(payload.quantity)
+  if (!quantity) {
+    return c.json({ error: `quantity must be a whole number between 1 and ${MAX_COUPON_CREATE_QUANTITY}.` }, 400)
+  }
+
+  const createdRows: unknown[] = []
+  const issuedCodes = new Set<string>()
+  const issuedPublicCodes = new Set<string>()
+  const baseCode = baseRecord.code ?? baseRecord.public_code ?? baseRecord.id
+
+  for (let index = 0; index < quantity; index += 1) {
+    const record = { ...baseRecord }
+    record.id = crypto.randomUUID()
+    record.created_at = now
+    record.updated_at = now
+
+    if (quantity > 1) {
+      const code = buildCouponBatchCode(baseCode, index, quantity)
+      record.code = code
+      delete record.public_code
+      delete record.qr_payload
+    }
+
+    const normalizedCoupon = await normalizeCouponRecordForMutation(c, db, scope, record, payload, now, true, String(record.id ?? ''))
+    if (normalizedCoupon instanceof Response) {
+      return normalizedCoupon
+    }
+
+    const uniqueCodeKey = String(record.code ?? '').toLowerCase()
+    const uniquePublicCodeKey = String(record.public_code ?? '').toLowerCase()
+    if (issuedCodes.has(uniqueCodeKey) || issuedPublicCodes.has(uniquePublicCodeKey)) {
+      return c.json({ error: 'Generated coupon codes must be unique within the batch.' }, 409)
+    }
+    issuedCodes.add(uniqueCodeKey)
+    issuedPublicCodes.add(uniquePublicCodeKey)
+
+    const createAuthResult = await authorizeCreateRecord(c, db, scope, table.table, record)
+    if (createAuthResult instanceof Response) {
+      return createAuthResult
+    }
+
+    const columns = Object.keys(record)
+    if (columns.length === 0) {
+      return c.json({ error: 'No valid columns were provided.' }, 400)
+    }
+
+    const placeholders = columns.map(() => '?').join(', ')
+    const result = await executeMutation(c, () =>
+      db
+        .prepare(
+          `INSERT INTO ${table.table} (${columns.join(', ')}) VALUES (${placeholders}) RETURNING *`
+        )
+        .bind(...columns.map((column) => toD1Value(record[column])))
+        .first()
+    )
+
+    if (result instanceof Response) {
+      return result
+    }
+    createdRows.push(result)
+  }
+
+  const cache = createCache(c.env)
+  await cache.bumpResourceVersion(table.table)
+
+  const sanitizedRows = createdRows.map((row) => sanitizeRowForTable(table.table, row))
+  return c.json(
+    {
+      data: quantity === 1 ? sanitizedRows[0] : sanitizedRows,
+      count: sanitizedRows.length
+    },
+    201
+  )
+}
+
+async function normalizeCouponRecordForMutation(
+  c: AppContext,
+  db: D1Database,
+  scope: AuthScope,
+  record: JsonRecord,
+  payload: JsonRecord,
+  now: string,
+  isCreate: boolean,
+  currentId: string
+) {
+  const defaultCouponType = isCreate ? (scope.webrole === 'Admin' ? 'waahcoupon' : 'organizer') : undefined
+  const couponType = normalizeCouponType(record.coupon_type ?? defaultCouponType)
+  if (record.coupon_type !== undefined || isCreate) {
+    if (!couponType) {
+      return c.json({ error: 'coupon_type must be organizer or waahcoupon.' }, 400)
+    }
+    record.coupon_type = scope.webrole === 'Admin' && isCreate ? 'waahcoupon' : couponType
+  }
+
+  const effectiveCouponType = normalizeCouponType(record.coupon_type) ?? couponType ?? normalizeCouponType(payload.coupon_type)
+  if (scope.webrole === 'Organizations' && effectiveCouponType === 'waahcoupon') {
+    return c.json({ error: 'Only admins can issue Waah coupons.' }, 403)
+  }
+
+  const discountType = String(record.discount_type ?? (isCreate ? 'fixed' : '')).trim().toLowerCase()
+  if (record.discount_type !== undefined || isCreate) {
+    if (!['percentage', 'fixed'].includes(discountType)) {
+      return c.json({ error: 'discount_type must be percentage or fixed.' }, 400)
+    }
+    record.discount_type = discountType
+  }
+
+  if (record.code !== undefined || isCreate) {
+    const code = normalizeCouponPublicCode(record.code)
+    if (!code) return c.json({ error: 'code is required.' }, 400)
+    record.code = code
+  }
+
+  if (record.event_id) {
+    const event = await db
+      .prepare('SELECT id, organization_id, end_datetime FROM events WHERE id = ? LIMIT 1')
+      .bind(String(record.event_id))
+      .first<{ id: string; organization_id: string | null; end_datetime: string | null }>()
+    if (!event?.id) {
+      return c.json({ error: 'event_id does not reference an existing event.' }, 400)
+    }
+    if (effectiveCouponType === 'organizer') {
+      record.organization_id = record.organization_id || event.organization_id
+    }
+    if (scope.webrole === 'Organizations' && !scope.organizationIds.includes(String(event.organization_id ?? ''))) {
+      return c.json({ error: 'Forbidden for this event.' }, 403)
+    }
+    if (!record.expires_at && event.end_datetime) {
+      record.expires_at = event.end_datetime
+    }
+  }
+
+  if (effectiveCouponType === 'organizer') {
+    const organizationId = String(record.organization_id ?? payload.organization_id ?? '').trim()
+    if (!organizationId) {
+      return c.json({ error: 'organization_id is required for organizer coupons.' }, 400)
+    }
+    if (scope.webrole === 'Organizations' && !scope.organizationIds.includes(organizationId)) {
+      return c.json({ error: 'Forbidden for this organization.' }, 403)
+    }
+    record.organization_id = organizationId
+  }
+
+  if (effectiveCouponType === 'waahcoupon') {
+    record.organization_id = null
+  }
+
+  if (!record.expires_at && isCreate) {
+    record.expires_at = addCouponExpiryYears(now, COUPON_EXPIRY_YEARS)
+  }
+  if (!record.issued_at && isCreate) {
+    record.issued_at = now
+  }
+  if (!record.issued_by_user_id && isCreate) {
+    record.issued_by_user_id = scope.userId
+  }
+  if (isCreate) {
+    record.max_redemptions = 1
+    record.redeemed_count = Number(record.redeemed_count ?? 0)
+  }
+
+  if ((record.public_code !== undefined || isCreate) && effectiveCouponType) {
+    record.public_code = buildCouponPublicCode(effectiveCouponType, record.public_code || record.code || record.id)
+  }
+  if ((record.qr_payload !== undefined || isCreate) && record.public_code) {
+    record.qr_payload = buildCouponQrPayload(String(record.public_code))
+  }
+
+  if (record.public_code) {
+    const existing = await db
+      .prepare('SELECT id FROM coupons WHERE lower(public_code) = lower(?) AND id != ? LIMIT 1')
+      .bind(String(record.public_code), currentId)
+      .first<{ id: string }>()
+    if (existing?.id) {
+      return c.json({ error: 'public_code must be globally unique.' }, 409)
+    }
+  }
+
+  if (record.code) {
+    const existing = await db
+      .prepare('SELECT id FROM coupons WHERE lower(code) = lower(?) AND id != ? LIMIT 1')
+      .bind(String(record.code), currentId)
+      .first<{ id: string }>()
+    if (existing?.id) {
+      return c.json({ error: 'Coupon code must be globally unique.' }, 409)
+    }
+  }
+
+  return null
 }
 
 function buildPaymentSettingsFromStored(
@@ -5383,13 +5783,19 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
     case 'coupons':
       return {
         allowed: true,
-        clause: `EXISTS (
-          SELECT 1
-          FROM events
-          WHERE events.id = coupons.event_id
-            AND events.organization_id IN (${placeholders})
+        clause: `(
+          coupons.coupon_type = 'organizer'
+          AND (
+            coupons.organization_id IN (${placeholders})
+            OR EXISTS (
+              SELECT 1
+              FROM events
+              WHERE events.id = coupons.event_id
+                AND events.organization_id IN (${placeholders})
+            )
+          )
         )`,
-        bindings: orgBindings
+        bindings: [...orgBindings, ...orgBindings]
       }
     case 'coupon_redemptions':
       return {
@@ -5397,11 +5803,21 @@ function buildAccessPolicy(tableName: string, scope: AuthScope): AccessPolicy {
         clause: `EXISTS (
           SELECT 1
           FROM coupons
-          JOIN events ON events.id = coupons.event_id
           WHERE coupons.id = coupon_redemptions.coupon_id
-            AND events.organization_id IN (${placeholders})
+            AND (
+              coupons.coupon_type = 'organizer'
+              AND (
+                coupons.organization_id IN (${placeholders})
+                OR EXISTS (
+                  SELECT 1
+                  FROM events
+                  WHERE events.id = coupons.event_id
+                    AND events.organization_id IN (${placeholders})
+                )
+              )
+            )
         )`,
-        bindings: orgBindings
+        bindings: [...orgBindings, ...orgBindings]
       }
     default:
       return { allowed: false, clause: '1 = 0', bindings: [] }
@@ -5491,9 +5907,6 @@ async function authorizeCreateRecord(
       record.scanned_by = scope.userId
       return null
     case 'coupons':
-      if (!(await inScope('SELECT 1 as ok FROM events WHERE events.id = ?', record.event_id))) {
-        return c.json({ error: 'Forbidden for this event.' }, 403)
-      }
       return null
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)
@@ -5603,34 +6016,8 @@ async function authorizeCustomerCreateRecord(
       return null
     }
     case 'coupon_redemptions': {
-      const couponId = typeof record.coupon_id === 'string' ? record.coupon_id : ''
-      const orderId = typeof record.order_id === 'string' ? record.order_id : ''
-      const customerId = typeof record.customer_id === 'string' ? record.customer_id : ''
-      if (!couponId || !orderId || !customerId) {
-        return c.json({ error: 'coupon_id, order_id, and customer_id are required.' }, 400)
-      }
-      if (customerId !== scope.userId) {
-        return c.json({ error: 'coupon redemptions must belong to the authenticated user.' }, 403)
-      }
-
-      const allowed = await db
-        .prepare(
-          `SELECT 1 AS ok
-           FROM orders
-           JOIN coupons ON coupons.id = ?
-           WHERE orders.id = ?
-             AND orders.customer_id = ?
-             AND coupons.event_id = orders.event_id
-           LIMIT 1`
-        )
-        .bind(couponId, orderId, scope.userId)
-        .first<{ ok: number }>()
-
-      if (!allowed?.ok) {
-        return c.json({ error: 'Forbidden coupon for this order.' }, 403)
-      }
-
-      return null
+      void db
+      return c.json({ error: 'Coupons can only be redeemed through checkout.' }, 403)
     }
     default:
       return c.json({ error: 'Forbidden for this role.' }, 403)

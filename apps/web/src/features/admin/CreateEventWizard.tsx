@@ -16,10 +16,10 @@ import { EventLocationPopup, ConfirmDialog } from "./AdminApp";
 interface CouponDraft {
   localId: string
   code: string
+  quantity: string
   discount_type: 'percentage' | 'fixed'
   discount_percentage: string
   discount_amount_npr: string
-  max_redemptions: string
   description: string
 }
 
@@ -27,10 +27,10 @@ function emptyDraft(): CouponDraft {
   return {
     localId: '',
     code: '',
+    quantity: '1',
     discount_type: 'percentage',
     discount_percentage: '',
     discount_amount_npr: '',
-    max_redemptions: '',
     description: ''
   }
 }
@@ -61,6 +61,7 @@ function emptyTicketTypeDraft(): TicketTypeDraft {
 
 const EVENT_TYPES = ['concert', 'theatre', 'sports', 'comedy', 'festival', 'food', 'conference', 'workshop', 'other']
 const STATUSES = ['draft', 'published', 'cancelled', 'archived']
+const MAX_COUPON_BATCH_QUANTITY = 500
 
 function slugify(value: string) {
   return value.toLowerCase()
@@ -68,6 +69,11 @@ function slugify(value: string) {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
+}
+
+function normalizeCouponDraftQuantity(value: string) {
+  const quantity = Number(value)
+  return Number.isInteger(quantity) && quantity >= 1 && quantity <= MAX_COUPON_BATCH_QUANTITY ? quantity : 1
 }
 
 export function CreateEventWizard({
@@ -136,6 +142,7 @@ export function CreateEventWizard({
   const [coupons, setCoupons] = useState<CouponDraft[]>([])
   const [couponDraft, setCouponDraft] = useState<CouponDraft>(emptyDraft())
   const [couponError, setCouponError] = useState('')
+  const couponRecordCount = coupons.reduce((total, coupon) => total + normalizeCouponDraftQuantity(coupon.quantity), 0)
 
   // Save state
   const [isSaving, setIsSaving] = useState(false)
@@ -376,6 +383,8 @@ export function CreateEventWizard({
         const couponBody: Record<string, unknown> = {
           event_id: eventId,
           code: coupon.code.trim().toUpperCase(),
+          quantity: normalizeCouponDraftQuantity(coupon.quantity),
+          coupon_type: isOrgRole ? 'organizer' : 'waahcoupon',
           discount_type: coupon.discount_type,
           is_active: 1
         }
@@ -385,7 +394,6 @@ export function CreateEventWizard({
         if (coupon.discount_type === 'fixed' && coupon.discount_amount_npr) {
           couponBody.discount_amount_paisa = Math.round(Number(coupon.discount_amount_npr) * 100)
         }
-        if (coupon.max_redemptions) couponBody.max_redemptions = Number(coupon.max_redemptions)
         if (coupon.description.trim()) couponBody.description = coupon.description.trim()
         await fetchJson<ApiMutationResponse>('/api/coupons', {
           method: 'POST',
@@ -404,8 +412,13 @@ export function CreateEventWizard({
 
   function addCoupon() {
     if (!couponDraft.code.trim()) { setCouponError('Coupon code is required.'); return }
+    const quantity = Number(couponDraft.quantity)
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_COUPON_BATCH_QUANTITY) {
+      setCouponError(`Quantity must be a whole number between 1 and ${MAX_COUPON_BATCH_QUANTITY}.`)
+      return
+    }
     setCouponError('')
-    setCoupons(prev => [...prev, { ...couponDraft, localId: Date.now().toString() }])
+    setCoupons(prev => [...prev, { ...couponDraft, quantity: String(quantity), localId: Date.now().toString() }])
     setCouponDraft(emptyDraft())
   }
 
@@ -890,7 +903,7 @@ export function CreateEventWizard({
               <div className="wizard-coupon-form">
                 <div className="wizard-field-row">
                   <label className="wizard-label">
-                    <span>Coupon Code <em className="required-indicator">*</em></span>
+                    <span>Base Coupon Code <em className="required-indicator">*</em></span>
                     <input
                       className="wizard-input wizard-input-mono"
                       placeholder="e.g. EARLY20"
@@ -943,15 +956,16 @@ export function CreateEventWizard({
                   )}
 
                   <label className="wizard-label">
-                    <span>Max Redemptions</span>
+                    <span>Quantity</span>
                     <input
                       className="wizard-input"
                       inputMode="numeric"
+                      max={MAX_COUPON_BATCH_QUANTITY}
                       min={1}
-                      placeholder="Unlimited"
+                      placeholder="1"
                       type="number"
-                      value={couponDraft.max_redemptions}
-                      onChange={e => setCouponDraft(d => ({ ...d, max_redemptions: e.target.value }))}
+                      value={couponDraft.quantity}
+                      onChange={e => setCouponDraft(d => ({ ...d, quantity: e.target.value }))}
                     />
                   </label>
                 </div>
@@ -981,13 +995,13 @@ export function CreateEventWizard({
                     <li key={c.localId} className="wizard-coupon-item">
                       <span className="coupon-code-badge">{c.code}</span>
                       <span className="coupon-detail">
+                        {normalizeCouponDraftQuantity(c.quantity)} code{normalizeCouponDraftQuantity(c.quantity) !== 1 ? 's' : ''}
+                      </span>
+                      <span className="coupon-detail">
                         {c.discount_type === 'percentage'
                           ? `${c.discount_percentage || '?'}% off`
                           : `NPR ${c.discount_amount_npr || '?'} off`}
                       </span>
-                      {c.max_redemptions ? (
-                        <span className="coupon-detail">max {c.max_redemptions} uses</span>
-                      ) : null}
                       {c.description ? <span className="coupon-detail coupon-desc">{c.description}</span> : null}
                       <button
                         aria-label={`Remove coupon ${c.code}`}
@@ -1068,7 +1082,7 @@ export function CreateEventWizard({
                   onClick={() => void handleSave()}
                 >
                   {isSaving ? <span aria-hidden="true" className="button-spinner" /> : <Save size={16} />}
-                  {isSaving ? 'Saving...' : `Save with ${coupons.length} coupon${coupons.length !== 1 ? 's' : ''}`}
+                  {isSaving ? 'Saving...' : `Save with ${couponRecordCount} coupon${couponRecordCount !== 1 ? 's' : ''}`}
                 </button>
               </>
             )}
