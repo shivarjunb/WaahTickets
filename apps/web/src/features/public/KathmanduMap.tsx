@@ -342,7 +342,11 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
               bearing={activeCard.event.bearing}
               imageUrl={activeCard.event.imageUrl}
               below={below}
-              onViewDetails={onViewDetails}
+              onViewDetails={(eventId) => {
+                cancelClose()
+                setActiveCard(null)
+                onViewDetails(eventId)
+              }}
               onDirections={() => {
                 const { lat, lng } = activeCard.event
                 window.open(

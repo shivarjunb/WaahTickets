@@ -95,6 +95,7 @@ interface HeroLiveMapProps {
   onSearchChange?: (value: string) => void
   onSearchSubmit?: () => void
   onNavigate?: (path: string) => void
+  onViewEventDetails?: (eventId: string) => void
   realEvents?: PublicEvent[]
 }
 
@@ -103,6 +104,7 @@ export function HeroLiveMap({
   onSearchChange,
   onSearchSubmit,
   onNavigate,
+  onViewEventDetails,
   realEvents = [],
 }: HeroLiveMapProps) {
   const [selectedCategory, setSelectedCategory] = useState('all')
@@ -178,6 +180,10 @@ export function HeroLiveMap({
   }
 
   const handleViewDetails = (eventId: string) => {
+    if (onViewEventDetails) {
+      onViewEventDetails(eventId)
+      return
+    }
     if (onNavigate) onNavigate(`/events/${eventId}`)
   }
 

@@ -911,6 +911,7 @@ function PublicApp({
   const [cartHoldToken, setCartHoldToken] = useState('')
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [isCartExpiredNoticeOpen, setIsCartExpiredNoticeOpen] = useState(false)
+  const [isCartEmptyNoticeOpen, setIsCartEmptyNoticeOpen] = useState(false)
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [processPaymentPhase, setProcessPaymentPhase] = useState<'idle' | 'processing' | 'success' | 'failure'>('idle')
   const [publicPaymentSettings, setPublicPaymentSettings] = useState<PublicPaymentSettingsData>(defaultPublicPaymentSettings)
@@ -1109,6 +1110,13 @@ function PublicApp({
     }, expiresIn)
     return () => window.clearTimeout(timer)
   }, [cartHoldExpiresAt])
+
+  useEffect(() => {
+    if (!isCartOpen) return
+    if (cartGroups.length > 0) return
+    setIsCartOpen(false)
+    setIsCartEmptyNoticeOpen(true)
+  }, [cartGroups.length, isCartOpen])
 
   useEffect(() => {
     const eventIds = new Set(cartGroups.map((group) => group.event_id))
@@ -2203,6 +2211,9 @@ function PublicApp({
       {isCartExpiredNoticeOpen ? (
         <CartExpiredNoticeModal onClose={() => setIsCartExpiredNoticeOpen(false)} />
       ) : null}
+      {isCartEmptyNoticeOpen ? (
+        <CartEmptyNoticeToast onClose={() => setIsCartEmptyNoticeOpen(false)} />
+      ) : null}
     </main>
   )
 
@@ -2947,28 +2958,44 @@ function SingleEventCartConfirmModal({
 }
 
 function CartExpiredNoticeModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      onClose()
+    }, 5000)
+    return () => window.clearTimeout(timer)
+  }, [onClose])
+
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="record-modal reservation-modal" role="dialog" aria-modal="true" aria-labelledby="cart-expired-title">
-        <header className="record-modal-header">
-          <div>
-            <p className="admin-breadcrumb">Cart</p>
-            <h2 id="cart-expired-title">Cart expired</h2>
-          </div>
-          <button aria-label="Close cart expired notice" type="button" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </header>
-        <div className="record-modal-body">
-          <p className="checkout-hint">Your previous cart hold expired while you were signed out.</p>
-        </div>
-        <footer className="record-modal-actions">
-          <button className="primary-admin-button" type="button" onClick={onClose}>
-            Browse tickets
-          </button>
-        </footer>
-      </section>
-    </div>
+    <aside className="cart-expired-toast" aria-live="polite" aria-atomic="true" role="status">
+      <div className="cart-expired-toast-copy">
+        <p className="cart-expired-toast-title">Cart expired</p>
+        <p className="cart-expired-toast-message">Your previous cart hold expired while you were signed out.</p>
+      </div>
+      <button aria-label="Close cart expired notice" className="cart-expired-toast-close" type="button" onClick={onClose}>
+        <X size={18} />
+      </button>
+    </aside>
+  )
+}
+
+function CartEmptyNoticeToast({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      onClose()
+    }, 5000)
+    return () => window.clearTimeout(timer)
+  }, [onClose])
+
+  return (
+    <aside className="cart-expired-toast" aria-live="polite" aria-atomic="true" role="status">
+      <div className="cart-expired-toast-copy">
+        <p className="cart-expired-toast-title">Your cart is empty</p>
+        <p className="cart-expired-toast-message">Add tickets to your cart to continue checkout.</p>
+      </div>
+      <button aria-label="Close empty cart notice" className="cart-expired-toast-close" type="button" onClick={onClose}>
+        <X size={18} />
+      </button>
+    </aside>
   )
 }
 
