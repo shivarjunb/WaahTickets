@@ -2621,6 +2621,28 @@ function PublicHeader({
   onSearchChange: (value: string) => void
 }) {
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false)
+  const [isNavSearchOpen, setIsNavSearchOpen] = useState(false)
+  const navSearchOverlayRef = useRef<HTMLDivElement>(null)
+  const navSearchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isNavSearchOpen) return
+    navSearchInputRef.current?.focus()
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIsNavSearchOpen(false)
+    }
+    function handleClick(e: MouseEvent) {
+      if (navSearchOverlayRef.current && !navSearchOverlayRef.current.contains(e.target as Node)) {
+        setIsNavSearchOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    document.addEventListener('mousedown', handleClick)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [isNavSearchOpen])
 
   const navItems = [
     { label: 'Events', target: '#events' },
@@ -2683,6 +2705,14 @@ function PublicHeader({
           </div>
           <div className="marketplace-header-actions">
             <button
+              className="marketplace-nav-search-toggle"
+              type="button"
+              aria-label={isNavSearchOpen ? 'Close search' : 'Search'}
+              onClick={() => setIsNavSearchOpen(v => !v)}
+            >
+              {isNavSearchOpen ? <X size={18} /> : <Search size={18} />}
+            </button>
+            <button
               aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
               className="marketplace-cart-button"
               type="button"
@@ -2720,6 +2750,31 @@ function PublicHeader({
           </div>
         </div>
       </nav>
+
+      {isNavSearchOpen ? (
+        <div className="nav-search-overlay" ref={navSearchOverlayRef}>
+          <Search size={17} className="nav-search-overlay-icon" />
+          <input
+            ref={navSearchInputRef}
+            className="nav-search-overlay-input"
+            type="search"
+            placeholder="Search events, artists, venues..."
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setIsNavSearchOpen(false) }}
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              className="nav-search-overlay-clear"
+              aria-label="Clear search"
+              onClick={() => onSearchChange('')}
+            >
+              <X size={15} />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {isLogoutConfirmOpen ? (
         <div className="logout-confirm-backdrop" onClick={() => setIsLogoutConfirmOpen(false)}>

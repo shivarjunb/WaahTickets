@@ -7,8 +7,6 @@
   max-height: 82vh;
   background: linear-gradient(135deg, #07081a 0%, #0d1124 55%, #070a1e 100%);
   overflow: hidden;
-  display: flex;
-  align-items: center;
 }
 
 .hero-live-map-section::before {
@@ -24,26 +22,35 @@
   z-index: 0;
 }
 
-.hero-live-map-container {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 1fr 1.1fr;
-  gap: 2rem;
-  padding: 3rem 3rem 3rem 4rem;
-  max-width: 1440px;
-  margin: 0 auto;
+/* ─── Time badge ─────────────────────────────────────────────────────────── */
+
+.hero-map-time-badge {
+  display: inline-flex;
   align-items: center;
-  position: relative;
-  z-index: 1;
+  padding: 5px 13px;
+  background: rgba(10, 6, 28, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(233, 30, 99, 0.22);
+  border-radius: 20px;
+  font-size: 0.73rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+  letter-spacing: 0.6px;
+  align-self: flex-start;
 }
 
-/* ─── Left: Content ────────────────────────────────────────────────────────── */
+/* ─── Left: Content overlay ──────────────────────────────────────────────── */
 
 .hero-live-map-content {
+  position: absolute;
+  top: 2.5rem;
+  left: 2.5rem;
+  z-index: 10;
+  max-width: 420px;
   display: flex;
   flex-direction: column;
-  gap: 1.4rem;
-  z-index: 10;
+  gap: 0.9rem;
 }
 
 .hero-live-map-header {
@@ -81,10 +88,10 @@
   max-width: 440px;
 }
 
-/* ─── Search ───────────────────────────────────────────────────────────────── */
+/* ─── Search — hidden by default, shown only in fullscreen ────────────────── */
 
 .hero-live-map-search {
-  display: flex;
+  display: none;
   gap: 0.625rem;
   align-items: stretch;
 }
@@ -230,20 +237,15 @@
   50%       { opacity: 0.7; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
 }
 
-/* ─── Map canvas ────────────────────────────────────────────────────────────── */
+/* ─── Map canvas — full-bleed behind content overlay ──────────────────────── */
 
 .hero-live-map-canvas-wrapper {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: clamp(420px, 58vh, 560px);
-  border-radius: 16px;
+  height: 100%;
   overflow: hidden;
-  border: 1px solid rgba(233, 30, 99, 0.14);
-  box-shadow:
-    0 0 0 1px rgba(233, 30, 99, 0.06),
-    0 24px 60px rgba(0, 0, 0, 0.65),
-    0 0 80px rgba(233, 30, 99, 0.07);
-  z-index: 1;
+  z-index: 0;
 }
 
 .hero-live-map-canvas {
@@ -1066,58 +1068,169 @@
   background: #070c1a;
 }
 
-/* ─── Native fullscreen ───────────────────────────────────────────────────── */
+/* ─── CSS fullscreen (position:fixed so portalled modals stay visible) ──────── */
 
-.hero-live-map-canvas:fullscreen {
+.hero-live-map-canvas--fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 9000 !important;
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
   background: #07081a;
-  width: 100vw;
-  height: 100vh;
 }
 
-.hero-live-map-canvas:fullscreen .kathmandu-map-container {
-  height: 100vh;
+.hero-live-map-canvas--fullscreen .kathmandu-map-container,
+.hero-live-map-canvas--fullscreen .kathmandu-map-container .leaflet-container {
+  height: 100vh !important;
+}
+
+/* ─── Fullscreen HUD — search, distance chips, visual overlays ────────────── */
+
+/* Content overlay is hidden in fullscreen — prevents z-index bleed on mobile */
+body.map-is-fullscreen .hero-live-map-content {
+  display: none !important;
+}
+
+/* Lock body scroll so page content can't peek through the fixed map */
+body.map-is-fullscreen {
+  overflow: hidden;
+}
+
+/* Search bar floats to top-left in fullscreen */
+body.map-is-fullscreen .hero-live-map-search {
+  display: flex !important;
+  position: fixed !important;
+  top: 20px;
+  left: 20px;
+  z-index: 9002;
+  width: clamp(260px, 34vw, 400px);
+  animation: fsSearchSlideIn 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+body.map-is-fullscreen .hero-search-button {
+  display: none;
+}
+
+/* Distance / locate overlay floats to bottom-left */
+body.map-is-fullscreen .hero-map-locate-overlay {
+  position: fixed !important;
+  bottom: 20px;
+  left: 20px;
+  z-index: 9002;
+  animation: fsSlideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Scan line and HUD frame stay above the fixed map */
+body.map-is-fullscreen .hero-map-scan-line,
+body.map-is-fullscreen .hero-map-hud-frame {
+  position: fixed !important;
+  inset: 0;
+  z-index: 9001;
+  border-radius: 0;
+}
+
+/* Edge fade blends into hero bg — not meaningful fullscreen */
+body.map-is-fullscreen .hero-map-edge-fade {
+  display: none;
+}
+
+@keyframes fsSearchSlideIn {
+  from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes fsSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Share and Save buttons — no-op, hide in fullscreen */
+body.map-is-fullscreen .event-detail-actions {
+  display: none;
+}
+
+/* ─── Modal lifted above the fullscreen map ───────────────────────────────── */
+
+body.map-is-fullscreen .modal-backdrop {
+  z-index: 9500;
+  background: rgba(5, 7, 20, 0.82);
+}
+
+/* Dark theme for EventDetailsModal when shown over the fullscreen map */
+body.map-is-fullscreen .event-detail-page {
+  background: #0d1124;
+  border: 1px solid rgba(233, 30, 99, 0.18);
+  box-shadow: 0 0 0 1px rgba(233, 30, 99, 0.06), 0 32px 80px rgba(0, 0, 0, 0.75);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+body.map-is-fullscreen .event-detail-topbar {
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
+body.map-is-fullscreen .event-detail-topbar button,
+body.map-is-fullscreen .event-detail-topbar span,
+body.map-is-fullscreen .event-detail-topbar nav {
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+}
+
+body.map-is-fullscreen .event-detail-sidebar h2 {
+  color: #ffffff;
+}
+
+body.map-is-fullscreen .event-detail-facts p {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+body.map-is-fullscreen .event-detail-body {
+  background: #0d1124;
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+body.map-is-fullscreen .event-detail-body h3,
+body.map-is-fullscreen .event-detail-body p,
+body.map-is-fullscreen .event-detail-body summary {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+body.map-is-fullscreen .event-detail-order-summary {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+body.map-is-fullscreen .event-detail-order-summary strong {
+  color: #ffffff;
 }
 
 /* ─── Responsive ─────────────────────────────────────────────────────────────── */
 
-@media (max-width: 1100px) {
-  .hero-live-map-container {
-    grid-template-columns: 1fr;
-    padding: 2rem 2rem;
-    gap: 1.5rem;
-  }
-
+@media (max-width: 768px) {
   .hero-live-map-section {
-    min-height: auto;
+    min-height: 60vh;
     max-height: none;
   }
 
-  .hero-live-map-canvas-wrapper {
-    height: 380px;
-  }
-}
-
-@media (max-width: 768px) {
-  .hero-live-map-container {
-    padding: 1.5rem;
-    gap: 1.25rem;
+  .hero-live-map-content {
+    top: 1.5rem;
+    left: 1.25rem;
+    max-width: calc(100vw - 2.5rem);
+    gap: 0.6rem;
   }
 
-  .hero-live-map-canvas-wrapper {
-    height: 320px;
+  .hero-live-map-title {
+    font-size: clamp(1.8rem, 7vw, 2.4rem);
   }
 
-  .hero-live-map-search {
-    flex-direction: row;
+  .hero-live-map-subtitle {
+    font-size: 0.88rem;
   }
 
   .hero-category-chips {
-    gap: 0.4rem;
-  }
-
-  .hero-category-chip {
-    padding: 6px 11px;
-    font-size: 0.78rem;
+    display: none;
   }
 
   .hero-map-sponsor-zone {
@@ -1135,26 +1248,17 @@
     right: 10px;
     font-size: 0.72rem;
   }
-
-  /* On mobile show pin card on tap via React state — no CSS :active hack needed */
 }
 
 @media (max-width: 480px) {
-  .hero-live-map-container {
-    padding: 1.25rem 1rem;
+  .hero-live-map-section {
+    min-height: 55vh;
   }
 
-  .hero-live-map-canvas-wrapper {
-    height: 270px;
-  }
-
-  .hero-live-map-search {
-    flex-direction: column;
-  }
-
-  .hero-search-button {
-    padding: 11px;
-    text-align: center;
+  .hero-live-map-content {
+    top: 1rem;
+    left: 1rem;
+    gap: 0.5rem;
   }
 
   .hero-map-controls {

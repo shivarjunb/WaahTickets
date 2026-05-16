@@ -126,24 +126,27 @@ export function NepalMap({
   const [colorMatch, setColorMatch] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  // Track native fullscreen state and resize Leaflet when it changes
+  // CSS fullscreen — keeps portalled modals (EventDetailsModal) visible above the map.
+  // Native requestFullscreen hides everything outside the fullscreen element, so we
+  // use position:fixed instead and boost the modal z-index via a body class.
   useEffect(() => {
-    function onFsChange() {
-      const fs = document.fullscreenElement === rootRef.current
-      setIsFullscreen(fs)
-      setTimeout(() => mapRef.current?.invalidateSize(), 80)
+    document.body.classList.toggle('map-is-fullscreen', isFullscreen)
+    setTimeout(() => mapRef.current?.invalidateSize(), 80)
+    return () => document.body.classList.remove('map-is-fullscreen')
+  }, [isFullscreen])
+
+  // Escape key exits CSS fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIsFullscreen(false)
     }
-    document.addEventListener('fullscreenchange', onFsChange)
-    return () => document.removeEventListener('fullscreenchange', onFsChange)
-  }, [])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isFullscreen])
 
   function toggleFullscreen() {
-    if (!rootRef.current) return
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    } else {
-      rootRef.current.requestFullscreen()
-    }
+    setIsFullscreen((v) => !v)
   }
 
   const scheduleClose = () => {
@@ -186,11 +189,23 @@ export function NepalMap({
 
     // Leaflet measures the container at init time. When the map is embedded
     // inside an animated popup, the container may report 0×0 on first paint.
-    // Calling invalidateSize after a tick forces a correct re-measure.
     const sizeTimer = setTimeout(() => map.invalidateSize(), 50)
+
+    // Intro zoom-out: only on the hero map (not mini-maps or admin previews).
+    // Start close on Kathmandu then slowly fly out to show all of Nepal.
+    let flyTimer: ReturnType<typeof setTimeout> | null = null
+    if (!disableHover && !minimal) {
+      flyTimer = setTimeout(() => {
+        map.flyTo([28.4, 84.12], 6.5, {
+          duration: 2.8,
+          easeLinearity: 0.12,
+        })
+      }, 400)
+    }
 
     return () => {
       clearTimeout(sizeTimer)
+      if (flyTimer) clearTimeout(flyTimer)
       map.remove()
       mapRef.current = null
     }
@@ -346,7 +361,7 @@ export function NepalMap({
     activeCard ? (CATEGORY_CONFIG[activeCard.event.category]?.color ?? '#e91e63') : '#e91e63'
 
   return (
-    <div ref={rootRef} className={`hero-live-map-canvas${colorMatch ? ' map-color-match' : ''}`}>
+    <div ref={rootRef} className={`hero-live-map-canvas${colorMatch ? ' map-color-match' : ''}${isFullscreen ? ' hero-live-map-canvas--fullscreen' : ''}`}>
       <div ref={containerRef} className="kathmandu-map-container" />
 
       {!disableHover && activeCard && (() => {
