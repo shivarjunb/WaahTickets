@@ -13,8 +13,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "waah-tickets-map-prototype",
-      "database_id": "341ea28a-1962-4551-84dc-4e081ba64f76",
+      "database_name": "waah-tickets-sandbox",
+      "database_id": "8382ba7d-a43d-41e1-896d-8d897aeb5f11",
       "migrations_dir": "migrations"
     }
   ],

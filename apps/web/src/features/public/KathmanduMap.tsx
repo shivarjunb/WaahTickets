@@ -184,11 +184,8 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
       marker.on('mouseout', scheduleClose)
 
       marker.on('click', () => {
-        setActiveCard((prev) => {
-          if (prev?.event.id === event.id) return null
-          const pt = map.latLngToContainerPoint([event.lat, event.lng])
-          return { event, x: pt.x, y: pt.y }
-        })
+        const pt = map.latLngToContainerPoint([event.lat, event.lng])
+        setActiveCard({ event, x: pt.x, y: pt.y })
       })
 
       markersRef.current.push(marker)
