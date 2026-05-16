@@ -11,3 +11,4 @@ android/
 ios/
 .expo/
 apps/mobile/.expo/devices.json
+.claude/settings.json
