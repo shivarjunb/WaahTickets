@@ -2,8 +2,9 @@ import { useState, useRef, useEffect, type Dispatch, type SetStateAction } from 
 import {
   Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon, RotateCcw,
   CalendarDays, Building2, MapPin, Clock, ChevronLeft, ChevronRight,
-  Upload, X, Plus, Trash2, Save, Image, Check, Tag, Ticket
+  Upload, X, Plus, Trash2, Save, Image, Check, Tag, Ticket, Map
 } from "lucide-react";
+import { EventMapWizard } from "./EventMapWizard";
 import type { ApiRecord, ApiListResponse, ApiMutationResponse, EventLocationDraft } from "../../shared/types";
 import {
   fetchJson, getErrorMessage, formatEventDate, formatEventTime,
@@ -85,6 +86,7 @@ export function CreateEventWizard({
   const isOrgRole = webRole === 'Organizations'
   const isEditing = Boolean(initialEvent?.id)
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [isMapWizardOpen, setIsMapWizardOpen] = useState(false)
 
   // Step 1 fields
   const [name, setName] = useState(String(initialEvent?.name ?? ''))
@@ -1009,9 +1011,22 @@ export function CreateEventWizard({
 
         {/* Footer */}
         <footer className="record-modal-actions wizard-footer">
-          <button disabled={isSaving} type="button" onClick={step === 1 ? onClose : handleBack}>
-            {step === 1 ? 'Cancel' : <><ChevronLeft size={15} /> Back</>}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button disabled={isSaving} type="button" onClick={step === 1 ? onClose : handleBack}>
+              {step === 1 ? 'Cancel' : <><ChevronLeft size={15} /> Back</>}
+            </button>
+            {isEditing && (
+              <button
+                type="button"
+                className="primary-admin-button"
+                style={{ background: 'linear-gradient(135deg,#e91e63,#c2185b)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={() => setIsMapWizardOpen(true)}
+                title="Configure how this event appears on the hero map"
+              >
+                <Map size={15} /> Map Setup
+              </button>
+            )}
+          </div>
 
           <div className="wizard-footer-right">
             {step < 4 ? (
@@ -1060,6 +1075,14 @@ export function CreateEventWizard({
           </div>
         </footer>
       </section>
+
+      {isMapWizardOpen && initialEvent && (
+        <EventMapWizard
+          event={initialEvent}
+          onClose={() => setIsMapWizardOpen(false)}
+          onSaved={() => { setIsMapWizardOpen(false); void onSaved() }}
+        />
+      )}
 
       {confirmDeleteTT ? (
         <ConfirmDialog

@@ -11,6 +11,8 @@ import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 import { HomepageLoader } from './HomepageLoader';
+import { HeroLiveMap } from './HeroLiveMap';
+import './heroMapStyles.css';
 
 export default function PublicApp({
   currentPath,
@@ -1306,45 +1308,19 @@ export default function PublicApp({
         </button>
       </div>
 
-      <HeroSearch
-        badgeText={heroBadgeText}
-        heroAlignment={heroAlignment}
-        heroOverlayIntensity={heroOverlayIntensity}
-        imageUrl={heroImageUrl}
-        isLoading={isEventsLoading}
-        isSlider={heroIsSlider}
-        locationQuery={eventLocationQuery}
+      <HeroLiveMap
         searchQuery={eventSearchQuery}
-        onHeroHoverChange={setIsHeroHovered}
-        onHeroNext={() => setFeaturedSlideIndex((current) => (heroActiveSlides.length > 0 ? (current + 1) % heroActiveSlides.length : 0))}
-        onApplyQuickFilter={(filter) => {
-          if (filter === 'weekend') {
-            setEventTimeFilter('weekend')
-          } else if (filter === 'free') {
-            setEventSearchQuery('free')
-          } else {
-            const matchedType = eventTypeOptions.find((type) => type.toLowerCase().includes(filter))
-            setEventTypeFilter(matchedType ?? 'all')
-          }
-          document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })
-        }}
-        onHeroPrev={() =>
-          setFeaturedSlideIndex((current) => {
-            if (heroActiveSlides.length <= 0) return 0
-            return (current - 1 + heroActiveSlides.length) % heroActiveSlides.length
-          })
-        }
-        onHeroSelect={(index) => setFeaturedSlideIndex(index)}
-        onLocationChange={setEventLocationQuery}
         onSearchChange={setEventSearchQuery}
         onSearchSubmit={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
-        slideCount={heroActiveSlides.length}
-        slideIndex={Math.min(featuredSlideIndex, Math.max(0, heroActiveSlides.length - 1))}
-        subtitle={heroDisplaySubtitle}
-        title={heroDisplayTitle}
-        eyebrowText={heroDisplayEyebrow}
-        showArrows={heroShowArrows}
-        showDots={heroShowDots}
+        onNavigate={(path) => {
+          const match = path.match(/^\/events\/(.+)$/)
+          if (match) {
+            setSelectedEventDetailId(match[1])
+          } else {
+            onNavigate(path)
+          }
+        }}
+        realEvents={events}
       />
 
       <div className="tw-grid tw-gap-8">
@@ -2899,158 +2875,6 @@ function PublicHeader({
   )
 }
 
-function HeroSearch({
-  badgeText,
-  heroAlignment,
-  heroOverlayIntensity,
-  imageUrl,
-  isLoading,
-  isSlider,
-  locationQuery,
-  onApplyQuickFilter,
-  onHeroHoverChange,
-  onHeroNext,
-  onHeroPrev,
-  onHeroSelect,
-  onLocationChange,
-  onSearchChange,
-  onSearchSubmit,
-  searchQuery,
-  slideCount,
-  slideIndex,
-  showArrows,
-  showDots,
-  subtitle,
-  title,
-  eyebrowText
-}: {
-  badgeText: string
-  heroAlignment: 'left' | 'center' | 'right'
-  heroOverlayIntensity: number
-  imageUrl: string
-  isLoading: boolean
-  isSlider: boolean
-  locationQuery: string
-  onApplyQuickFilter: (filter: 'weekend' | 'food' | 'concert' | 'family' | 'free') => void
-  onHeroHoverChange: (isHovered: boolean) => void
-  onHeroNext: () => void
-  onHeroPrev: () => void
-  onHeroSelect: (index: number) => void
-  onLocationChange: (value: string) => void
-  onSearchChange: (value: string) => void
-  onSearchSubmit: () => void
-  searchQuery: string
-  slideCount: number
-  slideIndex: number
-  showArrows: boolean
-  showDots: boolean
-  subtitle: string
-  title: string
-  eyebrowText: string
-}) {
-  const quickFilters = [
-    { label: 'This Weekend', value: 'weekend' },
-    { label: 'Food & Drink', value: 'food' },
-    { label: 'Concerts', value: 'concert' },
-    { label: 'Family', value: 'family' },
-    { label: 'Free Events', value: 'free' }
-  ] as const
-
-  return (
-    <section
-      className="marketplace-hero"
-      id="featured"
-      onMouseEnter={() => onHeroHoverChange(true)}
-      onMouseLeave={() => onHeroHoverChange(false)}
-    >
-      <SafeImage
-        alt="Homepage hero background"
-        className="marketplace-hero-image"
-        fallbackType="hero"
-        src={imageUrl}
-      />
-      <div className="marketplace-hero-overlay" style={{ opacity: Math.max(0.18, Math.min(0.92, heroOverlayIntensity / 100)) }} />
-      <div className="marketplace-hero-content">
-        <div className={`hero-main-column hero-align-${heroAlignment}`}>
-          {eyebrowText ? <p className="hero-eyebrow">{eyebrowText}</p> : null}
-          {badgeText ? <span className="hero-badge">{badgeText}</span> : null}
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
-          <div className="hero-search-card">
-            <label>
-              <Search size={18} />
-              <input
-                aria-label="Search events, artists, or venues"
-                placeholder="Event, artist, or venue"
-                type="search"
-                value={searchQuery}
-                onChange={(event) => onSearchChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') onSearchSubmit()
-                }}
-              />
-            </label>
-            <label className="hero-location-input">
-              <MapPin size={18} />
-              <input
-                aria-label="Search by location"
-                placeholder="Location"
-                type="search"
-                value={locationQuery}
-                onChange={(event) => onLocationChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') onSearchSubmit()
-                }}
-              />
-            </label>
-            <button type="button" onClick={onSearchSubmit}>
-              Search
-            </button>
-          </div>
-          <div className="hero-quick-filters" aria-label="Quick event filters">
-            {quickFilters.map((filter) => (
-              <button key={filter.value} type="button" onClick={() => onApplyQuickFilter(filter.value)}>
-                {filter.label}
-              </button>
-            ))}
-          </div>
-          <div className="hero-slider-meta">
-            <span className="hero-live-status">{isLoading ? 'Loading hero settings...' : 'Live experiences'}</span>
-            {isSlider && slideCount > 1 ? <span className="hero-slide-counter">{slideIndex + 1} / {slideCount}</span> : null}
-          </div>
-          {(showArrows || showDots) && isSlider && slideCount > 1 ? (
-            <div className="hero-slider-controls">
-              {showArrows ? (
-                <button aria-label="Previous hero slide" type="button" onClick={onHeroPrev}>
-                  <ChevronLeft size={16} />
-                </button>
-              ) : null}
-              {showDots ? (
-                <div className="hero-dots" aria-label="Hero slide navigation">
-                  {Array.from({ length: slideCount }, (_, index) => (
-                    <button
-                      aria-label={`Show hero slide ${index + 1}`}
-                      aria-pressed={index === slideIndex}
-                      className={index === slideIndex ? 'active' : ''}
-                      key={`hero-dot-${index}`}
-                      type="button"
-                      onClick={() => onHeroSelect(index)}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {showArrows ? (
-                <button aria-label="Next hero slide" type="button" onClick={onHeroNext}>
-                  <ChevronRight size={16} />
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  )
-}
 
 function SafeImage({
   src,
