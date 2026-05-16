@@ -7,7 +7,7 @@ export function AppIcon({ color, name, size = 16 }: { color: string; name: AppIc
     name === 'cart'     ? '◫' :
     name === 'home'     ? '⌂' :
     name === 'tickets'  ? '▤' :
-    name === 'scan'     ? '⌖' :
+    name === 'scan'     ? '◈' :
     name === 'account'  ? '◉' :
     name === 'brand'    ? '✦' :
     name === 'login'    ? '↪' :

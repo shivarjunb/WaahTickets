@@ -1195,10 +1195,35 @@ export default function App() {
     }
 
     try {
-      const response = await api.validateCoupon({
-        code,
+      const eventItems = cartItems.filter((item) => item.event_id === eventId)
+      if (eventItems.length === 0) {
+        setCouponMessages((current) => ({ ...current, [eventId]: 'No items for this event.' }))
+        return
+      }
+      const first = eventItems[0]
+      const orderGroup: StorefrontOrderGroup = {
+        order_id: `coupon-${Date.now().toString(36)}-${eventId.slice(0, 6)}`,
+        order_number: `CPN-${Date.now().toString(36).toUpperCase()}-${eventId.slice(0, 4).toUpperCase()}`,
         event_id: eventId,
-        subtotal_amount_paisa: subtotal
+        event_location_id: first.event_location_id,
+        subtotal_amount_paisa: subtotal,
+        discount_amount_paisa: 0,
+        total_amount_paisa: subtotal,
+        currency: first.currency,
+        items: eventItems.map((item) => {
+          const lineSubtotal = item.unit_price_paisa * item.quantity
+          return {
+            ticket_type_id: item.ticket_type_id,
+            quantity: item.quantity,
+            unit_price_paisa: item.unit_price_paisa,
+            subtotal_amount_paisa: lineSubtotal,
+            total_amount_paisa: lineSubtotal
+          }
+        })
+      }
+      const response = await api.validateCoupon({
+        coupon: { value: code, source: 'code' },
+        order_groups: [orderGroup]
       })
       if (!response.valid || !response.data) {
         throw new Error(response.error ?? 'Coupon is invalid.')
@@ -1766,7 +1791,12 @@ export default function App() {
 
     async function registerPush() {
       try {
+        const runtime = String(process.env.EXPO_PUBLIC_APP_RUNTIME ?? '').trim().toLowerCase()
         const pushEnabled = String(process.env.EXPO_PUBLIC_ENABLE_PUSH ?? '').trim().toLowerCase() === 'true'
+        if (runtime === 'expo-go') {
+          console.log('[push] skipped — EXPO_PUBLIC_APP_RUNTIME=expo-go')
+          return
+        }
         if (!pushEnabled) {
           console.log('[push] skipped — EXPO_PUBLIC_ENABLE_PUSH is false')
           return

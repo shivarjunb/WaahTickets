@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
-import { useCameraPermissions } from 'expo-camera'
+import { useEffect, useRef, useState } from 'react'
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Camera, useCameraPermissions } from 'expo-camera'
 import type { createApiClient } from '@waahtickets/api-client'
 import type { ValidationState, ValidationTone } from '../../types'
 import { buildApiErrorMessage, formatValidationTone } from '../../utils/format'
@@ -8,6 +8,17 @@ import { resolveQrCodeValueFromPayload } from '../../utils/qr'
 import { AppIcon } from '../../components/AppIcon'
 import { ScanOverlay } from './ScanOverlay'
 import { TicketResultSheet } from './TicketResultSheet'
+
+let imagePickerModule: {
+  requestMediaLibraryPermissionsAsync: () => Promise<{ granted: boolean }>
+  launchImageLibraryAsync: (options: { mediaTypes: string[]; quality?: number; allowsEditing?: boolean }) => Promise<{ canceled: boolean; assets?: Array<{ uri?: string }> }>
+} | null = null
+
+try {
+  imagePickerModule = require('expo-image-picker')
+} catch {
+  imagePickerModule = null
+}
 
 const initialState: ValidationState = {
   qrInput: '',
@@ -36,6 +47,12 @@ export function ValidatorScreen({
   const [state, setState] = useState<ValidationState>(initialState)
   const busyRef = useRef(false)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
+  const [overlayVisible, setOverlayVisible] = useState(false)
+
+  useEffect(() => {
+    if (!validatorAllowed) return
+    void toggleScanner()
+  }, [validatorAllowed])
 
   function reset() {
     setState(initialState)
@@ -67,6 +84,7 @@ export function ValidatorScreen({
     if (!qrCodeValue || state.busy || busyRef.current) return
 
     busyRef.current = true
+    setOverlayVisible(true)
     setState((s) => ({
       ...s,
       qrInput: qrCodeValue,
@@ -118,6 +136,43 @@ export function ValidatorScreen({
       }))
     } finally {
       busyRef.current = false
+    }
+  }
+
+  async function inspectFromGallery() {
+    if (state.busy || busyRef.current) return
+    if (!imagePickerModule) {
+      setState((s) => ({ ...s, status: 'Gallery picker is unavailable in this app build. Please reopen in Expo Go or rebuild dev client.' , tone: 'error' }))
+      setOverlayVisible(true)
+      return
+    }
+
+    const permission = await imagePickerModule.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      setState((s) => ({ ...s, status: 'Gallery permission is required to import QR images.', tone: 'error' }))
+      setOverlayVisible(true)
+      return
+    }
+
+    const picked = await imagePickerModule.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+      allowsEditing: false
+    })
+    if (picked.canceled || !picked.assets?.[0]?.uri) return
+
+    try {
+      const scanned = await Camera.scanFromURLAsync(picked.assets[0].uri, ['qr'])
+      const value = scanned?.[0]?.data?.trim() ?? ''
+      if (!value) {
+        setState((s) => ({ ...s, status: 'No QR code found in selected image.', tone: 'warning' }))
+        setOverlayVisible(true)
+        return
+      }
+      await inspectTicketByQr(value, 'manual')
+    } catch {
+      setState((s) => ({ ...s, status: 'Unable to read QR from selected image.', tone: 'error' }))
+      setOverlayVisible(true)
     }
   }
 
@@ -209,8 +264,50 @@ export function ValidatorScreen({
         </View>
       ) : null}
 
+      {overlayVisible ? (
+        <View style={styles.glassOverlay}>
+          <View style={styles.glassCard}>
+            <Image source={require('../../../assets/icon.png')} style={styles.waahLogo} />
+            {state.busy ? <ActivityIndicator size="large" color="#f4317f" /> : <AppIcon name="check" color="#f4317f" size={28} />}
+            <Text style={styles.glassTitle}>{state.busy ? 'Validating ticket...' : formatValidationTone(state.tone)}</Text>
+            <Text style={styles.glassMessage}>{state.status}</Text>
+            <Pressable
+              style={styles.scanAgainBtn}
+              onPress={() => {
+                setOverlayVisible(false)
+                reset()
+                void toggleScanner()
+              }}
+            >
+              <AppIcon name="scan" color="#fff" size={18} />
+              <Text style={styles.scanAgainLabel}>Scan</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {/* Control buttons row */}
       <View style={styles.controls}>
+        <Pressable onPress={() => { void inspectFromGallery() }} style={styles.controlBtn}>
+          <View style={styles.controlCircle}>
+            <AppIcon name="gallery" color="#ffffff" size={20} />
+          </View>
+          <Text style={styles.controlLabel}>Gallery</Text>
+        </Pressable>
+
+        {overlayVisible ? (
+          <Pressable onPress={() => {
+            setOverlayVisible(false)
+            reset()
+            void toggleScanner()
+          }} style={styles.controlBtn}>
+            <View style={[styles.controlCircle, styles.controlCircleValidate]}>
+              <AppIcon name="scan" color="#ffffff" size={22} />
+            </View>
+            <Text style={styles.controlLabel}>Scan</Text>
+          </Pressable>
+        ) : null}
+
         <Pressable onPress={() => { void toggleScanner() }} style={styles.controlBtn}>
           <View style={[styles.controlCircle, state.scanning && styles.controlCircleStop]}>
             <AppIcon name={state.scanning ? 'close' : 'scan'} color="#ffffff" size={22} />
@@ -299,4 +396,36 @@ const styles = StyleSheet.create({
   controlCircleValidate: { backgroundColor: '#f4317f' },
   controlCircleDim: { opacity: 0.4 },
   controlLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
+  glassOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5,10,20,0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 30
+  },
+  glassCard: {
+    width: '86%',
+    borderRadius: 18,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(12,20,36,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    gap: 10
+  },
+  waahLogo: { width: 42, height: 42, borderRadius: 10, marginBottom: 4 },
+  glassTitle: { color: '#f8fafc', fontSize: 17, fontWeight: '800' },
+  glassMessage: { color: '#cbd5e1', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  scanAgainBtn: {
+    marginTop: 4,
+    backgroundColor: '#f4317f',
+    minHeight: 42,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  scanAgainLabel: { color: '#fff', fontWeight: '800', fontSize: 14 }
 })

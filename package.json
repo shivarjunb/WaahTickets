@@ -48,6 +48,11 @@
     "react-dom": "19.1.4",
     "react-native": "0.81.6"
   },
+  "expo": {
+    "autolinking": {
+      "searchPaths": ["./node_modules"]
+    }
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260425.1",
     "@types/node": "^22.13.10",
