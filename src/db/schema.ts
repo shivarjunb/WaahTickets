@@ -153,6 +153,10 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'status',
       'is_featured',
       'banner_file_id',
+      'location_lat',
+      'location_lng',
+      'map_pin_icon',
+      'map_popup_config',
       'created_by',
       'created_at',
       'updated_at'

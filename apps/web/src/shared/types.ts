@@ -76,6 +76,10 @@ export type PublicEvent = ApiRecord & {
   is_featured?: number | boolean | string
   starting_price_paisa?: number
   ticket_type_count?: number
+  location_lat?: number | null
+  location_lng?: number | null
+  map_pin_icon?: string | null
+  map_popup_config?: string | null
 }
 
 export type TicketType = ApiRecord & {
