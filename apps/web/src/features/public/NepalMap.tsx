@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { Palette, Maximize2, Minimize2 } from 'lucide-react'
 import { EventMapPopup } from './EventMapPopup'
 
 // Carto Dark Matter — free tiles, no API key needed
@@ -114,6 +115,7 @@ export function NepalMap({
   events, totalCount, onViewDetails, userLocation, maxDistance,
   disableHover, initialCenter, initialZoom, minimal,
 }: NepalMapProps) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const markersRef = useRef<L.Marker[]>([])
@@ -121,6 +123,28 @@ export function NepalMap({
   const pathRef = useRef<L.Polyline | null>(null)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [activeCard, setActiveCard] = useState<ActiveCard | null>(null)
+  const [colorMatch, setColorMatch] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Track native fullscreen state and resize Leaflet when it changes
+  useEffect(() => {
+    function onFsChange() {
+      const fs = document.fullscreenElement === rootRef.current
+      setIsFullscreen(fs)
+      setTimeout(() => mapRef.current?.invalidateSize(), 80)
+    }
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
+  function toggleFullscreen() {
+    if (!rootRef.current) return
+    if (document.fullscreenElement) {
+      document.exitFullscreen()
+    } else {
+      rootRef.current.requestFullscreen()
+    }
+  }
 
   const scheduleClose = () => {
     closeTimerRef.current = setTimeout(() => setActiveCard(null), 200)
@@ -322,7 +346,7 @@ export function NepalMap({
     activeCard ? (CATEGORY_CONFIG[activeCard.event.category]?.color ?? '#e91e63') : '#e91e63'
 
   return (
-    <div className="hero-live-map-canvas">
+    <div ref={rootRef} className={`hero-live-map-canvas${colorMatch ? ' map-color-match' : ''}`}>
       <div ref={containerRef} className="kathmandu-map-container" />
 
       {!disableHover && activeCard && (() => {
@@ -405,6 +429,27 @@ export function NepalMap({
             onClick={() => handleZoom('out')}
           >
             −
+          </button>
+
+          <div className="hero-map-control-divider" />
+
+          <button
+            className={`hero-map-control-btn hero-map-control-btn--active${colorMatch ? ' hero-map-control-btn--on' : ''}`}
+            type="button"
+            aria-label="Match hero colours"
+            title="Match map colours to hero"
+            onClick={() => setColorMatch((v) => !v)}
+          >
+            <Palette size={14} />
+          </button>
+          <button
+            className="hero-map-control-btn hero-map-control-btn--active"
+            type="button"
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            onClick={toggleFullscreen}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
         </div>
       )}

@@ -2997,6 +2997,23 @@ function EventCard({
   onSelectTickets: () => void
 }) {
   const [popupPos, setPopupPos] = useState<{ x: number; y: number } | null>(null)
+  const mapBtnRef = useRef<HTMLButtonElement>(null)
+
+  // Keep popup anchored to the button while the page scrolls
+  useEffect(() => {
+    if (!popupPos) return
+    function update() {
+      if (!mapBtnRef.current) return
+      const rect = mapBtnRef.current.getBoundingClientRect()
+      setPopupPos({ x: rect.left + rect.width / 2, y: rect.top })
+    }
+    window.addEventListener('scroll', update, { passive: true, capture: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, { capture: true })
+      window.removeEventListener('resize', update)
+    }
+  }, [popupPos !== null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const location = event.location_address ?? event.location_name ?? 'Location pending'
   const venue = event.location_name ?? event.organization_name ?? 'Venue pending'
@@ -3068,6 +3085,7 @@ function EventCard({
       </button>
       {hasLocation && (
         <button
+          ref={mapBtnRef}
           aria-label="View on map"
           className="event-card-map-btn"
           title="View on map"
