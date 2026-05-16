@@ -41,9 +41,10 @@ const DEFAULT_CFG = {
 
 function buildPinHtml(color: string, svgPath: string, featured: boolean): string {
   return `
-    <div class="map-leaflet-pin${featured ? ' pin-featured' : ''}" style="--pin-color:${color}">
+    <div class="map-leaflet-pin${featured ? ' pin-featured' : ' pin-regular'}" style="--pin-color:${color}">
       <div class="pin-ripple pin-ripple-outer"></div>
       <div class="pin-ripple pin-ripple-inner"></div>
+      <div class="pin-stem"></div>
       <div class="pin-body">
         <svg viewBox="0 0 24 24" width="13" height="13" stroke="white" fill="none"
           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -164,13 +165,13 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
       const cfg = CATEGORY_CONFIG[event.category] ?? DEFAULT_CFG
       const color = cfg.color
       const featured = event.sponsored
-      const pinSize = featured ? 52 : 40
+      const pinSize = featured ? 56 : 40
 
       const icon = L.divIcon({
         className: '',
         html: buildPinHtml(color, cfg.svgPath, featured),
-        iconSize: [pinSize, pinSize],
-        iconAnchor: [pinSize / 2, pinSize / 2],
+        iconSize: [pinSize, pinSize + 18],
+        iconAnchor: [pinSize / 2, pinSize + 6],
       })
 
       const marker = L.marker([event.lat, event.lng], { icon }).addTo(map)

@@ -41,15 +41,6 @@ const DEFAULT_RAILS_AUTOPLAY_INTERVAL_SECONDS = 9
 const MIN_RAILS_AUTOPLAY_INTERVAL_SECONDS = 3
 const MAX_RAILS_AUTOPLAY_INTERVAL_SECONDS = 30
 const DEFAULT_FILTER_PANEL_EYEBROW_TEXT = 'Browse'
-const HERO_SETTING_KEYS = ['hero_settings_json'] as const
-const DEFAULT_HERO_SLIDER_SPEED_SECONDS = 6
-const DEFAULT_HERO_EYEBROW_TEXT = 'Discover local events'
-const DEFAULT_HERO_HEADLINE = 'Your next experience starts here'
-const DEFAULT_HERO_SUBTITLE = 'Book concerts, restaurants, venues, festivals, theatre, and food events near you.'
-const DEFAULT_HERO_PRIMARY_CTA_TEXT = 'Browse Events'
-const DEFAULT_HERO_PRIMARY_CTA_URL = '#events'
-const DEFAULT_HERO_SECONDARY_CTA_TEXT = 'Create Event'
-const DEFAULT_HERO_SECONDARY_CTA_URL = '/admin/events/create'
 const DEFAULT_RAIL_EYEBROW_TEXT = 'Featured'
 const DEFAULT_RAIL_AUTOPLAY_ENABLED = true
 const DEFAULT_RAIL_ACCENT_COLOR = '#4f8df5'
@@ -273,6 +264,20 @@ app.get('/api/public/events', async (c) => {
         LIMIT 1
       ) AS location_address,
       (
+        SELECT event_locations.latitude
+        FROM event_locations
+        WHERE event_locations.event_id = events.id
+        ORDER BY event_locations.created_at ASC
+        LIMIT 1
+      ) AS location_lat,
+      (
+        SELECT event_locations.longitude
+        FROM event_locations
+        WHERE event_locations.event_id = events.id
+        ORDER BY event_locations.created_at ASC
+        LIMIT 1
+      ) AS location_lng,
+      (
         SELECT MIN(ticket_types.price_paisa)
         FROM ticket_types
         WHERE ticket_types.event_id = events.id
@@ -288,8 +293,19 @@ app.get('/api/public/events', async (c) => {
     LEFT JOIN organizations ON organizations.id = events.organization_id
     LEFT JOIN files ON files.id = events.banner_file_id
     WHERE events.status = 'published'
-    ORDER BY events.is_featured DESC, events.start_datetime ASC
-    LIMIT 24`
+    ORDER BY
+      CASE
+        WHEN (
+          SELECT 1
+          FROM event_locations
+          WHERE event_locations.event_id = events.id
+            AND event_locations.latitude IS NOT NULL
+            AND event_locations.longitude IS NOT NULL
+          LIMIT 1
+        ) IS NOT NULL THEN 0
+        ELSE 1
+      END ASC,
+      events.start_datetime ASC`
   ).all()
 
   const payload = { data: events.results }
@@ -601,27 +617,6 @@ app.get('/api/public/cart/settings', async (c) => {
   })
 })
 
-app.get('/api/public/hero/settings', async (c) => {
-  if (!c.env.DB) {
-    return c.json({ data: buildDefaultHeroSettings() })
-  }
-
-  await c.env.DB.prepare(APP_SETTINGS_TABLE_SQL).run()
-  const rows = await c.env.DB
-    .prepare(
-      `SELECT setting_key, setting_value
-       FROM app_settings
-       WHERE setting_key = ?`
-    )
-    .bind(...HERO_SETTING_KEYS)
-    .all<{ setting_key: string; setting_value: string }>()
-  const settingsByKey = new Map(rows.results.map((row) => [row.setting_key, row.setting_value]))
-
-  return c.json({
-    data: parseHeroSettings(settingsByKey.get('hero_settings_json') ?? null)
-  })
-})
-
 app.post('/api/public/coupons/validate', async (c) => {
   if (!c.env.DB) {
     return c.json(
@@ -893,136 +888,6 @@ async function readPublicJsonBody(req: { json: () => Promise<unknown> }) {
     return body as Record<string, unknown>
   } catch {
     return null
-  }
-}
-
-type HeroTextAlignment = 'left' | 'center' | 'right'
-type HeroSlideItem = {
-  id: string
-  is_active: boolean
-  sort_order: number
-  eyebrow_text: string
-  badge_text: string
-  title: string
-  subtitle: string
-  primary_button_text: string
-  primary_button_url: string
-  secondary_button_text: string
-  secondary_button_url: string
-  background_image_url: string
-  overlay_intensity: number
-  text_alignment: HeroTextAlignment
-}
-type HeroSettingsData = {
-  slider_enabled: boolean
-  autoplay: boolean
-  slider_speed_seconds: number
-  pause_on_hover: boolean
-  show_arrows: boolean
-  show_dots: boolean
-  eyebrow_text: string
-  badge_text: string
-  headline: string
-  subtitle: string
-  primary_cta_text: string
-  primary_cta_url: string
-  secondary_cta_text: string
-  secondary_cta_url: string
-  slides: HeroSlideItem[]
-}
-
-function buildDefaultHeroSettings(): HeroSettingsData {
-  return {
-    slider_enabled: true,
-    autoplay: true,
-    slider_speed_seconds: DEFAULT_HERO_SLIDER_SPEED_SECONDS,
-    pause_on_hover: true,
-    show_arrows: true,
-    show_dots: true,
-    eyebrow_text: DEFAULT_HERO_EYEBROW_TEXT,
-    badge_text: '',
-    headline: DEFAULT_HERO_HEADLINE,
-    subtitle: DEFAULT_HERO_SUBTITLE,
-    primary_cta_text: DEFAULT_HERO_PRIMARY_CTA_TEXT,
-    primary_cta_url: DEFAULT_HERO_PRIMARY_CTA_URL,
-    secondary_cta_text: DEFAULT_HERO_SECONDARY_CTA_TEXT,
-    secondary_cta_url: DEFAULT_HERO_SECONDARY_CTA_URL,
-    slides: []
-  }
-}
-
-function normalizeHeroTextAlignment(value: unknown): HeroTextAlignment {
-  const alignment = String(value ?? '').trim().toLowerCase()
-  if (alignment === 'center' || alignment === 'right') {
-    return alignment
-  }
-  return 'left'
-}
-
-function normalizeHeroSlide(value: unknown, fallbackIndex: number): HeroSlideItem | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null
-  }
-
-  const item = value as Record<string, unknown>
-  const sortOrderRaw = Number(item.sort_order ?? fallbackIndex + 1)
-  const overlayRaw = Number(item.overlay_intensity ?? 70)
-
-  return {
-    id: String(item.id ?? `hero-${fallbackIndex + 1}`).trim() || `hero-${fallbackIndex + 1}`,
-    is_active: normalizeBoolean(item.is_active, true),
-    sort_order: Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : fallbackIndex + 1,
-    eyebrow_text: String(item.eyebrow_text ?? '').trim().slice(0, 64),
-    badge_text: String(item.badge_text ?? '').trim().slice(0, 48),
-    title: String(item.title ?? '').trim().slice(0, 120),
-    subtitle: String(item.subtitle ?? '').trim().slice(0, 260),
-    primary_button_text: String(item.primary_button_text ?? '').trim().slice(0, 48),
-    primary_button_url: String(item.primary_button_url ?? '').trim().slice(0, 300),
-    secondary_button_text: String(item.secondary_button_text ?? '').trim().slice(0, 48),
-    secondary_button_url: String(item.secondary_button_url ?? '').trim().slice(0, 300),
-    background_image_url: String(item.background_image_url ?? '').trim().slice(0, 500),
-    overlay_intensity: Number.isFinite(overlayRaw) ? Math.max(0, Math.min(100, Math.floor(overlayRaw))) : 70,
-    text_alignment: normalizeHeroTextAlignment(item.text_alignment)
-  }
-}
-
-function normalizeHeroSettings(value: unknown): HeroSettingsData {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
-  const sliderSpeedRaw = Number(source.slider_speed_seconds ?? DEFAULT_HERO_SLIDER_SPEED_SECONDS)
-  const slides = Array.isArray(source.slides)
-    ? source.slides
-        .map((slide, index) => normalizeHeroSlide(slide, index))
-        .filter((slide): slide is HeroSlideItem => Boolean(slide))
-    : []
-
-  return {
-    slider_enabled: normalizeBoolean(source.slider_enabled, true),
-    autoplay: normalizeBoolean(source.autoplay, true),
-    slider_speed_seconds: Number.isFinite(sliderSpeedRaw) ? Math.max(1, Math.floor(sliderSpeedRaw)) : DEFAULT_HERO_SLIDER_SPEED_SECONDS,
-    pause_on_hover: normalizeBoolean(source.pause_on_hover, true),
-    show_arrows: normalizeBoolean(source.show_arrows, true),
-    show_dots: normalizeBoolean(source.show_dots, true),
-    eyebrow_text: String(source.eyebrow_text ?? DEFAULT_HERO_EYEBROW_TEXT).trim().slice(0, 64),
-    badge_text: String(source.badge_text ?? '').trim().slice(0, 48),
-    headline: String(source.headline ?? DEFAULT_HERO_HEADLINE).trim().slice(0, 120),
-    subtitle: String(source.subtitle ?? DEFAULT_HERO_SUBTITLE).trim().slice(0, 260),
-    primary_cta_text: String(source.primary_cta_text ?? DEFAULT_HERO_PRIMARY_CTA_TEXT).trim().slice(0, 48),
-    primary_cta_url: String(source.primary_cta_url ?? DEFAULT_HERO_PRIMARY_CTA_URL).trim().slice(0, 300),
-    secondary_cta_text: String(source.secondary_cta_text ?? DEFAULT_HERO_SECONDARY_CTA_TEXT).trim().slice(0, 48),
-    secondary_cta_url: String(source.secondary_cta_url ?? DEFAULT_HERO_SECONDARY_CTA_URL).trim().slice(0, 300),
-    slides: slides.sort((left, right) => left.sort_order - right.sort_order)
-  }
-}
-
-function parseHeroSettings(raw: string | null): HeroSettingsData {
-  if (!raw) {
-    return buildDefaultHeroSettings()
-  }
-
-  try {
-    return normalizeHeroSettings(JSON.parse(raw))
-  } catch {
-    return buildDefaultHeroSettings()
   }
 }
 

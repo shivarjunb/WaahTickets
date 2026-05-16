@@ -263,6 +263,22 @@
   cursor: pointer;
 }
 
+.map-leaflet-pin .pin-stem {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pin-color, #e91e63) 80%, #ffffff 20%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--pin-color, #e91e63) 55%, transparent);
+  z-index: 1;
+}
+
+.map-leaflet-pin.pin-regular .pin-stem {
+  height: 10px;
+}
+
 /* ─── Animated Event Pin ─────────────────────────────────────────────────────── */
 
 .animated-event-pin {
@@ -341,8 +357,14 @@
 /* ─── Featured (larger) pin ──────────────────────────────────────────────────── */
 
 .map-leaflet-pin.pin-featured {
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
+}
+
+.map-leaflet-pin.pin-featured .pin-stem {
+  height: 18px;
+  width: 5px;
+  bottom: 2px;
 }
 
 .map-leaflet-pin.pin-featured .pin-body {

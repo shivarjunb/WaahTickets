@@ -26,17 +26,6 @@ function bearingLabel(lat1: number, lng1: number, lat2: number, lng2: number): s
   return dirs[Math.round(bearing / 45) % 8]
 }
 
-// ─── Mock fallback (shown when no real events have coordinates) ───────────────
-const MOCK_EVENTS: MapEvent[] = [
-  { id: 'evt_thamel_rock',      title: 'Rock Night Kathmandu',    category: 'Concert',      area: 'Thamel',      time: 'Tonight, 8:00 PM',   priceFrom: 'Rs. 1,000',  sponsored: true,  lat: 27.7170, lng: 85.3085 },
-  { id: 'evt_boudha_food',      title: 'Boudha Food Fest',        category: 'Food & Drink', area: 'Boudha',      time: 'Sat, 5:00 PM',       priceFrom: 'Free Entry', sponsored: false, lat: 27.7215, lng: 85.3626 },
-  { id: 'evt_patan_comedy',     title: 'Comedy Night Patan',      category: 'Comedy',       area: 'Patan',       time: 'Fri, 7:30 PM',       priceFrom: 'Rs. 700',    sponsored: true,  lat: 27.6726, lng: 85.3280 },
-  { id: 'evt_baneshwor_sports', title: 'Futsal Showdown',         category: 'Sports',       area: 'Baneshwor',   time: 'Sun, 4:00 PM',       priceFrom: 'Rs. 500',    sponsored: false, lat: 27.6973, lng: 85.3390 },
-  { id: 'evt_durbar_festival',  title: 'Durbar Marg Street Fest', category: 'Festival',     area: 'Durbar Marg', time: 'May 25, 3:00 PM',    priceFrom: 'Rs. 300',    sponsored: false, lat: 27.7077, lng: 85.3152 },
-  { id: 'evt_lazimpat_night',   title: 'Night Beats Club',        category: 'Nightlife',    area: 'Lazimpat',    time: 'Tonight, 10:00 PM',  priceFrom: 'Rs. 800',    sponsored: false, lat: 27.7273, lng: 85.3126 },
-  { id: 'evt_jawalakhel_fest',  title: 'Pottery & Crafts Fest',   category: 'Festival',     area: 'Jawalakhel',  time: 'Weekend, 2:00 PM',   priceFrom: 'Rs. 250',    sponsored: false, lat: 27.6757, lng: 85.3188 },
-]
-
 // ─── Convert a real PublicEvent → MapEvent ────────────────────────────────────
 function toMapEvent(ev: PublicEvent): MapEvent | null {
   if (ev.location_lat == null || ev.location_lng == null) return null
@@ -65,7 +54,11 @@ function toMapEvent(ev: PublicEvent): MapEvent | null {
     lat: ev.location_lat,
     lng: ev.location_lng,
     popupConfig,
-    imageUrl: ev.banner_public_url ?? undefined,
+    imageUrl: ev.banner_public_url
+      ? String(ev.banner_public_url)
+      : ev.banner_file_id && ev.id
+        ? `/api/public/events/${encodeURIComponent(String(ev.id))}/banner`
+        : undefined,
   }
 }
 
@@ -136,14 +129,9 @@ export function HeroLiveMap({
     )
   }
 
-  // Convert real events; fall back to mock when none have coordinates
-  const baseEvents = useMemo<MapEvent[]>(() => {
-    const converted = realEvents.flatMap((ev) => {
-      const m = toMapEvent(ev)
-      return m ? [m] : []
-    })
-    return converted.length > 0 ? converted : MOCK_EVENTS
-  }, [realEvents])
+  const baseEvents = useMemo<MapEvent[]>(() =>
+    realEvents.flatMap((ev) => { const m = toMapEvent(ev); return m ? [m] : [] })
+  , [realEvents])
 
   // Category + search filter
   const categoryFiltered = useMemo(() => {

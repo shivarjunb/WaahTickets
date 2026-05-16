@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import type { HeroSettingsData } from "../../shared/types";
-import { defaultHeroSettingsData } from "../../shared/constants";
-import { normalizeHeroSettings } from "../../shared/utils";
 import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Home, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, featuredSlideImages, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, allocateOrderDiscountShare, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, hasAdminConsoleAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
@@ -35,7 +32,6 @@ export default function PublicApp({
   const [ticketTypes, setTicketTypes] = useState<TicketType[]>([])
   const [isEventsLoading, setIsEventsLoading] = useState(true)
   const [isTicketTypesLoading, setIsTicketTypesLoading] = useState(false)
-  const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedEventDetailId, setSelectedEventDetailId] = useState<string | null>(null)
   const [ticketQuantities, setTicketQuantities] = useState<Record<string, number>>({})
@@ -44,8 +40,6 @@ export default function PublicApp({
   const [eventTypeFilter, setEventTypeFilter] = useState('all')
   const [eventTimeFilter, setEventTimeFilter] = useState<'all' | 'weekend' | 'month'>('all')
   const [railsSettings, setRailsSettings] = useState<PublicRailsSettingsData>(defaultRailsSettingsData)
-  const [heroSettings, setHeroSettings] = useState<HeroSettingsData>(defaultHeroSettingsData)
-  const [isHeroHovered, setIsHeroHovered] = useState(false)
   const [expandedHomepageRailIds, setExpandedHomepageRailIds] = useState<Set<string>>(() => new Set())
   const [showAllRails, setShowAllRails] = useState(false)
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false)
@@ -199,27 +193,6 @@ export default function PublicApp({
     if (eventsWithImages.length > 0) return eventsWithImages
     return filteredEvents
   }, [filteredEvents])
-  const heroActiveSlides = useMemo(
-    () => [...heroSettings.slides].filter((slide) => slide.is_active).sort((left, right) => left.sort_order - right.sort_order),
-    [heroSettings.slides]
-  )
-  const activeHeroSlide = heroActiveSlides[featuredSlideIndex] ?? heroActiveSlides[0] ?? null
-  const heroIsSlider = heroSettings.slider_enabled && heroActiveSlides.length > 1
-  const heroShowArrows = heroSettings.show_arrows && heroIsSlider
-  const heroShowDots = heroSettings.show_dots && heroIsSlider
-  const heroImageUrl = activeHeroSlide?.background_image_url?.trim() || featuredSlideImages[0]
-  const heroEyebrowText = activeHeroSlide?.eyebrow_text?.trim() || heroSettings.eyebrow_text
-  const heroBadgeText = activeHeroSlide?.badge_text?.trim() || heroSettings.badge_text
-  const heroHeadline = activeHeroSlide?.title?.trim() || heroSettings.headline
-  const heroSubtitle = activeHeroSlide?.subtitle?.trim() || heroSettings.subtitle
-  const heroAlignment = activeHeroSlide?.text_alignment ?? 'left'
-  const heroOverlayIntensity = activeHeroSlide?.overlay_intensity ?? 70
-  const heroDisplayTitle =
-    heroHeadline && heroHeadline.toLowerCase() !== 'waah tickets at your service!'
-      ? heroHeadline
-      : 'Find your next live experience'
-  const heroDisplaySubtitle = heroSubtitle || 'Book concerts, restaurants, venues, festivals, theatre, and food events near you.'
-  const heroDisplayEyebrow = heroEyebrowText || 'LOCAL EVENTS NEAR YOU'
   const trendingEvents = useMemo(() => {
     const featured = filteredEvents.filter((event) => isTruthyValue(event.is_featured))
     return (featured.length > 0 ? featured : filteredEvents).slice(0, 8)
@@ -608,12 +581,11 @@ export default function PublicApp({
     async function loadPublicEvents() {
       setIsEventsLoading(true)
       try {
-        const [eventsResponse, railsResponse, paymentsResponse, cartSettingsResponse, heroSettingsResponse] = await Promise.all([
+        const [eventsResponse, railsResponse, paymentsResponse, cartSettingsResponse] = await Promise.all([
           fetchJson<ApiListResponse>('/api/public/events'),
           fetchJson<{ data?: PublicRailsSettingsData }>('/api/public/rails/settings').catch(() => null),
           fetchJson<{ data?: PublicPaymentSettingsData }>('/api/public/payments/settings').catch(() => null),
-          fetchJson<{ data?: CartSettingsData }>('/api/public/cart/settings').catch(() => null),
-          fetchJson<{ data?: HeroSettingsData }>('/api/public/hero/settings').catch(() => null)
+          fetchJson<{ data?: CartSettingsData }>('/api/public/cart/settings').catch(() => null)
         ])
         const loadedEvents = ((eventsResponse.data.data ?? []) as PublicEvent[]).filter(
           (event) => event.status === 'published'
@@ -630,9 +602,6 @@ export default function PublicApp({
         }
         if (cartSettingsResponse?.data?.data) {
           setCartSettings(normalizeCartSettings(cartSettingsResponse.data.data))
-        }
-        if (heroSettingsResponse?.data?.data) {
-          setHeroSettings(normalizeHeroSettings(heroSettingsResponse.data.data))
         }
         setSelectedEventId(defaultEvent?.id ?? null)
         // Preserve Khalti callback status messages when returning from payment.
@@ -718,32 +687,11 @@ export default function PublicApp({
   }, [selectedEvent?.id])
 
   useEffect(() => {
-    setFeaturedSlideIndex(0)
-  }, [heroActiveSlides.length])
-
-  useEffect(() => {
     setExpandedHomepageRailIds((current) => {
       const next = new Set([...current].filter((railId) => configuredHomepageRailIds.has(railId)))
       return next.size === current.size ? current : next
     })
   }, [configuredHomepageRailIds])
-
-  useEffect(() => {
-    if (
-      !heroSettings.slider_enabled ||
-      !heroSettings.autoplay ||
-      heroActiveSlides.length <= 1 ||
-      (heroSettings.pause_on_hover && isHeroHovered)
-    ) {
-      return
-    }
-
-    const timer = window.setInterval(() => {
-      setFeaturedSlideIndex((current) => (current + 1) % heroActiveSlides.length)
-    }, Math.max(1000, Number(heroSettings.slider_speed_seconds ?? 6) * 1000))
-
-    return () => window.clearInterval(timer)
-  }, [heroActiveSlides.length, heroSettings.autoplay, heroSettings.pause_on_hover, heroSettings.slider_speed_seconds, isHeroHovered])
 
   useEffect(() => {
     if (configuredHomepageRails.length === 0) return
