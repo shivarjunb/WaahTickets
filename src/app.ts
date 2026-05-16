@@ -625,129 +625,13 @@ app.get('/api/public/cart/settings', async (c) => {
 })
 
 app.post('/api/public/coupons/validate', async (c) => {
-  if (!c.env.DB) {
-    return c.json(
-      {
-        valid: false,
-        error: 'Coupons are unavailable right now.'
-      },
-      503
-    )
-  }
-
-  type CouponValidatePayload = {
-    code?: string
-    event_id?: string
-    subtotal_amount_paisa?: number
-  }
-
-  const body = await c.req.json<CouponValidatePayload>().catch(() => null)
-  const code = typeof body?.code === 'string' ? body.code.trim() : ''
-  const eventId = typeof body?.event_id === 'string' ? body.event_id.trim() : ''
-  const subtotalAmountPaisa = Number(body?.subtotal_amount_paisa ?? 0)
-
-  if (!code) {
-    return c.json({ valid: false, error: 'Coupon code is required.' }, 400)
-  }
-  if (!eventId) {
-    return c.json({ valid: false, error: 'event_id is required.' }, 400)
-  }
-  if (!Number.isFinite(subtotalAmountPaisa) || subtotalAmountPaisa <= 0) {
-    return c.json({ valid: false, error: 'subtotal_amount_paisa must be greater than 0.' }, 400)
-  }
-
-  const coupon = await c.env.DB
-    .prepare(
-      `SELECT
-         coupons.id,
-         coupons.event_id,
-         coupons.code,
-         coupons.discount_type,
-         coupons.discount_amount_paisa,
-         coupons.discount_percentage,
-         coupons.max_redemptions,
-         coupons.redeemed_count,
-         coupons.min_order_amount_paisa,
-         coupons.start_datetime,
-         coupons.end_datetime,
-         coupons.is_active
-       FROM coupons
-       JOIN events ON events.id = coupons.event_id
-       WHERE coupons.event_id = ?
-         AND lower(coupons.code) = lower(?)
-         AND events.status = 'published'
-       LIMIT 1`
-    )
-    .bind(eventId, code)
-    .first<{
-      id: string
-      event_id: string
-      code: string
-      discount_type: string
-      discount_amount_paisa: number | null
-      discount_percentage: number | null
-      max_redemptions: number | null
-      redeemed_count: number
-      min_order_amount_paisa: number | null
-      start_datetime: string | null
-      end_datetime: string | null
-      is_active: number
-    }>()
-
-  if (!coupon) {
-    return c.json({ valid: false, error: 'Coupon code is invalid for this event.' }, 404)
-  }
-
-  if (!coupon.is_active) {
-    return c.json({ valid: false, error: 'Coupon is inactive.' }, 409)
-  }
-
-  const nowTs = Date.now()
-  if (coupon.start_datetime) {
-    const startsAt = new Date(coupon.start_datetime).getTime()
-    if (Number.isFinite(startsAt) && nowTs < startsAt) {
-      return c.json({ valid: false, error: 'Coupon is not active yet.' }, 409)
-    }
-  }
-  if (coupon.end_datetime) {
-    const endsAt = new Date(coupon.end_datetime).getTime()
-    if (Number.isFinite(endsAt) && nowTs > endsAt) {
-      return c.json({ valid: false, error: 'Coupon has expired.' }, 409)
-    }
-  }
-
-  if (coupon.max_redemptions !== null && coupon.redeemed_count >= coupon.max_redemptions) {
-    return c.json({ valid: false, error: 'Coupon redemption limit reached.' }, 409)
-  }
-  if (coupon.min_order_amount_paisa !== null && subtotalAmountPaisa < coupon.min_order_amount_paisa) {
-    return c.json({ valid: false, error: 'Order amount is below the minimum required for this coupon.' }, 409)
-  }
-
-  const discountType = coupon.discount_type.trim().toLowerCase()
-  let discountAmountPaisa = 0
-
-  if (discountType === 'percentage') {
-    const pct = Number(coupon.discount_percentage ?? 0)
-    discountAmountPaisa = Math.floor((subtotalAmountPaisa * pct) / 100)
-  } else {
-    discountAmountPaisa = Number(coupon.discount_amount_paisa ?? 0)
-  }
-
-  discountAmountPaisa = Math.max(0, Math.min(discountAmountPaisa, subtotalAmountPaisa))
-  if (discountAmountPaisa <= 0) {
-    return c.json({ valid: false, error: 'Coupon does not provide a discount for this order.' }, 409)
-  }
-
-  return c.json({
-    valid: true,
-    data: {
-      coupon_id: coupon.id,
-      event_id: coupon.event_id,
-      code: coupon.code,
-      discount_type: coupon.discount_type,
-      discount_amount_paisa: discountAmountPaisa
-    }
-  })
+  return c.json(
+    {
+      valid: false,
+      error: 'Coupons are validated at checkout. Use /api/storefront/coupons/validate with order_groups.'
+    },
+    410
+  )
 })
 
 app.get('/api/public/payments/settings', async (c) => {

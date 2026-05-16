@@ -149,7 +149,8 @@ export type CheckoutSubmissionSnapshot = {
   cartItems: CartItem[]
   cartEventEmails: Record<string, string>
   cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
-  orderCouponDiscount: { couponId: string; eventId: string; discount: number } | null
+  orderCouponCode?: string
+  orderCouponDiscount: { couponId: string; discount: number; allocations: Record<string, number> } | null
   order_groups?: KhaltiCheckoutOrderGroup[]
   guest_checkout_identity?: GuestCheckoutIdentity | null
 }
@@ -230,10 +231,13 @@ export type CouponValidationResponse = {
   valid: boolean
   data?: {
     coupon_id: string
-    event_id: string
-    code: string
+    public_code?: string
+    event_id?: string
+    code?: string
+    coupon_type?: string
     discount_type: string
     discount_amount_paisa: number
+    allocations?: Record<string, number>
   }
   error?: string
 }

@@ -340,7 +340,11 @@ export const tableConfigs: Record<TableName, TableConfig> = {
     defaultOrderBy: 'created_at',
     columns: [
       'id',
+      'coupon_type',
+      'public_code',
+      'qr_payload',
       'event_id',
+      'organization_id',
       'code',
       'description',
       'discount_type',
@@ -351,6 +355,9 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'min_order_amount_paisa',
       'start_datetime',
       'end_datetime',
+      'expires_at',
+      'issued_by_user_id',
+      'issued_at',
       'is_active',
       'created_at',
       'updated_at'

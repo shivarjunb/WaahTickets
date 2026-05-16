@@ -36,6 +36,7 @@ type AuthRequestBody = {
 type StorefrontCheckoutPayload = {
   order_groups: StorefrontOrderGroup[]
   payment?: { provider?: 'manual' | 'khalti' | 'esewa'; reference?: string }
+  coupon?: { value: string; source?: 'code' | 'qr_payload' }
   guest_checkout_token?: string
 }
 
@@ -222,11 +223,10 @@ export function createApiClient(options: ApiClientOptions) {
       return request<UserCartSnapshot>('/api/cart', { method: 'DELETE' })
     },
     validateCoupon(body: {
-      code: string
-      event_id: string
-      subtotal_amount_paisa: number
+      coupon: { value: string; source?: 'code' | 'qr_payload' }
+      order_groups: StorefrontOrderGroup[]
     }) {
-      return fetchJson<CouponValidationResponse>('/api/public/coupons/validate', withJsonBody(body, { method: 'POST' }))
+      return fetchJson<CouponValidationResponse>('/api/storefront/coupons/validate', withJsonBody(body, { method: 'POST' }))
     },
     completeStorefrontCheckout(body: StorefrontCheckoutPayload) {
       return request<{ completed_orders: number }>('/api/storefront/checkout/complete', withJsonBody(body, { method: 'POST' }))

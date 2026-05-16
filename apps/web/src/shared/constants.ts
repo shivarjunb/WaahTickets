@@ -322,10 +322,15 @@ export const samplePayloads: Record<string, Record<string, unknown>> = {
     scanned_at: '2026-04-25T12:00:00.000Z'
   },
   coupons: {
-    event_id: 'replace-with-existing-event-id',
+    quantity: 1,
+    coupon_type: 'waahcoupon',
+    public_code: 'ORG-EARLY10',
+    organization_id: 'replace-with-existing-organization-id',
+    event_id: '',
     code: 'EARLY10',
     discount_type: 'percentage',
-    discount_percentage: 10
+    discount_percentage: 10,
+    expires_at: '2031-04-25T12:00:00.000Z'
   },
   coupon_redemptions: {
     coupon_id: 'replace-with-existing-coupon-id',
@@ -353,6 +358,8 @@ export const resourceUiConfig: Record<string, ResourceUiConfig> = {
   payout_batches: { title: 'Settlements', description: 'Review payout batches and settlement processing state.', columns: ['batch_type', 'event_title', 'beneficiary_name', 'total_amount_paisa', 'status', 'paid_at'] },
   payout_items: { title: 'Payout Items', description: 'Inspect payout recipients, amounts, and processing status.', columns: ['beneficiary_name', 'beneficiary_type', 'amount_paisa', 'status', 'created_at'] },
   refunds: { title: 'Refunds', description: 'Monitor refund requests, reasons, and returned amounts.', columns: ['order_number', 'event_title', 'status', 'refund_amount_paisa', 'created_at'] },
+  coupons: { title: 'Coupons', description: 'Manage one-time organizer and Waah checkout coupons.', columns: ['public_code', 'coupon_type', 'event_title', 'organization_name', 'discount_type', 'expires_at', 'redeemed_count', 'is_active'], createLabel: 'Create coupon', searchPlaceholder: 'Search coupons' },
+  coupon_redemptions: { title: 'Coupon Redemptions', description: 'Audit one-time coupon redemptions.', columns: ['coupon_code', 'order_number', 'customer_name', 'discount_amount_paisa', 'redeemed_at'] },
   files: { title: 'Files', description: 'Manage uploaded event assets, PDFs, and storage metadata.', columns: ['file_name', 'file_type', 'mime_type', 'size_bytes', 'created_at'] },
   ads: { title: 'Ads', description: 'Manage promotional placements across web and mobile.', columns: ['name', 'advertiser_name', 'placement', 'device_target', 'status', 'start_date', 'end_date'], createLabel: 'Create ad' }
 }
@@ -373,6 +380,7 @@ export const roleAccess: Record<
     event_locations: { can_create: true, can_edit: true, can_delete: false },
     ticket_types: { can_create: true, can_edit: true, can_delete: false },
     orders: { can_create: false, can_edit: true, can_delete: false },
+    coupons: { can_create: true, can_edit: false, can_delete: false },
     tickets: { can_create: false, can_edit: true, can_delete: false },
     ticket_scans: { can_create: true, can_edit: false, can_delete: false }
   },
@@ -402,6 +410,7 @@ export const lookupResourceByField: Record<string, string> = {
   created_by: 'users',
   redeemed_by: 'users',
   organization_id: 'organizations',
+  issued_by_user_id: 'users',
   event_id: 'events',
   event_location_id: 'event_locations',
   location_id: 'event_locations',
@@ -435,6 +444,7 @@ export const fieldSelectOptions: Record<string, Record<string, string[]>> = {
     event_type: ['concert', 'theatre', 'sports', 'comedy', 'festival', 'food', 'conference', 'workshop', 'other']
   },
   coupons: {
+    coupon_type: ['organizer', 'waahcoupon'],
     discount_type: ['percentage', 'fixed']
   }
 }
@@ -474,7 +484,7 @@ export const requiredFieldsByResource: Record<string, string[]> = {
   payout_items: ['payout_batch_id', 'beneficiary_type', 'beneficiary_id', 'amount_paisa', 'status'],
   partner_reporting_permissions: ['grantee_partner_id', 'subject_partner_id', 'permission_type'],
   report_exports: ['report_type', 'requested_by_user_id', 'role', 'filters_json', 'status'],
-  coupons: ['event_id', 'code', 'discount_type']
+  coupons: ['coupon_type', 'code', 'discount_type']
 }
 
 export const emptyEventLocationDraft: EventLocationDraft = {
