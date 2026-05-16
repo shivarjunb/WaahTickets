@@ -51,6 +51,7 @@ async function resolveSession(db: D1Database, authHeader?: string, cookieHeader?
 // ---- Expo Push API ----
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts'
 
 type ExpoMessage = {
   to: string
@@ -114,6 +115,44 @@ type DeliveryResult = {
 
 async function sendViaExpo(messages: ExpoMessage[]): Promise<ExpoPushTicket[]> {
   return sendExpoPushBatch(messages)
+}
+
+async function checkExpoReceipts(
+  ticketIdToTokenId: Map<string, string>,
+  db: D1Database,
+  ctx: ExecutionContext
+): Promise<void> {
+  const ids = [...ticketIdToTokenId.keys()]
+  if (ids.length === 0) return
+
+  ctx.waitUntil((async () => {
+    await new Promise((resolve) => setTimeout(resolve, 8000))
+    try {
+      const response = await fetch(EXPO_RECEIPTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+      if (!response.ok) return
+      const json = (await response.json()) as { data: Record<string, { status: string; details?: { error?: string } }> }
+      const staleTokenIds: string[] = []
+      for (const [ticketId, tokenId] of ticketIdToTokenId.entries()) {
+        const receipt = json.data?.[ticketId]
+        if (receipt?.status === 'error' && receipt.details?.error === 'DeviceNotRegistered') {
+          staleTokenIds.push(tokenId)
+        }
+      }
+      if (staleTokenIds.length > 0) {
+        const placeholders = staleTokenIds.map(() => '?').join(', ')
+        await db
+          .prepare(`UPDATE push_tokens SET enabled = 0 WHERE id IN (${placeholders})`)
+          .bind(...staleTokenIds)
+          .run()
+      }
+    } catch {
+      // Receipt check is best-effort
+    }
+  })())
 }
 
 async function sendNativeProviderPlaceholder(
@@ -352,6 +391,8 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
   )
 
   const deliveryResults: DeliveryResult[] = []
+  // Maps Expo ticket ID → push_token row ID for receipt checking
+  const ticketIdToTokenId = new Map<string, string>()
 
   if (expoTokens.length > 0) {
     const messages: ExpoMessage[] = expoTokens.map((t) => ({
@@ -369,10 +410,12 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
         const batchMessages = messages.slice(cursor, cursor + BATCH_SIZE)
         const tickets = await sendViaExpo(batchMessages)
         batchMessages.forEach((_, index) => {
-          deliveryResults.push({
-            token: expoTokens[cursor + index],
-            ticket: tickets[index] ?? { status: 'error', message: 'Missing Expo ticket response' },
-          })
+          const t = expoTokens[cursor + index]
+          const ticket = tickets[index] ?? { status: 'error', message: 'Missing Expo ticket response' }
+          deliveryResults.push({ token: t, ticket })
+          if (ticket.status === 'ok' && ticket.id) {
+            ticketIdToTokenId.set(ticket.id, t.push_token_id)
+          }
         })
         cursor += BATCH_SIZE
       }
@@ -441,6 +484,11 @@ adminPushRoutes.post('/send', async (c: AppContext) => {
         .map((result) => result.error ?? result.ticket?.message ?? result.ticket?.details?.error ?? 'Unknown error')
     )
   )
+
+  // Check receipts in background (8s delay) and disable any DeviceNotRegistered tokens
+  if (ticketIdToTokenId.size > 0) {
+    checkExpoReceipts(ticketIdToTokenId, c.env.DB, c.executionCtx)
+  }
 
   return c.json({
     ok: true,

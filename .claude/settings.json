@@ -22,7 +22,9 @@
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\" http://localhost:8788/)",
       "Bash(sort -t: -k3 -n)",
       "Bash(curl -s \"https://router.project-osrm.org/route/v1/driving/85.3085,27.7170;85.3280,27.6726?overview=full&geometries=geojson\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); r=d['routes'][0]; print\\('distance:', round\\(r['distance']/1000,2\\), 'km | coords:', len\\(r['geometry']['coordinates']\\), 'points'\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); r=d['routes'][0]; print\\('distance:', round\\(r['distance']/1000,2\\), 'km | coords:', len\\(r['geometry']['coordinates']\\), 'points'\\)\")",
+      "Bash(curl -s -X POST https://exp.host/--/api/v2/push/getReceipts -H 'Content-Type: application/json' -d '{\"ids\":[\"019e2ede-c880-76fd-8099-2795b55510fe\",\"019e2ede-c880-76fd-8099-2b3a6c125fd7\"]}')",
+      "Bash(python3 -m json.tool)"
     ]
   }
 }
