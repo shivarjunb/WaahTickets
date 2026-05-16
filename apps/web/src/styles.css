@@ -9414,6 +9414,37 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
 }
 
+/* Map icon button — sits left of the ticket button */
+.event-card-map-btn {
+  position: absolute;
+  bottom: 14px;
+  right: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  color: #ffffff;
+  background: #0f766e;
+  box-shadow: 0 4px 14px rgba(15, 118, 110, 0.38);
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  z-index: 1;
+}
+
+.event-card-map-btn:hover {
+  background: #0d9488;
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(15, 118, 110, 0.5);
+}
+
+/* Hide the directional arrow tail when popup is shown above a card (no pin to point at) */
+.event-card-map-portal .event-pin-card-tail {
+  display: none;
+}
+
 .seller-cta {
   display: grid;
   gap: 24px;
@@ -9626,6 +9657,24 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   color: #64748b;
   background: transparent;
   font-weight: 800;
+}
+
+.event-detail-mini-map {
+  height: 220px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.event-detail-mini-map .hero-live-map-canvas,
+.event-detail-mini-map .kathmandu-map-container {
+  width: 100%;
+  height: 220px;
+}
+
+/* Hide the live counter and zoom controls inside the mini map */
+.event-detail-mini-map .hero-map-live-counter,
+.event-detail-mini-map .hero-map-controls {
+  display: none;
 }
 
 .event-detail-grid {

@@ -27,7 +27,7 @@ function bearingLabel(lat1: number, lng1: number, lat2: number, lng2: number): s
 }
 
 // ─── Convert a real PublicEvent → MapEvent ────────────────────────────────────
-function toMapEvent(ev: PublicEvent): MapEvent | null {
+export function toMapEvent(ev: PublicEvent): MapEvent | null {
   if (ev.location_lat == null || ev.location_lng == null) return null
 
   const dateStr = ev.start_datetime

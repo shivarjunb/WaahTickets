@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Dispatch, SetStateAction } from "react";
-import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Home, Laugh, Lock, LogOut, Mail, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Home, Laugh, Lock, LogOut, Mail, Map as MapIcon, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
 import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
@@ -8,7 +9,9 @@ import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 import { HomepageLoader } from './HomepageLoader';
-import { HeroLiveMap } from './HeroLiveMap';
+import { HeroLiveMap, toMapEvent } from './HeroLiveMap';
+import { EventMapPopup } from './EventMapPopup';
+import { KathmanduMap, CATEGORY_CONFIG } from './KathmanduMap';
 import './heroMapStyles.css';
 
 export default function PublicApp({
@@ -34,6 +37,7 @@ export default function PublicApp({
   const [isTicketTypesLoading, setIsTicketTypesLoading] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedEventDetailId, setSelectedEventDetailId] = useState<string | null>(null)
+  const [detailFromCard, setDetailFromCard] = useState(false)
   const [ticketQuantities, setTicketQuantities] = useState<Record<string, number>>({})
   const [eventSearchQuery, setEventSearchQuery] = useState('')
   const [eventLocationQuery, setEventLocationQuery] = useState('')
@@ -1268,11 +1272,11 @@ export default function PublicApp({
         searchQuery={eventSearchQuery}
         onSearchChange={setEventSearchQuery}
         onSearchSubmit={() => document.querySelector('#events')?.scrollIntoView({ behavior: 'smooth' })}
-        onViewEventDetails={(eventId) => setSelectedEventDetailId(eventId)}
+        onViewEventDetails={(eventId) => { setSelectedEventDetailId(eventId); setDetailFromCard(false) }}
         onNavigate={(path) => {
           const match = path.match(/^\/events\/(.+)$/)
           if (match) {
-            setSelectedEventDetailId(match[1])
+            setSelectedEventDetailId(match[1]); setDetailFromCard(false)
           } else {
             onNavigate(path)
           }
@@ -1358,7 +1362,7 @@ export default function PublicApp({
                       event={event}
                       imageUrl={getEventImageUrl(event, eventIndex)}
                       statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                      onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                      onOpenDetails={() => { setSelectedEventDetailId(event.id ?? null); setDetailFromCard(true) }}
                       onSelectTickets={() => {
                         if (!event.id) return
                         setSelectedEventId(event.id)
@@ -1429,7 +1433,7 @@ export default function PublicApp({
                           event={event}
                           imageUrl={getEventImageUrl(event, eventIndex)}
                           statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                          onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                          onOpenDetails={() => { setSelectedEventDetailId(event.id ?? null); setDetailFromCard(true) }}
                           onSelectTickets={() => {
                             if (!event.id) return
                             setSelectedEventId(event.id)
@@ -1463,7 +1467,7 @@ export default function PublicApp({
                         event={event}
                         imageUrl={getEventImageUrl(event, index)}
                         statusLabel="Featured"
-                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                        onOpenDetails={() => { setSelectedEventDetailId(event.id ?? null); setDetailFromCard(true) }}
                         onSelectTickets={() => {
                           if (!event.id) return
                           setSelectedEventId(event.id)
@@ -1483,7 +1487,7 @@ export default function PublicApp({
                         event={event}
                         imageUrl={getEventImageUrl(event, index)}
                         statusLabel={isTruthyValue(event.is_featured) ? 'Featured' : undefined}
-                        onOpenDetails={() => setSelectedEventDetailId(event.id ?? null)}
+                        onOpenDetails={() => { setSelectedEventDetailId(event.id ?? null); setDetailFromCard(true) }}
                         onSelectTickets={() => {
                           if (!event.id) return
                           setSelectedEventId(event.id)
@@ -1641,12 +1645,14 @@ export default function PublicApp({
         <EventDetailsModal
           event={selectedEventDetails}
           imageUrl={getEventImageUrl(selectedEventDetails)}
-          onClose={() => setSelectedEventDetailId(null)}
+          showMap={detailFromCard}
+          onClose={() => { setSelectedEventDetailId(null); setDetailFromCard(false) }}
           onViewTickets={() => {
             if (selectedEventDetails.id) {
               setSelectedEventId(String(selectedEventDetails.id))
             }
             setSelectedEventDetailId(null)
+            setDetailFromCard(false)
             setIsCheckoutOpen(true)
           }}
         />
@@ -3071,6 +3077,8 @@ function MobileEventFiltersSheet({
   )
 }
 
+const CARD_MAP_POPUP_EVENT = 'card-map-popup-open'
+
 function EventCard({
   event,
   imageUrl,
@@ -3084,12 +3092,42 @@ function EventCard({
   onOpenDetails: () => void
   onSelectTickets: () => void
 }) {
+  const [popupPos, setPopupPos] = useState<{ x: number; y: number } | null>(null)
+
   const location = event.location_address ?? event.location_name ?? 'Location pending'
   const venue = event.location_name ?? event.organization_name ?? 'Venue pending'
   const priceLabel =
     typeof event.starting_price_paisa === 'number'
       ? `From ${formatMoney(event.starting_price_paisa)}`
       : 'Price announced soon'
+
+  const hasLocation = event.location_lat != null && event.location_lng != null
+  const popupCategory = event.map_pin_icon ?? event.event_type ?? 'Concert'
+  const popupCategoryColor = CATEGORY_CONFIG[popupCategory]?.color ?? '#e91e63'
+  const popupArea = event.location_name ?? event.location_address ?? 'Kathmandu'
+  const popupTime = event.start_datetime
+    ? `${formatEventDate(event.start_datetime)}, ${formatEventTime(event.start_datetime)}`
+    : 'Date TBD'
+  const popupPrice = event.starting_price_paisa != null
+    ? (event.starting_price_paisa === 0 ? 'Free Entry' : `Rs. ${formatMoney(event.starting_price_paisa)}`)
+    : 'See details'
+  const popupImageUrl = typeof event.banner_public_url === 'string' ? event.banner_public_url : undefined
+
+  useEffect(() => {
+    function onOtherOpen(e: Event) {
+      if ((e as CustomEvent<string>).detail !== event.id) setPopupPos(null)
+    }
+    window.addEventListener(CARD_MAP_POPUP_EVENT, onOtherOpen)
+    return () => window.removeEventListener(CARD_MAP_POPUP_EVENT, onOtherOpen)
+  }, [event.id])
+
+  function handleMapClick(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (popupPos) { setPopupPos(null); return }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    window.dispatchEvent(new CustomEvent(CARD_MAP_POPUP_EVENT, { detail: event.id }))
+    setPopupPos({ x: rect.left + rect.width / 2, y: rect.top })
+  }
 
   return (
     <article className="marketplace-event-card">
@@ -3124,6 +3162,59 @@ function EventCard({
       >
         <Ticket size={17} />
       </button>
+      {hasLocation && (
+        <button
+          aria-label="View on map"
+          className="event-card-map-btn"
+          title="View on map"
+          type="button"
+          onClick={handleMapClick}
+        >
+          <MapIcon size={15} />
+        </button>
+      )}
+      {popupPos && hasLocation && createPortal(
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+            onClick={() => setPopupPos(null)}
+          />
+          <div
+            className="event-card-map-portal"
+            style={{
+              position: 'fixed',
+              left: popupPos.x,
+              top: popupPos.y,
+              transform: 'translateX(-50%) translateY(calc(-100% - 12px))',
+              zIndex: 9999,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <EventMapPopup
+              title={event.name ?? 'Untitled Event'}
+              category={popupCategory}
+              area={popupArea}
+              time={popupTime}
+              priceFrom={popupPrice}
+              sponsored={Boolean(event.is_featured)}
+              eventId={event.id ?? ''}
+              categoryColor={popupCategoryColor}
+              imageUrl={popupImageUrl}
+              onViewDetails={() => {
+                setPopupPos(null)
+                onOpenDetails()
+              }}
+              onDirections={() => {
+                window.open(
+                  `https://www.google.com/maps/dir/?api=1&destination=${event.location_lat},${event.location_lng}`,
+                  '_blank'
+                )
+              }}
+            />
+          </div>
+        </>,
+        document.body
+      )}
     </article>
   )
 }
@@ -3175,14 +3266,18 @@ function TrustItem({
 export function EventDetailsModal({
   event,
   imageUrl,
+  showMap,
   onClose,
   onViewTickets
 }: {
   event: PublicEvent
   imageUrl: string
+  showMap?: boolean
   onClose: () => void
   onViewTickets: () => void
 }) {
+  const miniMapEvent = showMap ? toMapEvent(event) : null
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal event-detail-page" role="dialog" aria-modal="true">
@@ -3198,6 +3293,15 @@ export function EventDetailsModal({
             <X size={18} />
           </button>
         </header>
+        {miniMapEvent && (
+          <div className="event-detail-mini-map">
+            <KathmanduMap
+              events={[miniMapEvent]}
+              totalCount={1}
+              onViewDetails={() => {}}
+            />
+          </div>
+        )}
         <div className="event-detail-grid">
           <EventDetailHero event={event} imageUrl={imageUrl} />
           <aside className="event-detail-sidebar">

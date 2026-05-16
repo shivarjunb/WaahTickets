@@ -7,7 +7,7 @@ import { EventMapPopup } from './EventMapPopup'
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
 const TILE_ATTRIBUTION = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>'
 
-const CATEGORY_CONFIG: Record<string, { color: string; svgPath: string }> = {
+export const CATEGORY_CONFIG: Record<string, { color: string; svgPath: string }> = {
   'Concert': {
     color: '#e91e63',
     svgPath: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',

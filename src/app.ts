@@ -263,19 +263,25 @@ app.get('/api/public/events', async (c) => {
         ORDER BY event_locations.created_at ASC
         LIMIT 1
       ) AS location_address,
-      (
-        SELECT event_locations.latitude
-        FROM event_locations
-        WHERE event_locations.event_id = events.id
-        ORDER BY event_locations.created_at ASC
-        LIMIT 1
+      COALESCE(
+        (
+          SELECT event_locations.latitude
+          FROM event_locations
+          WHERE event_locations.event_id = events.id
+          ORDER BY event_locations.created_at ASC
+          LIMIT 1
+        ),
+        events.location_lat
       ) AS location_lat,
-      (
-        SELECT event_locations.longitude
-        FROM event_locations
-        WHERE event_locations.event_id = events.id
-        ORDER BY event_locations.created_at ASC
-        LIMIT 1
+      COALESCE(
+        (
+          SELECT event_locations.longitude
+          FROM event_locations
+          WHERE event_locations.event_id = events.id
+          ORDER BY event_locations.created_at ASC
+          LIMIT 1
+        ),
+        events.location_lng
       ) AS location_lng,
       (
         SELECT MIN(ticket_types.price_paisa)
@@ -295,6 +301,7 @@ app.get('/api/public/events', async (c) => {
     WHERE events.status = 'published'
     ORDER BY
       CASE
+        WHEN events.location_lat IS NOT NULL AND events.location_lng IS NOT NULL THEN 0
         WHEN (
           SELECT 1
           FROM event_locations
