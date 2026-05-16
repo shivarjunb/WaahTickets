@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, Music, Utensils, Star, Trophy, Laugh, Moon, X, LocateFixed } from 'lucide-react'
-import { KathmanduMap } from './KathmanduMap'
-import type { MapEvent, PopupField, UserLocation } from './KathmanduMap'
+import { NepalMap } from './NepalMap'
+import type { MapEvent, PopupField, UserLocation } from './NepalMap'
 import type { PublicEvent } from '../../shared/types'
 import { formatEventDate, formatEventTime, formatMoney } from '../../shared/utils'
 
@@ -246,13 +246,27 @@ export function HeroLiveMap({
 
         {/* Right: Real Kathmandu map */}
         <div className="hero-live-map-canvas-wrapper">
-          <KathmanduMap
+          <NepalMap
             events={filteredEvents}
             totalCount={filteredEvents.length}
             onViewDetails={handleViewDetails}
             userLocation={userLocation}
             maxDistance={maxDistance}
           />
+
+          {/* Edge fade — map blends into hero background */}
+          <div className="hero-map-edge-fade" aria-hidden="true" />
+
+          {/* Gamey scan line */}
+          <div className="hero-map-scan-line" aria-hidden="true" />
+
+          {/* HUD corner brackets */}
+          <div className="hero-map-hud-frame" aria-hidden="true">
+            <span className="hud-corner hud-corner-tl" />
+            <span className="hud-corner hud-corner-tr" />
+            <span className="hud-corner hud-corner-bl" />
+            <span className="hud-corner hud-corner-br" />
+          </div>
 
           {/* Location controls — bottom-left map overlay */}
           <div className="hero-map-locate-overlay">

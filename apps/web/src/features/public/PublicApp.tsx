@@ -9,9 +9,9 @@ import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 import { HomepageLoader } from './HomepageLoader';
-import { HeroLiveMap, toMapEvent } from './HeroLiveMap';
+import { HeroLiveMap } from './HeroLiveMap';
 import { EventMapPopup } from './EventMapPopup';
-import { KathmanduMap, CATEGORY_CONFIG } from './KathmanduMap';
+import { CATEGORY_CONFIG } from './NepalMap';
 import './heroMapStyles.css';
 import { buildCheckoutCouponPayload, discountForEvent } from './coupon-checkout';
 
@@ -1629,7 +1629,6 @@ export default function PublicApp({
         <EventDetailsModal
           event={selectedEventDetails}
           imageUrl={getEventImageUrl(selectedEventDetails)}
-          showMap={detailFromCard}
           onClose={() => { setSelectedEventDetailId(null); setDetailFromCard(false) }}
           onViewTickets={() => {
             if (selectedEventDetails.id) {
@@ -3105,6 +3104,8 @@ function EventCard({
               eventId={event.id ?? ''}
               categoryColor={popupCategoryColor}
               imageUrl={popupImageUrl}
+              lat={event.location_lat ?? undefined}
+              lng={event.location_lng ?? undefined}
               onViewDetails={() => {
                 setPopupPos(null)
                 onOpenDetails()
@@ -3171,18 +3172,14 @@ function TrustItem({
 export function EventDetailsModal({
   event,
   imageUrl,
-  showMap,
   onClose,
   onViewTickets
 }: {
   event: PublicEvent
   imageUrl: string
-  showMap?: boolean
   onClose: () => void
   onViewTickets: () => void
 }) {
-  const miniMapEvent = showMap ? toMapEvent(event) : null
-
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal event-detail-page" role="dialog" aria-modal="true">
@@ -3198,15 +3195,6 @@ export function EventDetailsModal({
             <X size={18} />
           </button>
         </header>
-        {miniMapEvent && (
-          <div className="event-detail-mini-map">
-            <KathmanduMap
-              events={[miniMapEvent]}
-              totalCount={1}
-              onViewDetails={() => {}}
-            />
-          </div>
-        )}
         <div className="event-detail-grid">
           <EventDetailHero event={event} imageUrl={imageUrl} />
           <aside className="event-detail-sidebar">
