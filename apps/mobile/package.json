@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "expo start",
     "dev:clear": "expo start --clear",
+    "dev:go": "bash ./scripts/start-with-profile.sh expo-go",
+    "dev:go:clear": "bash ./scripts/start-with-profile.sh expo-go --clear",
+    "dev:build-client": "bash ./scripts/start-with-profile.sh dev-build",
+    "dev:build-client:clear": "bash ./scripts/start-with-profile.sh dev-build --clear",
     "mobile:dev:clear": "expo start --clear",
     "android": "expo run:android",
     "ios": "expo run:ios"
