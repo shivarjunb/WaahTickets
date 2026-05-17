@@ -8,6 +8,7 @@ import type { AdSettings, AdRecord } from "@waahtickets/shared-types";
 import { type AdDraft, createEmptyAdDraft, adRecordToDraft, adDraftToPayload, AdsSettingsForm, AdCampaignForm, AdsTable } from "../../ads-ui";
 import { HeroSettingsForm } from "./HeroSettingsForm";
 import { CreateEventWizard } from "./CreateEventWizard";
+import { ReferralLinkWizard } from "./ReferralLinkWizard";
 import { PushNotificationsPage } from "./PushNotificationsPage";
 
 function readAdminResourceFromPath() {
@@ -75,6 +76,7 @@ export default function AdminApp({
   const [selectedColumnsByResource, setSelectedColumnsByResource] = useState<Record<string, string[]>>({})
   const [selectedRecord, setSelectedRecord] = useState<ApiRecord | null>(null)
   const [isEventWizardOpen, setIsEventWizardOpen] = useState(false)
+  const [isReferralWizardOpen, setIsReferralWizardOpen] = useState(false)
   const [editingEvent, setEditingEvent] = useState<ApiRecord | null>(null)
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
@@ -1602,6 +1604,11 @@ export default function AdminApp({
 
     if (resource === 'events') {
       setIsEventWizardOpen(true)
+      return
+    }
+
+    if (resource === 'referral_codes') {
+      setIsReferralWizardOpen(true)
       return
     }
 
@@ -3914,6 +3921,21 @@ export default function AdminApp({
             setEditingEvent(null)
             setStatus(wasEditing ? 'Event updated successfully.' : 'Event created successfully.')
             await loadRecords()
+            await loadDashboardMetrics()
+          }}
+        />
+      ) : null}
+
+      {isReferralWizardOpen ? (
+        <ReferralLinkWizard
+          webRole={selectedWebRole}
+          selectedOrgId={selectedOrgId}
+          userOrganizations={userOrganizations}
+          onClose={() => setIsReferralWizardOpen(false)}
+          onSaved={async () => {
+            setIsReferralWizardOpen(false)
+            setStatus('Referral link created successfully.')
+            await loadRecords('referral_codes')
             await loadDashboardMetrics()
           }}
         />

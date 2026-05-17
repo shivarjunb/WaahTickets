@@ -4685,7 +4685,7 @@ async function normalizeCouponRecordForMutation(
     if (!couponType) {
       return c.json({ error: 'coupon_type must be organizer or waahcoupon.' }, 400)
     }
-    record.coupon_type = scope.webrole === 'Admin' && isCreate ? 'waahcoupon' : couponType
+    record.coupon_type = couponType
   }
 
   const effectiveCouponType = normalizeCouponType(record.coupon_type) ?? couponType ?? normalizeCouponType(payload.coupon_type)
