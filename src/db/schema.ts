@@ -218,6 +218,9 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'currency',
       'order_datetime',
       'expires_at',
+      'partner_id',
+      'referral_code_id',
+      'attribution_source',
       'created_at',
       'updated_at'
     ]
@@ -405,6 +408,7 @@ export const tableConfigs: Record<TableName, TableConfig> = {
       'code',
       'partner_id',
       'event_id',
+      'linked_coupon_id',
       'description',
       'is_active',
       'created_by',

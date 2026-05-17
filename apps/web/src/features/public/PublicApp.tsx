@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, CreditCard, Download, Drama, Filter, FilterX, Heart, Home, Laugh, Lock, LogOut, Mail, Map as MapIcon, MapPin, Megaphone, Menu, Music, Save, ScanLine, Search, Share2, ShieldCheck, ShoppingCart, Star, Ticket, Trash2, Trophy, UserCog, Utensils, X } from "lucide-react";
 import { formatNpr, nprToPaisa, paisaToNpr } from "@waahtickets/shared-types";
 import type { ButtonColorPreset, ButtonColorTheme, ApiRecord, PublicEvent, TicketType, CartItem, PersistedCartItem, UserCartSnapshot, KhaltiCheckoutOrderGroup, CheckoutSubmissionSnapshot, GuestCheckoutContact, GuestCheckoutIdentity, OrderCustomerOption, WebRoleName, SortDirection, ResourceSort, PaginationMetadata, ResourceUiConfig, ApiListResponse, ApiMutationResponse, CouponValidationResponse, TicketRedeemResponse, R2SettingsData, PublicRailsSettingsData, AdminRailsSettingsData, PublicPaymentSettingsData, AdminPaymentSettingsData, CartSettingsData, GoogleAuthConfig, AuthUser, DetectedBarcodeValue, BarcodeDetectorInstance, BarcodeDetectorConstructor, AdminDashboardMetrics, EventLocationDraft, FetchJsonOptions } from "../../shared/types";
-import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
+import { adminResourceGroups, groupedAdminResources, DASHBOARD_VIEW, SETTINGS_VIEW, ADS_VIEW, buttonColorPresets, defaultButtonPreset, defaultButtonColorTheme, defaultRailsSettingsData, defaultPublicPaymentSettings, defaultAdminPaymentSettings, defaultCartSettingsData, defaultAdSettingsData, samplePayloads, resourceUiConfig, roleAccess, lookupResourceByField, fieldSelectOptions, requiredFieldsByResource, emptyEventLocationDraft, hiddenTableColumns, defaultSubgridRowsPerPage, minSubgridRowsPerPage, maxSubgridRowsPerPage, adminGridRowsStorageKey, adminSidebarCollapsedStorageKey, khaltiCheckoutDraftStorageKey, esewaCheckoutDraftStorageKey, guestCheckoutContactStorageKey, cartStorageKey, cartHoldStorageKey, cartHoldDurationMs, paymentCallbackLockKey, salesAttributionStorageKey, emptyColumnFilterState, defaultMonthlyTicketSales, defaultAdminDashboardMetrics } from "../../shared/constants";
 import { readPersistedCartHold, readPersistedCartItems, loadAdminSubgridRowsPerPage, loadAdminSidebarCollapsed, loadButtonColorTheme, applyButtonThemeToDocument, normalizeHexColor, hexToRgba, getFieldSelectOptions, getQrImageUrl, toFormValues, fromFormValues, eventLocationDraftToPayload, coerceValue, coerceFieldValue, normalizePagination, formatPaginationSummary, getTableColumns, getAvailableColumns, parseTimeValue, getRecordTimestamp, normalizeStatusLabel, isSuccessfulPaymentStatus, isFailureQueueStatus, getStatusBreakdown, getRecentRecordTrend, normalizePublicRailsSettings, normalizeAdminRailsSettings, normalizeAdminPaymentSettings, normalizeCartSettings, buildConfiguredRails, groupCartItemsByEvent, cartHasDifferentEvent, isCartItemLike, isPersistedCartItemLike, getFileDownloadUrl, getTicketPdfDownloadUrl, formatCellValue, isHiddenListColumn, isIdentifierLikeColumn, getLookupLabel, isBooleanField, isDateTimeField, isPaisaField, isValidMoneyInput, formatDateTimeForTable, toDateTimeLocalValue, toIsoDateTimeValue, isTruthyValue, isAlwaysHiddenFormField, isFieldReadOnly, canEditFieldForRole, canCustomerEditCustomerField, getInitials, getAdminResourceIcon, formatResourceName, formatAdminLabel, isRequiredField, ensureFormHasRequiredFields, getOrderedFormFields, validateForm, isValidHttpUrl, readQrValueFromToken, resolveQrCodeValueFromPayload, readQrValueFromUrlPayload, readQrValueFromUrlSearchParams, getEventImageUrl, isEventWithinRange, formatEventDate, formatEventTime, formatEventRailLabel, hasTicketValidationAccess, hasAdminConsoleAccess, resolveReportsPathForUser, getDefaultWebRoleView, hasCustomerTicketsAccess, formatMoney, formatCountdown, getBarcodeDetectorConstructor, fetchJson, getErrorMessage, sanitizeClientErrorMessage, isErrorStatusMessage } from "../../shared/utils";
 import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
@@ -63,6 +63,22 @@ export default function PublicApp({
   const [orderCouponCode, setOrderCouponCode] = useState('')
   const [orderCouponMessage, setOrderCouponMessage] = useState('')
   const [orderCouponDiscount, setOrderCouponDiscount] = useState<{ couponId: string; discount: number; allocations: Record<string, number> } | null>(null)
+  const [salesReferralCode, setSalesReferralCode] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    try {
+      const raw = window.localStorage.getItem(salesAttributionStorageKey)
+      if (!raw) return ''
+      const parsed = JSON.parse(raw) as { code?: unknown; expiresAt?: unknown }
+      const expiresAt = Number(parsed.expiresAt ?? 0)
+      if (expiresAt && expiresAt <= Date.now()) {
+        window.localStorage.removeItem(salesAttributionStorageKey)
+        return ''
+      }
+      return String(parsed.code ?? '').trim()
+    } catch {
+      return ''
+    }
+  })
   const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(() => {
     if (typeof window === 'undefined') {
       return { first_name: '', last_name: '', email: '', phone_number: '' }
@@ -88,6 +104,7 @@ export default function PublicApp({
   const [cartHoldExpiresAt, setCartHoldExpiresAt] = useState('')
   const [isCartExpiredNoticeOpen, setIsCartExpiredNoticeOpen] = useState(false)
   const [isCartEmptyNoticeOpen, setIsCartEmptyNoticeOpen] = useState(false)
+  const autoAppliedSalesCouponRef = useRef('')
   const [publicStatus, setPublicStatus] = useState('Loading events')
   const [paymentCallbackPhase, setPaymentCallbackPhase] = useState<'idle' | 'processing' | 'failure'>('idle')
   const [paymentCallbackError, setPaymentCallbackError] = useState('')
@@ -623,6 +640,30 @@ export default function PublicApp({
   }, [isProcessPaymentRoute])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const ref = params.get('sales_ref')?.trim() ?? ''
+    const coupon = params.get('coupon')?.trim() ?? ''
+    const eventId = params.get('event_id')?.trim() ?? ''
+
+    if (ref) {
+      const nextAttribution = { code: ref, expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 30 }
+      window.localStorage.setItem(salesAttributionStorageKey, JSON.stringify(nextAttribution))
+      setSalesReferralCode(ref)
+      setPublicStatus('Sales agent link applied.')
+    }
+    if (coupon) {
+      setOrderCouponCode(coupon)
+      autoAppliedSalesCouponRef.current = ''
+    }
+    if (eventId) {
+      setSelectedEventId(eventId)
+      setSelectedEventDetailId(eventId)
+      setDetailFromCard(false)
+    }
+  }, [])
+
+  useEffect(() => {
     const token = qrVerifyToken?.trim() ?? ''
     if (!token) return
     if (verifyHandledTokenRef.current === token) return
@@ -793,6 +834,7 @@ export default function PublicApp({
       orderCouponCode: string
       orderCouponDiscount: { couponId: string; discount: number; allocations: Record<string, number> } | null
       orderCouponMessage: string
+      sales_referral_code?: string
       order_groups: KhaltiCheckoutOrderGroup[]
       pidx?: string
       mode?: 'test' | 'live'
@@ -909,6 +951,7 @@ export default function PublicApp({
               transaction_id: data.data.transaction_id ?? '',
               order_groups: restored.order_groups,
               coupon: restored.orderCouponDiscount ? buildCheckoutCouponPayload(restored.orderCouponCode ?? '') : undefined,
+              sales_referral_code: restored.sales_referral_code,
               guest_checkout_token: guestCheckoutToken
             })
           })
@@ -954,6 +997,7 @@ export default function PublicApp({
               cartEventEmails: restored.cartEventEmails ?? {},
               orderCouponCode: restored.orderCouponCode ?? '',
               orderCouponDiscount: restored.orderCouponDiscount ?? null,
+              sales_referral_code: restored.sales_referral_code,
               order_groups: restored.order_groups,
               guest_checkout_identity: restored.guest_checkout_identity ?? null
             }
@@ -2017,6 +2061,7 @@ export default function PublicApp({
         orderCouponCode,
         orderCouponDiscount,
         orderCouponMessage,
+        sales_referral_code: salesReferralCode || undefined,
         order_groups: orderGroups,
         guest_checkout_identity: guestIdentity ?? null
       }
@@ -2037,6 +2082,7 @@ export default function PublicApp({
         return_url: window.location.origin + '/',
         order_groups: orderGroups,
         coupon: orderCouponDiscount ? buildCheckoutCouponPayload(orderCouponCode) : undefined,
+        sales_referral_code: salesReferralCode || undefined,
         guest_checkout_token: guestIdentity?.token
       }
       const { data } = await fetchJson<{ data: { payment_url: string; pidx: string } }>('/api/storefront/payments/khalti/initiate', {
@@ -2085,6 +2131,7 @@ export default function PublicApp({
         orderCouponCode,
         orderCouponDiscount,
         orderCouponMessage,
+        sales_referral_code: salesReferralCode || undefined,
         order_groups: orderGroups,
         mode: publicPaymentSettings.esewa_mode,
         guest_checkout_identity: guestIdentity ?? null
@@ -2102,6 +2149,7 @@ export default function PublicApp({
           amount_paisa: cartGrandTotalPaisa,
           order_groups: orderGroups,
           coupon: orderCouponDiscount ? buildCheckoutCouponPayload(orderCouponCode) : undefined,
+          sales_referral_code: salesReferralCode || undefined,
           guest_checkout_token: guestIdentity?.token
         })
       })
@@ -2160,6 +2208,7 @@ export default function PublicApp({
           order_groups: orderGroups,
           payment: paymentContext ?? { provider: 'manual' },
           coupon: buildCheckoutCouponPayload(submissionCouponCode),
+          sales_referral_code: (snapshot?.sales_referral_code ?? salesReferralCode) || undefined,
           guest_checkout_token: guestIdentity?.token
         }),
         timeoutMs: requestTimeoutMs
@@ -2236,6 +2285,15 @@ export default function PublicApp({
       setOrderCouponMessage(getErrorMessage(error))
     }
   }
+
+  useEffect(() => {
+    const code = orderCouponCode.trim()
+    if (!code || orderCouponDiscount || cartGroups.length === 0) return
+    if (!salesReferralCode && autoAppliedSalesCouponRef.current === code) return
+    if (autoAppliedSalesCouponRef.current === code) return
+    autoAppliedSalesCouponRef.current = code
+    void applyOrderCouponAcrossCart()
+  }, [cartGroups.length, orderCouponCode, orderCouponDiscount, salesReferralCode])
 
   function getReserveBlockedMessage() {
     if (isSubmittingOrder) return 'Order is being created. Please wait.'

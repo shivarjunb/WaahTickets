@@ -1142,6 +1142,15 @@ export function getOrderedFormFields(resource: string, values: Record<string, st
     return [...requiredFields, ...preferred, ...remaining]
   }
 
+  if (resource === 'partners' && Object.prototype.hasOwnProperty.call(values, 'user_id')) {
+    const preferred = ['user_id', 'partner_type', 'organization_id', 'is_active']
+    const preferredSet = new Set(preferred)
+    return [
+      ...preferred.filter((field) => visibleFields.includes(field)),
+      ...visibleFields.filter((field) => !preferredSet.has(field) && field !== 'name' && field !== 'code')
+    ]
+  }
+
   return [...requiredFields, ...optionalFields]
 }
 
@@ -1172,6 +1181,8 @@ export function getVisibleFormFields(
 
 
 export function getFormFieldLabel(resource: string, field: string) {
+  if (resource === 'partners' && field === 'user_id') return 'Sales Agent User'
+  if (resource === 'partners' && field === 'partner_type') return 'Partner Type'
   if (resource === 'coupons' && field === 'discount_percentage') return 'Discount Percentage'
   if (resource === 'coupons' && field === 'discount_amount_paisa') return 'Discount Amount'
   if (resource === 'coupons' && field === 'max_redemptions') return 'Max Redemptions'
@@ -1185,7 +1196,9 @@ export function validateForm(
   options?: { mode: 'create' | 'edit'; webRole: WebRoleName }
 ) {
   const messages: string[] = []
-  const requiredFields = requiredFieldsByResource[resource] ?? []
+  const requiredFields = (requiredFieldsByResource[resource] ?? []).filter(
+    (field) => !(resource === 'partners' && field === 'user_id' && options?.mode === 'edit')
+  )
 
   for (const field of requiredFields) {
     if (!String(values[field] ?? '').trim()) {
@@ -1214,6 +1227,10 @@ export function validateForm(
     } else if (!String(values.user_id ?? '').trim() && !String(values.email ?? '').trim()) {
       messages.push('user id or email is required.')
     }
+  }
+
+  if (resource === 'partners' && options?.mode === 'create' && !String(values.user_id ?? '').trim()) {
+    messages.push('sales agent user is required.')
   }
 
   if (resource === 'coupons' && options?.mode === 'create' && options.webRole === 'Organizations') {

@@ -1615,6 +1615,9 @@ export default function AdminApp({
       delete values.user_id
       values.email = ''
     }
+    if (resource === 'partners') {
+      values.partner_type = 'sales_agent'
+    }
     if (resource === 'coupons' && selectedWebRole === 'Organizations') {
       const selectedOrganizationId = selectedOrgId || String(userOrganizations[0]?.id ?? '')
       values.coupon_type = 'organizer'
@@ -1816,6 +1819,25 @@ export default function AdminApp({
       selectedResource,
       modalMode === 'edit' ? selectedRecord : undefined
     )
+    const selectedPartnerUserId =
+      selectedResource === 'partners' && modalMode === 'create'
+        ? String(formValues.user_id ?? '').trim()
+        : ''
+    if (selectedResource === 'partners' && modalMode === 'create') {
+      const selectedPartnerUser = lookupOptions.user_id?.find((option) => String(option.id ?? '') === selectedPartnerUserId)
+      const firstName = String(selectedPartnerUser?.first_name ?? '').trim()
+      const lastName = String(selectedPartnerUser?.last_name ?? '').trim()
+      const email = String(selectedPartnerUser?.email ?? '').trim()
+      const displayName = [firstName, lastName].filter(Boolean).join(' ').trim() || email || `User ${selectedPartnerUserId.slice(0, 8)}`
+      body.name = displayName
+      body.code = String(body.code ?? (email.split('@')[0] || selectedPartnerUserId.slice(0, 8)))
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+      delete body.user_id
+    }
     if (selectedWebRole === 'Customers' && selectedResource === 'customers' && modalMode === 'edit') {
       const selectedUserId = String(selectedRecord?.user_id ?? formValues.user_id ?? '')
       if (!user?.id || selectedUserId !== user.id) {
@@ -1904,6 +1926,21 @@ export default function AdminApp({
           } catch {
             // non-fatal: user saved, org assignment failed silently
           }
+        }
+      }
+      if (selectedResource === 'partners' && modalMode === 'create' && selectedPartnerUserId && data.data?.id) {
+        try {
+          await fetchJson<ApiMutationResponse>('/api/partner_users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              partner_id: data.data.id,
+              user_id: selectedPartnerUserId,
+              role: 'member'
+            })
+          })
+        } catch (error) {
+          setStatus(`Partner created, but user assignment failed: ${getErrorMessage(error)}`)
         }
       }
       setStatus(`${modalMode === 'edit' ? 'Updated' : 'Created'} ${formatResourceName(selectedResource)}`)

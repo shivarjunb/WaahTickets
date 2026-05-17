@@ -233,6 +233,11 @@ export const samplePayloads: Record<string, Record<string, unknown>> = {
     can_edit: 0,
     can_delete: 0
   },
+  partners: {
+    user_id: 'replace-with-existing-user-id',
+    partner_type: 'sales_agent',
+    is_active: 1
+  },
   organizations: {
     name: 'Waah Events',
     contact_email: 'organizer@example.com'
@@ -354,7 +359,7 @@ export const resourceUiConfig: Record<string, ResourceUiConfig> = {
   tickets: { title: 'Issued Tickets', description: 'Review issued tickets, payment state, redemption, and customer ownership.', columns: ['event_title', 'ticket_type_name', 'ticket_number', 'customer_name', 'status', 'is_paid', 'created_at'] },
   orders: { title: 'Orders', description: 'Track purchases, payment state, order value, and customer activity.', columns: ['order_number', 'event_title', 'customer_name', 'total_amount_paisa', 'status', 'created_at'], searchPlaceholder: 'Search orders' },
   partners: { title: 'Partners', description: 'Manage influencers, affiliates, promoters, and sales partners.', columns: ['name', 'partner_type', 'parent_partner_name', 'status', 'created_at'], createLabel: 'Create partner', searchPlaceholder: 'Search partners', emptyState: 'No partners created yet.' },
-  referral_codes: { title: 'Referral Codes', description: 'Track influencer and partner attribution codes.', columns: ['code', 'partner_name', 'event_title', 'status', 'used_count', 'created_at'], createLabel: 'Create referral code', searchPlaceholder: 'Search referral codes', emptyState: 'No referral codes created yet.' },
+  referral_codes: { title: 'Referral Codes', description: 'Track influencer, sales-agent, and partner attribution links.', columns: ['code', 'partner_name', 'event_title', 'linked_coupon_id', 'status', 'used_count', 'created_at'], createLabel: 'Create referral code', searchPlaceholder: 'Search referral codes', emptyState: 'No referral codes created yet.' },
   commission_rules: { title: 'Commission Rules', description: 'Configure platform fees, partner commissions, and influencer payouts.', columns: ['name', 'event_title', 'partner_name', 'commission_type', 'commission_value', 'commission_source', 'status'] },
   commission_ledger: { title: 'Commission Ledger', description: 'Audit commission entries by order, event, beneficiary, and status.', columns: ['order_number', 'event_title', 'beneficiary_name', 'commission_type', 'base_amount_paisa', 'commission_amount_paisa', 'status', 'created_at'] },
   payout_batches: { title: 'Settlements', description: 'Review payout batches and settlement processing state.', columns: ['batch_type', 'event_title', 'beneficiary_name', 'total_amount_paisa', 'status', 'paid_at'] },
@@ -429,6 +434,7 @@ export const lookupResourceByField: Record<string, string> = {
   partner_id: 'partners',
   parent_partner_id: 'partners',
   referral_code_id: 'referral_codes',
+  linked_coupon_id: 'coupons',
   commission_rule_id: 'commission_rules',
   payout_batch_id: 'payout_batches',
   commission_ledger_id: 'commission_ledger',
@@ -440,6 +446,9 @@ export const lookupResourceByField: Record<string, string> = {
 export const fieldSelectOptions: Record<string, Record<string, string[]>> = {
   organization_users: {
     role: ['admin', 'ticket-validator']
+  },
+  partners: {
+    partner_type: ['sales_agent']
   },
   events: {
     status: ['draft', 'published', 'cancelled', 'archived'],
@@ -477,7 +486,7 @@ export const requiredFieldsByResource: Record<string, string[]> = {
   user_web_roles: ['user_id', 'web_role_id'],
   web_role_menu_items: ['web_role_id', 'resource_name'],
   payments: ['order_id', 'customer_id', 'amount_paisa'],
-  partners: ['name', 'partner_type'],
+  partners: ['partner_type'],
   partner_users: ['partner_id', 'user_id', 'role'],
   referral_codes: ['code', 'partner_id'],
   commission_rules: ['name', 'applies_to', 'commission_type', 'stacking_behavior', 'commission_source'],
@@ -554,6 +563,8 @@ export const cartHoldStorageKey = 'waah_cart_hold'
 export const cartHoldDurationMs = 15 * 60 * 1000
 
 export const paymentCallbackLockKey = 'waah_payment_callback_lock'
+
+export const salesAttributionStorageKey = 'waah_sales_attribution'
 
 
 export const emptyColumnFilterState: Record<string, string> = {}

@@ -48,8 +48,15 @@ type AppContext = Context<{ Bindings: Bindings; Variables: { authScope: AuthScop
 type StorefrontContext = Context<{ Bindings: Bindings }>
 type JsonRecord = Record<string, unknown>
 type D1Value = string | number | null
+type SalesAttribution = {
+  referralCodeId: string
+  referralCode: string
+  partnerId: string
+  eventId: string | null
+}
 
 const reservedQueryParams = new Set(['limit', 'offset', 'order_by', 'order_dir', 'q'])
+const SALES_ATTRIBUTION_COOKIE = 'waah_sales_ref'
 const hiddenColumnsByTable: Record<string, readonly string[]> = {
   users: ['password_hash', 'google_sub']
 }
@@ -281,12 +288,8 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+  const salesAttribution = await resolveSalesAttribution(db, payload, c.req.header('Cookie'), orderGroups.value)
 
-  try {
-    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
-  }
   let completedOrders = 0
 
   for (const group of orderGroups.value) {
@@ -389,6 +392,14 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
       }
     }
 
+    await applySalesAttributionToOrder({
+      db,
+      attribution: salesAttribution,
+      orderId: group.order_id,
+      customerId: actor.userId,
+      nowIso: now
+    })
+
     const previousStatus = String(existingOrder?.status ?? '').toLowerCase()
     if (previousStatus !== 'paid') {
       await safeMaybeEnqueueStorefront(c, () =>
@@ -414,6 +425,15 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     completedOrders += 1
   }
 
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
+  }
+  for (const group of orderGroups.value) {
+    await writeSalesAgentCommissionLedger({ db, attribution: salesAttribution, orderGroup: group, nowIso: now })
+  }
+
   await ensureUserCartItemsTable(db)
   await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(actor.userId).run()
 
@@ -422,7 +442,8 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     cache.bumpResourceVersion('orders'),
     cache.bumpResourceVersion('order_items'),
     cache.bumpResourceVersion('payments'),
-    cache.bumpResourceVersion('coupon_redemptions')
+    cache.bumpResourceVersion('coupon_redemptions'),
+    cache.bumpResourceVersion('commission_ledger')
   ])
 
   return c.json({ data: { completed_orders: completedOrders } })
@@ -525,6 +546,7 @@ storefrontRoutes.post('/payments/khalti/initiate', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+  const salesAttribution = await resolveSalesAttribution(db, payload, c.req.header('Cookie'), orderGroups.value)
 
   await ensureAppSettingsTable(db)
   const stored = await getAppSettings(db, PAYMENT_SETTING_KEYS)
@@ -592,6 +614,14 @@ storefrontRoutes.post('/payments/khalti/initiate', async (c) => {
     } else if (existingOrder.customer_id !== actor.userId) {
       return c.json({ error: `Order ${group.order_id} belongs to another user.` }, 403)
     }
+
+    await applySalesAttributionToOrder({
+      db,
+      attribution: salesAttribution,
+      orderId: group.order_id,
+      customerId: actor.userId,
+      nowIso: now
+    })
 
     const existingPayment = await db
       .prepare(
@@ -1153,6 +1183,7 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+  const salesAttribution = await resolveSalesAttribution(db, payload, c.req.header('Cookie'), orderGroups.value)
 
   try {
     await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
@@ -1224,6 +1255,15 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
       .bind(now, order.id)
       .run()
 
+    await applySalesAttributionToOrder({
+      db,
+      attribution: salesAttribution,
+      orderId: order.id,
+      customerId: actor.userId,
+      nowIso: now
+    })
+    await writeSalesAgentCommissionLedger({ db, attribution: salesAttribution, orderGroup: group, nowIso: now })
+
     if (previousStatus !== 'paid') {
       await safeMaybeEnqueueStorefront(c, () =>
         maybeEnqueueOrderNotification({
@@ -1256,7 +1296,8 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
     cache.bumpResourceVersion('orders'),
     cache.bumpResourceVersion('order_items'),
     cache.bumpResourceVersion('payments'),
-    cache.bumpResourceVersion('coupon_redemptions')
+    cache.bumpResourceVersion('coupon_redemptions'),
+    cache.bumpResourceVersion('commission_ledger')
   ])
 
   return c.json({
@@ -2677,6 +2718,7 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+  const salesAttribution = await resolveSalesAttribution(db, payload, c.req.header('Cookie'), orderGroups.value)
 
   try {
     await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: scope.userId, orderGroups: orderGroups.value, nowIso: now })
@@ -2748,6 +2790,15 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
       .bind(now, order.id)
       .run()
 
+    await applySalesAttributionToOrder({
+      db,
+      attribution: salesAttribution,
+      orderId: order.id,
+      customerId: scope.userId,
+      nowIso: now
+    })
+    await writeSalesAgentCommissionLedger({ db, attribution: salesAttribution, orderGroup: group, nowIso: now })
+
     if (previousStatus !== 'paid') {
       await safeMaybeEnqueue(c, () =>
         maybeEnqueueOrderNotification({
@@ -2780,7 +2831,8 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
     cache.bumpResourceVersion('orders'),
     cache.bumpResourceVersion('order_items'),
     cache.bumpResourceVersion('payments'),
-    cache.bumpResourceVersion('coupon_redemptions')
+    cache.bumpResourceVersion('coupon_redemptions'),
+    cache.bumpResourceVersion('commission_ledger')
   ])
 
   return c.json({
@@ -4148,6 +4200,51 @@ function parseCheckoutCouponFromPayload(payload: JsonRecord) {
   return parseCouponCheckoutInput(payload.coupon ?? payload.coupon_code ?? payload.qr_payload ?? null)
 }
 
+async function resolveSalesAttribution(
+  db: D1Database,
+  payload: JsonRecord,
+  cookieHeader: string | undefined,
+  orderGroups: KhaltiOrderGroupDraft[]
+): Promise<SalesAttribution | null> {
+  const rawCode = String(
+    payload.sales_referral_code ??
+      payload.sales_ref ??
+      payload.referral_code ??
+      getCookie(cookieHeader, SALES_ATTRIBUTION_COOKIE) ??
+      ''
+  ).trim()
+  if (!rawCode) return null
+
+  const row = await db
+    .prepare(
+      `SELECT
+         referral_codes.id,
+         referral_codes.code,
+         referral_codes.partner_id,
+         referral_codes.event_id
+       FROM referral_codes
+       JOIN partners ON partners.id = referral_codes.partner_id
+       WHERE lower(referral_codes.code) = lower(?)
+         AND referral_codes.is_active = 1
+         AND partners.is_active = 1
+       LIMIT 1`
+    )
+    .bind(rawCode)
+    .first<{ id: string; code: string; partner_id: string; event_id: string | null }>()
+  if (!row?.id || !row.partner_id) return null
+
+  if (row.event_id && !orderGroups.some((group) => group.event_id === row.event_id)) {
+    return null
+  }
+
+  return {
+    referralCodeId: row.id,
+    referralCode: row.code,
+    partnerId: row.partner_id,
+    eventId: row.event_id
+  }
+}
+
 async function resolveAppliedCheckoutCoupon(args: {
   db: D1Database
   input: CouponCheckoutInput | null
@@ -4348,6 +4445,144 @@ async function redeemCheckoutCoupon(args: {
     )
     .bind(crypto.randomUUID(), args.coupon.couponId, primaryOrder.order_id, args.customerId, args.coupon.totalDiscountPaisa, args.nowIso)
     .run()
+}
+
+async function applySalesAttributionToOrder(args: {
+  db: D1Database
+  attribution: SalesAttribution | null
+  orderId: string
+  customerId: string
+  nowIso: string
+}) {
+  if (!args.attribution) return
+
+  await args.db
+    .prepare(
+      `UPDATE orders
+       SET partner_id = ?,
+           referral_code_id = ?,
+           attribution_source = 'sales_link',
+           updated_at = ?
+       WHERE id = ?
+         AND customer_id = ?`
+    )
+    .bind(args.attribution.partnerId, args.attribution.referralCodeId, args.nowIso, args.orderId, args.customerId)
+    .run()
+}
+
+async function writeSalesAgentCommissionLedger(args: {
+  db: D1Database
+  attribution: SalesAttribution | null
+  orderGroup: KhaltiOrderGroupDraft
+  nowIso: string
+}) {
+  if (!args.attribution) return
+
+  const existing = await args.db
+    .prepare(
+      `SELECT id
+       FROM commission_ledger
+       WHERE order_id = ?
+         AND partner_id = ?
+         AND referral_code_id = ?
+         AND entry_type = 'original'
+       LIMIT 1`
+    )
+    .bind(args.orderGroup.order_id, args.attribution.partnerId, args.attribution.referralCodeId)
+    .first<{ id: string }>()
+  if (existing?.id) return
+
+  const rules = await args.db
+    .prepare(
+      `SELECT
+         id,
+         commission_type,
+         commission_source,
+         rate_value,
+         flat_amount_paisa,
+         max_commission_amount_paisa,
+         stacking_group
+       FROM commission_rules
+       WHERE is_active = 1
+         AND (event_id IS NULL OR event_id = ?)
+         AND (partner_id IS NULL OR partner_id = ?)
+         AND (referral_code_id IS NULL OR referral_code_id = ?)
+         AND (start_datetime IS NULL OR start_datetime <= ?)
+         AND (end_datetime IS NULL OR end_datetime >= ?)
+       ORDER BY priority DESC, created_at ASC`
+    )
+    .bind(args.orderGroup.event_id, args.attribution.partnerId, args.attribution.referralCodeId, args.nowIso, args.nowIso)
+    .all<{
+      id: string
+      commission_type: string
+      commission_source: string
+      rate_value: number | null
+      flat_amount_paisa: number | null
+      max_commission_amount_paisa: number | null
+      stacking_group: string | null
+    }>()
+
+  const baseAmount = Math.max(0, Math.floor(args.orderGroup.total_amount_paisa))
+  for (const rule of rules.results) {
+    const commissionType = String(rule.commission_type ?? '').trim().toLowerCase()
+    let commissionAmount = 0
+    let rateBps: number | null = null
+
+    if (commissionType === 'percentage' || commissionType === 'percent' || commissionType === 'rate_bps') {
+      rateBps = Math.max(0, Math.floor(Number(rule.rate_value ?? 0)))
+      commissionAmount = Math.floor((baseAmount * rateBps) / 10_000)
+    } else if (commissionType === 'fixed' || commissionType === 'flat') {
+      commissionAmount = Math.max(0, Math.floor(Number(rule.flat_amount_paisa ?? 0)))
+    }
+
+    const maxAmount = Number(rule.max_commission_amount_paisa ?? 0)
+    if (Number.isFinite(maxAmount) && maxAmount > 0) {
+      commissionAmount = Math.min(commissionAmount, Math.floor(maxAmount))
+    }
+    if (commissionAmount <= 0) continue
+
+    await args.db
+      .prepare(
+        `INSERT INTO commission_ledger (
+           id,
+           order_id,
+           event_id,
+           beneficiary_type,
+           beneficiary_id,
+           partner_id,
+           referral_code_id,
+           commission_rule_id,
+           commission_type,
+           base_amount_paisa,
+           commission_rate_bps,
+           commission_amount_paisa,
+           commission_source,
+           stacking_group,
+           status,
+           entry_type,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, ?, 'partner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'original', ?, ?)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        args.orderGroup.order_id,
+        args.orderGroup.event_id,
+        args.attribution.partnerId,
+        args.attribution.partnerId,
+        args.attribution.referralCodeId,
+        rule.id,
+        commissionType,
+        baseAmount,
+        rateBps,
+        commissionAmount,
+        rule.commission_source,
+        rule.stacking_group,
+        args.nowIso,
+        args.nowIso
+      )
+      .run()
+  }
 }
 
 async function createCouponRecords(

@@ -53,6 +53,8 @@ const PAYMENT_SETTING_KEYS = [
   'payments_khalti_live_public_key'
 ] as const
 const CART_SETTING_KEYS = ['cart_allow_multiple_events'] as const
+const SALES_ATTRIBUTION_COOKIE = 'waah_sales_ref'
+const SALES_ATTRIBUTION_TTL_SECONDS = 60 * 60 * 24 * 30
 
 export const app = new Hono<{ Bindings: Bindings }>()
 
@@ -78,6 +80,58 @@ app.get('/api/status', (c) => {
 })
 
 app.get('/health', (c) => c.json({ ok: true }))
+
+app.get('/r/:code', async (c) => {
+  const db = c.env.DB
+  if (!db) {
+    return c.redirect('/', 302)
+  }
+
+  const code = String(c.req.param('code') ?? '').trim()
+  if (!code) {
+    return c.redirect('/', 302)
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT
+         referral_codes.id,
+         referral_codes.code,
+         referral_codes.event_id,
+         referral_codes.linked_coupon_id,
+         coupons.public_code AS linked_coupon_public_code
+       FROM referral_codes
+       JOIN partners ON partners.id = referral_codes.partner_id
+       LEFT JOIN coupons ON coupons.id = referral_codes.linked_coupon_id
+       WHERE lower(referral_codes.code) = lower(?)
+         AND referral_codes.is_active = 1
+         AND partners.is_active = 1
+       LIMIT 1`
+    )
+    .bind(code)
+    .first<{
+      id: string
+      code: string
+      event_id: string | null
+      linked_coupon_id: string | null
+      linked_coupon_public_code: string | null
+    }>()
+
+  if (!row?.id) {
+    return c.redirect('/', 302)
+  }
+
+  const target = new URL('/', c.req.url)
+  target.searchParams.set('sales_ref', row.code)
+  if (row.event_id) target.searchParams.set('event_id', row.event_id)
+  if (row.linked_coupon_public_code) target.searchParams.set('coupon', row.linked_coupon_public_code)
+
+  c.header(
+    'Set-Cookie',
+    `${SALES_ATTRIBUTION_COOKIE}=${encodeURIComponent(row.code)}; Max-Age=${SALES_ATTRIBUTION_TTL_SECONDS}; Path=/; SameSite=Lax`
+  )
+  return c.redirect(target.toString(), 302)
+})
 
 app.get('/processpayment', (c) => {
   if (c.env.ASSETS) {

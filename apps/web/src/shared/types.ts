@@ -151,6 +151,7 @@ export type CheckoutSubmissionSnapshot = {
   cartEventCouponDiscounts: Record<string, { couponId: string; discount: number }>
   orderCouponCode?: string
   orderCouponDiscount: { couponId: string; discount: number; allocations: Record<string, number> } | null
+  sales_referral_code?: string
   order_groups?: KhaltiCheckoutOrderGroup[]
   guest_checkout_identity?: GuestCheckoutIdentity | null
 }

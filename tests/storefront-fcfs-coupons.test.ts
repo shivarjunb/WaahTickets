@@ -35,12 +35,20 @@ type StorefrontFcfsDb = D1Database & {
       discount_amount_paisa: number
       redeemed_at: string
     }>
+    commissionLedger: Array<{
+      order_id: string
+      partner_id: string
+      referral_code_id: string
+      commission_amount_paisa: number
+    }>
     stats: {
       couponClaimAttempts: number
       couponRedemptionInserts: number
       orderItemInserts: number
       paymentUpdates: number
       orderUpdates: number
+      orderAttributionUpdates: number
+      commissionLedgerInserts: number
     }
   }
 }
@@ -201,6 +209,34 @@ describe('storefront first-come-first-serve coupons', () => {
     expect(db.state.stats.orderUpdates).toBe(0)
     expect(db.state.redemptions).toHaveLength(0)
   })
+
+  it('stores sales-agent link attribution and writes commission ledger entries on paid checkout', async () => {
+    const db = createStorefrontFcfsDatabase({
+      redeemed_count: 0,
+      max_redemptions: 5
+    })
+
+    const response = await requestStorefront(db, '/api/storefront/payments/khalti/complete', {
+      guest_checkout_token: 'guest-token',
+      pidx: 'pidx-1',
+      transaction_id: 'txn-1',
+      sales_referral_code: 'AGENT123',
+      coupon_code: 'FLASH',
+      order_groups: [orderGroup]
+    })
+
+    expect(response.status).toBe(200)
+    expect(db.state.stats.orderAttributionUpdates).toBe(1)
+    expect(db.state.stats.commissionLedgerInserts).toBe(1)
+    expect(db.state.commissionLedger).toEqual([
+      {
+        order_id: 'order-1',
+        partner_id: 'partner-agent-1',
+        referral_code_id: 'ref-agent-1',
+        commission_amount_paisa: 900
+      }
+    ])
+  })
 })
 
 async function requestStorefront(db: D1Database, path: string, body: Record<string, unknown>) {
@@ -242,12 +278,15 @@ function createStorefrontFcfsDatabase(overrides: Partial<MockCoupon> & { exhaust
       ...withoutTestOnlyOverrides(overrides)
     } satisfies MockCoupon,
     redemptions: [] as StorefrontFcfsDb['state']['redemptions'],
+    commissionLedger: [] as StorefrontFcfsDb['state']['commissionLedger'],
     stats: {
       couponClaimAttempts: 0,
       couponRedemptionInserts: 0,
       orderItemInserts: 0,
       paymentUpdates: 0,
-      orderUpdates: 0
+      orderUpdates: 0,
+      orderAttributionUpdates: 0,
+      commissionLedgerInserts: 0
     }
   }
   const exhaustOnClaim = Boolean(overrides.exhaustOnClaim)
@@ -264,6 +303,16 @@ function createStorefrontFcfsDatabase(overrides: Partial<MockCoupon> & { exhaust
         async first() {
           if (sql.includes('FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')) {
             return state.redemptions.find((redemption) => redemption.coupon_id === bindings[0]) ?? null
+          }
+          if (sql.includes('FROM referral_codes')) {
+            return String(bindings[0]).toLowerCase() === 'agent123'
+              ? { id: 'ref-agent-1', code: 'AGENT123', partner_id: 'partner-agent-1', event_id: null }
+              : null
+          }
+          if (sql.includes('FROM commission_ledger')) {
+            return state.commissionLedger.find(
+              (row) => row.order_id === bindings[0] && row.partner_id === bindings[1] && row.referral_code_id === bindings[2]
+            ) ?? null
           }
           if (sql.includes('FROM users') && sql.includes('WHERE id = ?')) {
             return {
@@ -300,6 +349,21 @@ function createStorefrontFcfsDatabase(overrides: Partial<MockCoupon> & { exhaust
           if (sql.includes('FROM payments') && sql.includes('khalti_pidx')) {
             return { results: [{ id: 'payment-1', order_id: 'order-1', status: 'initiated' }] }
           }
+          if (sql.includes('FROM commission_rules')) {
+            return {
+              results: [
+                {
+                  id: 'rule-agent-1',
+                  commission_type: 'percentage',
+                  commission_source: 'organizer_share',
+                  rate_value: 1000,
+                  flat_amount_paisa: null,
+                  max_commission_amount_paisa: null,
+                  stacking_group: null
+                }
+              ]
+            }
+          }
           return { results: [] }
         },
         async run() {
@@ -334,6 +398,18 @@ function createStorefrontFcfsDatabase(overrides: Partial<MockCoupon> & { exhaust
           }
           if (sql.includes('UPDATE orders')) {
             state.stats.orderUpdates += 1
+            if (sql.includes('partner_id')) {
+              state.stats.orderAttributionUpdates += 1
+            }
+          }
+          if (sql.includes('INSERT INTO commission_ledger')) {
+            state.stats.commissionLedgerInserts += 1
+            state.commissionLedger.push({
+              order_id: String(bindings[1]),
+              partner_id: String(bindings[4]),
+              referral_code_id: String(bindings[5]),
+              commission_amount_paisa: Number(bindings[10])
+            })
           }
           return { success: true, meta: { changes: 1 } }
         }
