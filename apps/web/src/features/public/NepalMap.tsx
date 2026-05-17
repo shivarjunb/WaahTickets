@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { Palette, Maximize2, Minimize2 } from 'lucide-react'
 import { EventMapPopup } from './EventMapPopup'
 
 // Carto Dark Matter — free tiles, no API key needed
@@ -88,12 +89,20 @@ interface ActiveCard {
   y: number
 }
 
-interface KathmanduMapProps {
+interface NepalMapProps {
   events: MapEvent[]
   totalCount: number
   onViewDetails: (eventId: string) => void
   userLocation?: UserLocation | null
   maxDistance?: number | null
+  /** Disables hover/click popups — use when embedding in a popup card */
+  disableHover?: boolean
+  /** Initial map center (defaults to Kathmandu) */
+  initialCenter?: [number, number]
+  /** Initial zoom level (defaults to 13) */
+  initialZoom?: number
+  /** Hides the live counter and zoom controls */
+  minimal?: boolean
 }
 
 function radiusBounds(lat: number, lng: number, km: number): L.LatLngBounds {
@@ -102,7 +111,11 @@ function radiusBounds(lat: number, lng: number, km: number): L.LatLngBounds {
   return L.latLngBounds([lat - dLat, lng - dLng], [lat + dLat, lng + dLng])
 }
 
-export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, maxDistance }: KathmanduMapProps) {
+export function NepalMap({
+  events, totalCount, onViewDetails, userLocation, maxDistance,
+  disableHover, initialCenter, initialZoom, minimal,
+}: NepalMapProps) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const markersRef = useRef<L.Marker[]>([])
@@ -110,6 +123,31 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
   const pathRef = useRef<L.Polyline | null>(null)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [activeCard, setActiveCard] = useState<ActiveCard | null>(null)
+  const [colorMatch, setColorMatch] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // CSS fullscreen — keeps portalled modals (EventDetailsModal) visible above the map.
+  // Native requestFullscreen hides everything outside the fullscreen element, so we
+  // use position:fixed instead and boost the modal z-index via a body class.
+  useEffect(() => {
+    document.body.classList.toggle('map-is-fullscreen', isFullscreen)
+    setTimeout(() => mapRef.current?.invalidateSize(), 80)
+    return () => document.body.classList.remove('map-is-fullscreen')
+  }, [isFullscreen])
+
+  // Escape key exits CSS fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIsFullscreen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isFullscreen])
+
+  function toggleFullscreen() {
+    setIsFullscreen((v) => !v)
+  }
 
   const scheduleClose = () => {
     closeTimerRef.current = setTimeout(() => setActiveCard(null), 200)
@@ -124,8 +162,8 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
     if (!containerRef.current || mapRef.current) return
 
     const map = L.map(containerRef.current, {
-      center: [27.7172, 85.324],
-      zoom: 13,
+      center: initialCenter ?? [27.7172, 85.324],
+      zoom: initialZoom ?? 13,
       zoomControl: false,
       attributionControl: false,
     })
@@ -140,18 +178,38 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
       .addAttribution(TILE_ATTRIBUTION)
       .addTo(map)
 
-    map.on('movestart', () => {
-      cancelClose()
-      setActiveCard(null)
-    })
+    if (!disableHover) {
+      map.on('movestart', () => {
+        cancelClose()
+        setActiveCard(null)
+      })
+    }
 
     mapRef.current = map
 
+    // Leaflet measures the container at init time. When the map is embedded
+    // inside an animated popup, the container may report 0×0 on first paint.
+    const sizeTimer = setTimeout(() => map.invalidateSize(), 50)
+
+    // Intro zoom-out: only on the hero map (not mini-maps or admin previews).
+    // Start close on Kathmandu then slowly fly out to show all of Nepal.
+    let flyTimer: ReturnType<typeof setTimeout> | null = null
+    if (!disableHover && !minimal) {
+      flyTimer = setTimeout(() => {
+        map.flyTo([28.4, 84.12], 6.5, {
+          duration: 2.8,
+          easeLinearity: 0.12,
+        })
+      }, 400)
+    }
+
     return () => {
+      clearTimeout(sizeTimer)
+      if (flyTimer) clearTimeout(flyTimer)
       map.remove()
       mapRef.current = null
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync markers whenever filtered events change
   useEffect(() => {
@@ -176,22 +234,24 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
 
       const marker = L.marker([event.lat, event.lng], { icon }).addTo(map)
 
-      marker.on('mouseover', () => {
-        cancelClose()
-        const pt = map.latLngToContainerPoint([event.lat, event.lng])
-        setActiveCard({ event, x: pt.x, y: pt.y })
-      })
+      if (!disableHover) {
+        marker.on('mouseover', () => {
+          cancelClose()
+          const pt = map.latLngToContainerPoint([event.lat, event.lng])
+          setActiveCard({ event, x: pt.x, y: pt.y })
+        })
 
-      marker.on('mouseout', scheduleClose)
+        marker.on('mouseout', scheduleClose)
 
-      marker.on('click', () => {
-        const pt = map.latLngToContainerPoint([event.lat, event.lng])
-        setActiveCard({ event, x: pt.x, y: pt.y })
-      })
+        marker.on('click', () => {
+          const pt = map.latLngToContainerPoint([event.lat, event.lng])
+          setActiveCard({ event, x: pt.x, y: pt.y })
+        })
+      }
 
       markersRef.current.push(marker)
     })
-  }, [events])
+  }, [events, disableHover]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync "you are here" marker
   useEffect(() => {
@@ -301,20 +361,18 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
     activeCard ? (CATEGORY_CONFIG[activeCard.event.category]?.color ?? '#e91e63') : '#e91e63'
 
   return (
-    <div className="hero-live-map-canvas">
+    <div ref={rootRef} className={`hero-live-map-canvas${colorMatch ? ' map-color-match' : ''}${isFullscreen ? ' hero-live-map-canvas--fullscreen' : ''}`}>
       <div ref={containerRef} className="kathmandu-map-container" />
 
-      {activeCard && (() => {
+      {!disableHover && activeCard && (() => {
         const mapW = containerRef.current?.clientWidth ?? 600
         const mapH = containerRef.current?.clientHeight ?? 400
         const CARD_W = 290
         const MARGIN = 10
-        // Clamp horizontally so card never leaves the map
         const clampedX = Math.max(
           CARD_W / 2 + MARGIN,
           Math.min(activeCard.x, mapW - CARD_W / 2 - MARGIN)
         )
-        // If pin is in the top 180px, show card below pin instead of above
         const below = activeCard.y < 180
         const style: React.CSSProperties = {
           position: 'absolute',
@@ -361,30 +419,55 @@ export function KathmanduMap({ events, totalCount, onViewDetails, userLocation, 
       })()}
 
       {/* Live counter — bottom right */}
-      <div className="hero-map-live-counter" aria-live="polite">
-        <span className="hero-map-live-dot" />
-        <span>{totalCount} Live Events Now</span>
-      </div>
+      {!minimal && (
+        <div className="hero-map-live-counter" aria-live="polite">
+          <span className="hero-map-live-dot" />
+          <span>{totalCount} Live Events Now</span>
+        </div>
+      )}
 
       {/* Zoom controls */}
-      <div className="hero-map-controls">
-        <button
-          className="hero-map-control-btn hero-map-control-btn--active"
-          type="button"
-          aria-label="Zoom in"
-          onClick={() => handleZoom('in')}
-        >
-          +
-        </button>
-        <button
-          className="hero-map-control-btn hero-map-control-btn--active"
-          type="button"
-          aria-label="Zoom out"
-          onClick={() => handleZoom('out')}
-        >
-          −
-        </button>
-      </div>
+      {!minimal && (
+        <div className="hero-map-controls">
+          <button
+            className="hero-map-control-btn hero-map-control-btn--active"
+            type="button"
+            aria-label="Zoom in"
+            onClick={() => handleZoom('in')}
+          >
+            +
+          </button>
+          <button
+            className="hero-map-control-btn hero-map-control-btn--active"
+            type="button"
+            aria-label="Zoom out"
+            onClick={() => handleZoom('out')}
+          >
+            −
+          </button>
+
+          <div className="hero-map-control-divider" />
+
+          <button
+            className={`hero-map-control-btn hero-map-control-btn--active${colorMatch ? ' hero-map-control-btn--on' : ''}`}
+            type="button"
+            aria-label="Match hero colours"
+            title="Match map colours to hero"
+            onClick={() => setColorMatch((v) => !v)}
+          >
+            <Palette size={14} />
+          </button>
+          <button
+            className="hero-map-control-btn hero-map-control-btn--active"
+            type="button"
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            onClick={toggleFullscreen}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

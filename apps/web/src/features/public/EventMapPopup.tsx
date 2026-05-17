@@ -1,5 +1,6 @@
 import { MapPin, Calendar, Navigation } from 'lucide-react'
-import type { PopupField } from './KathmanduMap'
+import { NepalMap } from './NepalMap'
+import type { PopupField, MapEvent } from './NepalMap'
 
 interface EventMapPopupProps {
   title: string
@@ -14,6 +15,8 @@ interface EventMapPopupProps {
   distance?: number
   bearing?: string
   imageUrl?: string
+  lat?: number
+  lng?: number
   below?: boolean
   onViewDetails: (eventId: string) => void
   onDirections?: () => void
@@ -26,22 +29,46 @@ function formatDistance(km: number): string {
 export function EventMapPopup({
   title, category, area, time, priceFrom, sponsored,
   eventId, categoryColor, distance, bearing, imageUrl,
-  below, onViewDetails, onDirections,
+  lat, lng, below, onViewDetails, onDirections,
 }: EventMapPopupProps) {
   const isLive = time.toLowerCase().includes('tonight')
+
+  const miniMapEvent: MapEvent | null = (lat != null && lng != null) ? {
+    id: eventId,
+    title,
+    category,
+    area,
+    time,
+    priceFrom,
+    sponsored,
+    lat,
+    lng,
+  } : null
 
   return (
     <div className={`event-pin-card${below ? ' event-pin-card--below' : ''}`}>
       {/* Arrow tail pointing toward the pin */}
       <div className="event-pin-card-tail" />
 
-      {/* Image header — shown only when banner is available */}
-      {imageUrl && (
+      {/* Mini map header — shows event location; falls back to image if no coords */}
+      {miniMapEvent ? (
+        <div className="event-pin-card-mini-map">
+          <NepalMap
+            events={[miniMapEvent]}
+            totalCount={1}
+            onViewDetails={() => {}}
+            disableHover
+            minimal
+            initialCenter={[miniMapEvent.lat, miniMapEvent.lng]}
+            initialZoom={15}
+          />
+        </div>
+      ) : imageUrl ? (
         <div
           className="event-pin-card-image-bar"
           style={{ backgroundImage: `url(${imageUrl})` }}
         />
-      )}
+      ) : null}
 
       {/* Badge row */}
       <div className="event-pin-card-badges">

@@ -19,6 +19,7 @@
         }
       ],
       "expo-camera",
+      "expo-image-picker",
       "expo-secure-store",
       "expo-sharing",
       "./with-main-application-fix.cjs"

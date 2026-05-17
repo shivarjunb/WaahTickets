@@ -6,7 +6,7 @@ import { MapPinAppearance, DEFAULT_POPUP_FIELDS as _unused } from './MapPinAppea
 import type { PinConfig } from './MapPinAppearance'
 import { MapPopupCustomizer, DEFAULT_POPUP_FIELDS } from './MapPopupCustomizer'
 import { MapWizardPreview } from './MapWizardPreview'
-import type { PopupField } from '../public/KathmanduMap'
+import type { PopupField } from '../public/NepalMap'
 import { fetchJson } from '../../shared/utils'
 import type { ApiRecord } from '../../shared/types'
 

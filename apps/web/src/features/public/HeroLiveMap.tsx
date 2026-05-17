@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { Search, Music, Utensils, Star, Trophy, Laugh, Moon, X, LocateFixed } from 'lucide-react'
-import { KathmanduMap } from './KathmanduMap'
-import type { MapEvent, PopupField, UserLocation } from './KathmanduMap'
+import { NepalMap } from './NepalMap'
+import type { MapEvent, PopupField, UserLocation } from './NepalMap'
 import type { PublicEvent } from '../../shared/types'
 import { formatEventDate, formatEventTime, formatMoney } from '../../shared/utils'
 
@@ -74,13 +74,21 @@ const CATEGORIES = [
 ]
 
 const DISTANCE_OPTIONS = [
-  { label: '2 km',  value: 2 },
-  { label: '5 km',  value: 5 },
-  { label: '10 km', value: 10 },
-  { label: '20 km', value: 20 },
+  { label: '2 km',   value: 2 },
+  { label: '5 km',   value: 5 },
+  { label: '10 km',  value: 10 },
+  { label: '20 km',  value: 20 },
+  { label: '100 km', value: 100 },
 ]
 
 type LocationStatus = 'idle' | 'requesting' | 'granted' | 'denied'
+
+function formatLiveTime() {
+  const now = new Date()
+  const day = now.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()
+  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  return `${day} · ${time}`
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 interface HeroLiveMapProps {
@@ -101,17 +109,22 @@ export function HeroLiveMap({
   realEvents = [],
 }: HeroLiveMapProps) {
   const [selectedCategory, setSelectedCategory] = useState('all')
-  const [localSearchQuery, setLocalSearchQuery] = useState(searchQuery)
   const [userLocation, setUserLocation] = useState<UserLocation | null>(null)
   const [locationStatus, setLocationStatus] = useState<LocationStatus>('idle')
   const [maxDistance, setMaxDistance] = useState<number | null>(null)
+  const [liveTime, setLiveTime] = useState(formatLiveTime)
   const watchIdRef = useRef<number | null>(null)
 
-  // Clean up geolocation watch on unmount
   useEffect(() => {
     return () => {
       if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current)
     }
+  }, [])
+
+  // Live clock — ticks every minute (seconds not needed visually)
+  useEffect(() => {
+    const id = setInterval(() => setLiveTime(formatLiveTime()), 10_000)
+    return () => clearInterval(id)
   }, [])
 
   function requestLocation() {
@@ -122,9 +135,7 @@ export function HeroLiveMap({
         setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
         setLocationStatus('granted')
       },
-      () => {
-        setLocationStatus('denied')
-      },
+      () => { setLocationStatus('denied') },
       { enableHighAccuracy: true, maximumAge: 30_000 },
     )
   }
@@ -133,9 +144,9 @@ export function HeroLiveMap({
     realEvents.flatMap((ev) => { const m = toMapEvent(ev); return m ? [m] : [] })
   , [realEvents])
 
-  // Category + search filter
+  // searchQuery prop is used directly — any caller (navbar or fullscreen search) drives the filter
   const categoryFiltered = useMemo(() => {
-    const search = localSearchQuery.trim().toLowerCase()
+    const search = searchQuery.trim().toLowerCase()
     return baseEvents.filter((event) => {
       if (selectedCategory !== 'all' && event.category !== selectedCategory) return false
       if (search) {
@@ -144,9 +155,8 @@ export function HeroLiveMap({
       }
       return true
     })
-  }, [baseEvents, localSearchQuery, selectedCategory])
+  }, [baseEvents, searchQuery, selectedCategory])
 
-  // Annotate with distance + bearing when user location is known
   const annotatedEvents = useMemo<MapEvent[]>(() => {
     if (!userLocation) return categoryFiltered
     return categoryFiltered.map((ev) => ({
@@ -156,22 +166,13 @@ export function HeroLiveMap({
     }))
   }, [categoryFiltered, userLocation])
 
-  // Distance filter
   const filteredEvents = useMemo(() => {
     if (!maxDistance || !userLocation) return annotatedEvents
     return annotatedEvents.filter((ev) => (ev.distance ?? Infinity) <= maxDistance)
   }, [annotatedEvents, maxDistance, userLocation])
 
-  const handleSearchChange = (value: string) => {
-    setLocalSearchQuery(value)
-    if (onSearchChange) onSearchChange(value)
-  }
-
   const handleViewDetails = (eventId: string) => {
-    if (onViewEventDetails) {
-      onViewEventDetails(eventId)
-      return
-    }
+    if (onViewEventDetails) { onViewEventDetails(eventId); return }
     if (onNavigate) onNavigate(`/events/${eventId}`)
   }
 
@@ -181,110 +182,120 @@ export function HeroLiveMap({
 
   return (
     <section className="hero-live-map-section" id="featured">
-      <div className="hero-live-map-container">
 
-        {/* Left: Content */}
-        <div className="hero-live-map-content">
-          <div className="hero-live-map-header">
-            <h1 className="hero-live-map-title">
-              Kathmandu is{' '}
-              <span className="hero-title-accent">Alive!</span>
-            </h1>
-            <p className="hero-live-map-subtitle">
-              Discover concerts, comedy, festivals, sports, nightlife, and local
-              events happening near you.
-            </p>
-          </div>
+      {/* Full-bleed map — fills the entire section */}
+      <div className="hero-live-map-canvas-wrapper">
+        <NepalMap
+          events={filteredEvents}
+          totalCount={filteredEvents.length}
+          onViewDetails={handleViewDetails}
+          userLocation={userLocation}
+          maxDistance={maxDistance}
+        />
 
-          <div className="hero-live-map-search">
-            <div className="hero-search-input-wrapper">
-              <Search size={17} className="hero-search-icon" />
-              <input
-                aria-label="Search events, venues, artists"
-                className="hero-search-input"
-                placeholder="Search events, venues, artists..."
-                type="search"
-                value={localSearchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && onSearchSubmit) onSearchSubmit() }}
-              />
-              {localSearchQuery && (
-                <button type="button" className="hero-search-clear" onClick={() => handleSearchChange('')} aria-label="Clear search">
-                  <X size={15} />
+        <div className="hero-map-edge-fade" aria-hidden="true" />
+        <div className="hero-map-scan-line" aria-hidden="true" />
+        <div className="hero-map-hud-frame" aria-hidden="true">
+          <span className="hud-corner hud-corner-tl" />
+          <span className="hud-corner hud-corner-tr" />
+          <span className="hud-corner hud-corner-bl" />
+          <span className="hud-corner hud-corner-br" />
+        </div>
+
+        <div className="hero-map-locate-overlay">
+          {locationStatus === 'granted' ? (
+            <>
+              <LocateFixed size={11} className="hero-map-locate-icon" />
+              {DISTANCE_OPTIONS.map(({ label, value }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`hero-map-distance-chip${maxDistance === value ? ' active' : ''}`}
+                  onClick={() => toggleDistance(value)}
+                >
+                  {label}
                 </button>
-              )}
-            </div>
-            <button className="hero-search-button" type="button" onClick={onSearchSubmit} aria-label="Search">
-              Search
+              ))}
+            </>
+          ) : (
+            <button
+              type="button"
+              className={`hero-map-locate-btn${locationStatus === 'denied' ? ' denied' : ''}`}
+              disabled={locationStatus === 'requesting'}
+              onClick={requestLocation}
+            >
+              <LocateFixed size={12} />
+              {locationStatus === 'requesting' ? 'Locating…'
+                : locationStatus === 'denied' ? 'Location unavailable'
+                : 'Show my location'}
             </button>
-          </div>
-
-          <div className="hero-category-chips" aria-label="Event categories">
-            {CATEGORIES.map(({ label, value, Icon }) => (
-              <button
-                key={value}
-                className={`hero-category-chip${selectedCategory === value ? ' active' : ''}`}
-                type="button"
-                onClick={() => setSelectedCategory(value)}
-                aria-pressed={selectedCategory === value}
-              >
-                <Icon size={13} strokeWidth={2} />
-                {label}
-              </button>
-            ))}
-          </div>
-
-
-          <div className="hero-live-status">
-            <span className="status-dot" />
-            <span>
-              {filteredEvents.length} event{filteredEvents.length !== 1 ? 's' : ''}
-              {maxDistance ? ` within ${maxDistance} km` : ' live near you'}
-            </span>
-          </div>
+          )}
         </div>
+      </div>
 
-        {/* Right: Real Kathmandu map */}
-        <div className="hero-live-map-canvas-wrapper">
-          <KathmanduMap
-            events={filteredEvents}
-            totalCount={filteredEvents.length}
-            onViewDetails={handleViewDetails}
-            userLocation={userLocation}
-            maxDistance={maxDistance}
+      {/* Search — hidden by default, floats to top-left in fullscreen via CSS */}
+      <div className="hero-live-map-search">
+        <div className="hero-search-input-wrapper">
+          <Search size={17} className="hero-search-icon" />
+          <input
+            aria-label="Search events, venues, artists"
+            className="hero-search-input"
+            placeholder="Search events, venues, artists..."
+            type="search"
+            value={searchQuery}
+            onChange={(e) => onSearchChange?.(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && onSearchSubmit) onSearchSubmit() }}
           />
-
-          {/* Location controls — bottom-left map overlay */}
-          <div className="hero-map-locate-overlay">
-            {locationStatus === 'granted' ? (
-              <>
-                <LocateFixed size={11} className="hero-map-locate-icon" />
-                {DISTANCE_OPTIONS.map(({ label, value }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`hero-map-distance-chip${maxDistance === value ? ' active' : ''}`}
-                    onClick={() => toggleDistance(value)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </>
-            ) : (
-              <button
-                type="button"
-                className={`hero-map-locate-btn${locationStatus === 'denied' ? ' denied' : ''}`}
-                disabled={locationStatus === 'requesting'}
-                onClick={requestLocation}
-              >
-                <LocateFixed size={12} />
-                {locationStatus === 'requesting' ? 'Locating…'
-                  : locationStatus === 'denied' ? 'Location unavailable'
-                  : 'Show my location'}
-              </button>
-            )}
-          </div>
+          {searchQuery && (
+            <button type="button" className="hero-search-clear" onClick={() => onSearchChange?.('')} aria-label="Clear search">
+              <X size={15} />
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Top-left content overlay — hidden in fullscreen to avoid z-index conflicts */}
+      <div className="hero-live-map-content">
+
+        {/* Live clock */}
+        <div className="hero-map-time-badge" aria-live="polite">
+          {liveTime}
+        </div>
+
+        <div className="hero-live-map-header">
+          <h1 className="hero-live-map-title">
+            Kathmandu is{' '}
+            <span className="hero-title-accent">Alive!</span>
+          </h1>
+          <p className="hero-live-map-subtitle">
+            Discover concerts, comedy, festivals, sports, nightlife, and local events happening near you.
+          </p>
+        </div>
+
+        {/* Category chips — hidden on small screens */}
+        <div className="hero-category-chips" aria-label="Event categories">
+          {CATEGORIES.map(({ label, value, Icon }) => (
+            <button
+              key={value}
+              className={`hero-category-chip${selectedCategory === value ? ' active' : ''}`}
+              type="button"
+              onClick={() => setSelectedCategory(value)}
+              aria-pressed={selectedCategory === value}
+            >
+              <Icon size={13} strokeWidth={2} />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="hero-live-status">
+          <span className="status-dot" />
+          <span>
+            {filteredEvents.length} event{filteredEvents.length !== 1 ? 's' : ''}
+            {maxDistance ? ` within ${maxDistance} km` : ' live near you'}
+          </span>
+        </div>
+
       </div>
     </section>
   )

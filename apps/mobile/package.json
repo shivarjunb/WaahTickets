@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "expo start",
     "dev:clear": "expo start --clear",
+    "dev:go": "bash ./scripts/start-with-profile.sh expo-go",
+    "dev:go:clear": "bash ./scripts/start-with-profile.sh expo-go --clear",
+    "dev:build-client": "bash ./scripts/start-with-profile.sh dev-build",
+    "dev:build-client:clear": "bash ./scripts/start-with-profile.sh dev-build --clear",
     "mobile:dev:clear": "expo start --clear",
     "android": "expo run:android",
     "ios": "expo run:ios"
@@ -20,14 +24,24 @@
     "expo-dev-client": "~55.0.33",
     "expo-device": "~55.0.17",
     "expo-file-system": "~55.0.20",
+    "expo-image-picker": "^55.0.20",
     "expo-linking": "~55.0.15",
     "expo-notifications": "~55.0.23",
     "expo-secure-store": "~55.0.14",
     "expo-sharing": "~55.0.19",
     "expo-status-bar": "~55.0.6",
     "react": "19.2.0",
+    "react-dom": "^19.2.0",
     "react-native": "0.83.6",
-    "react-native-safe-area-context": "~5.6.0"
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-web": "^0.21.2"
+  },
+  "expo": {
+    "autolinking": {
+      "searchPaths": [
+        "../../node_modules"
+      ]
+    }
   },
   "devDependencies": {
     "@babel/core": "^7.28.0",

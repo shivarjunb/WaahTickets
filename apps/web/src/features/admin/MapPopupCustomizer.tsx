@@ -1,5 +1,5 @@
 import { ChevronUp, ChevronDown, Eye, EyeOff } from 'lucide-react'
-import type { PopupField } from '../public/KathmanduMap'
+import type { PopupField } from '../public/NepalMap'
 import { EventMapPopup } from '../public/EventMapPopup'
 
 export const DEFAULT_POPUP_FIELDS: PopupField[] = [

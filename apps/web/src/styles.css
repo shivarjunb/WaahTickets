@@ -8354,6 +8354,88 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   gap: 8px;
 }
 
+/* ─── Mobile search toggle (hidden on desktop) ─────────────────────────────── */
+
+.marketplace-nav-search-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.marketplace-nav-search-toggle:hover {
+  background: rgba(124, 58, 237, 0.08);
+  border-color: rgba(124, 58, 237, 0.25);
+}
+
+/* ─── Slide-down search overlay (mobile only) ──────────────────────────────── */
+
+@keyframes navSearchSlideDown {
+  from { opacity: 0; transform: translateY(-10px) scaleY(0.96); }
+  to   { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+
+.nav-search-overlay {
+  display: none;
+  position: fixed;
+  top: 68px;
+  left: 0;
+  right: 0;
+  z-index: 79;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.09);
+  animation: navSearchSlideDown 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+.nav-search-overlay-icon {
+  color: rgba(15, 23, 42, 0.4);
+  flex-shrink: 0;
+}
+
+.nav-search-overlay-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.nav-search-overlay-input::placeholder {
+  color: rgba(15, 23, 42, 0.35);
+}
+
+.nav-search-overlay-clear {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: rgba(15, 23, 42, 0.4);
+  padding: 4px;
+  border-radius: 999px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.nav-search-overlay-clear:hover {
+  color: #0f172a;
+  background: rgba(15, 23, 42, 0.06);
+}
+
 .marketplace-account-button {
   gap: 8px;
   border: 1px solid rgba(15, 23, 42, 0.1);
@@ -9659,23 +9741,6 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   font-weight: 800;
 }
 
-.event-detail-mini-map {
-  height: 220px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-  overflow: hidden;
-}
-
-.event-detail-mini-map .hero-live-map-canvas,
-.event-detail-mini-map .kathmandu-map-container {
-  width: 100%;
-  height: 220px;
-}
-
-/* Hide the live counter and zoom controls inside the mini map */
-.event-detail-mini-map .hero-map-live-counter,
-.event-detail-mini-map .hero-map-controls {
-  display: none;
-}
 
 .event-detail-grid {
   display: grid;
@@ -10076,6 +10141,14 @@ body[data-theme='light'] .admin-sidebar.collapsed {
     display: none;
   }
 
+  .marketplace-nav-search-toggle {
+    display: inline-flex;
+  }
+
+  .nav-search-overlay {
+    display: flex;
+  }
+
   .marketplace-event-grid,
   .venue-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -10126,6 +10199,10 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   .homepage-discovery-sidebar {
     position: static;
     gap: 0;
+  }
+
+  .homepage-discovery-sidebar .marketplace-section-header {
+    display: none;
   }
 
   .homepage-discovery-main {
@@ -10348,6 +10425,10 @@ body[data-theme='light'] .admin-sidebar.collapsed {
   .marketplace-header-inner {
     min-height: 64px;
     padding: 0 16px;
+  }
+
+  .nav-search-overlay {
+    top: 64px;
   }
 
   .marketplace-menu-button {

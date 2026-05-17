@@ -9,9 +9,9 @@ import { AdSlot, BetweenRailsAdSlider } from '../../ads-ui';
 import { CustomerTicketModal } from '../validator/TicketValidatorApp';
 import { AuthModal, LoginRequired, AccountAccessBlocked } from "../../shared/components/Auth";
 import { HomepageLoader } from './HomepageLoader';
-import { HeroLiveMap, toMapEvent } from './HeroLiveMap';
+import { HeroLiveMap } from './HeroLiveMap';
 import { EventMapPopup } from './EventMapPopup';
-import { KathmanduMap, CATEGORY_CONFIG } from './KathmanduMap';
+import { CATEGORY_CONFIG } from './NepalMap';
 import './heroMapStyles.css';
 import { buildCheckoutCouponPayload, discountForEvent } from './coupon-checkout';
 
@@ -1629,7 +1629,6 @@ export default function PublicApp({
         <EventDetailsModal
           event={selectedEventDetails}
           imageUrl={getEventImageUrl(selectedEventDetails)}
-          showMap={detailFromCard}
           onClose={() => { setSelectedEventDetailId(null); setDetailFromCard(false) }}
           onViewTickets={() => {
             if (selectedEventDetails.id) {
@@ -2622,6 +2621,28 @@ function PublicHeader({
   onSearchChange: (value: string) => void
 }) {
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false)
+  const [isNavSearchOpen, setIsNavSearchOpen] = useState(false)
+  const navSearchOverlayRef = useRef<HTMLDivElement>(null)
+  const navSearchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isNavSearchOpen) return
+    navSearchInputRef.current?.focus()
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIsNavSearchOpen(false)
+    }
+    function handleClick(e: MouseEvent) {
+      if (navSearchOverlayRef.current && !navSearchOverlayRef.current.contains(e.target as Node)) {
+        setIsNavSearchOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    document.addEventListener('mousedown', handleClick)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [isNavSearchOpen])
 
   const navItems = [
     { label: 'Events', target: '#events' },
@@ -2684,6 +2705,14 @@ function PublicHeader({
           </div>
           <div className="marketplace-header-actions">
             <button
+              className="marketplace-nav-search-toggle"
+              type="button"
+              aria-label={isNavSearchOpen ? 'Close search' : 'Search'}
+              onClick={() => setIsNavSearchOpen(v => !v)}
+            >
+              {isNavSearchOpen ? <X size={18} /> : <Search size={18} />}
+            </button>
+            <button
               aria-label={`Open cart with ${cartItemCount} item${cartItemCount === 1 ? '' : 's'}`}
               className="marketplace-cart-button"
               type="button"
@@ -2721,6 +2750,31 @@ function PublicHeader({
           </div>
         </div>
       </nav>
+
+      {isNavSearchOpen ? (
+        <div className="nav-search-overlay" ref={navSearchOverlayRef}>
+          <Search size={17} className="nav-search-overlay-icon" />
+          <input
+            ref={navSearchInputRef}
+            className="nav-search-overlay-input"
+            type="search"
+            placeholder="Search events, artists, venues..."
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setIsNavSearchOpen(false) }}
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              className="nav-search-overlay-clear"
+              aria-label="Clear search"
+              onClick={() => onSearchChange('')}
+            >
+              <X size={15} />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {isLogoutConfirmOpen ? (
         <div className="logout-confirm-backdrop" onClick={() => setIsLogoutConfirmOpen(false)}>
@@ -2998,6 +3052,23 @@ function EventCard({
   onSelectTickets: () => void
 }) {
   const [popupPos, setPopupPos] = useState<{ x: number; y: number } | null>(null)
+  const mapBtnRef = useRef<HTMLButtonElement>(null)
+
+  // Keep popup anchored to the button while the page scrolls
+  useEffect(() => {
+    if (!popupPos) return
+    function update() {
+      if (!mapBtnRef.current) return
+      const rect = mapBtnRef.current.getBoundingClientRect()
+      setPopupPos({ x: rect.left + rect.width / 2, y: rect.top })
+    }
+    window.addEventListener('scroll', update, { passive: true, capture: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, { capture: true })
+      window.removeEventListener('resize', update)
+    }
+  }, [popupPos !== null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const location = event.location_address ?? event.location_name ?? 'Location pending'
   const venue = event.location_name ?? event.organization_name ?? 'Venue pending'
@@ -3069,6 +3140,7 @@ function EventCard({
       </button>
       {hasLocation && (
         <button
+          ref={mapBtnRef}
           aria-label="View on map"
           className="event-card-map-btn"
           title="View on map"
@@ -3105,6 +3177,8 @@ function EventCard({
               eventId={event.id ?? ''}
               categoryColor={popupCategoryColor}
               imageUrl={popupImageUrl}
+              lat={event.location_lat ?? undefined}
+              lng={event.location_lng ?? undefined}
               onViewDetails={() => {
                 setPopupPos(null)
                 onOpenDetails()
@@ -3171,18 +3245,14 @@ function TrustItem({
 export function EventDetailsModal({
   event,
   imageUrl,
-  showMap,
   onClose,
   onViewTickets
 }: {
   event: PublicEvent
   imageUrl: string
-  showMap?: boolean
   onClose: () => void
   onViewTickets: () => void
 }) {
-  const miniMapEvent = showMap ? toMapEvent(event) : null
-
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="record-modal event-detail-page" role="dialog" aria-modal="true">
@@ -3198,15 +3268,6 @@ export function EventDetailsModal({
             <X size={18} />
           </button>
         </header>
-        {miniMapEvent && (
-          <div className="event-detail-mini-map">
-            <KathmanduMap
-              events={[miniMapEvent]}
-              totalCount={1}
-              onViewDetails={() => {}}
-            />
-          </div>
-        )}
         <div className="event-detail-grid">
           <EventDetailHero event={event} imageUrl={imageUrl} />
           <aside className="event-detail-sidebar">

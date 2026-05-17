@@ -6,7 +6,6 @@ import * as FileSystem from 'expo-file-system'
 import * as Notifications from 'expo-notifications'
 import * as Sharing from 'expo-sharing'
 import { StatusBar } from 'expo-status-bar'
-import { CameraView, useCameraPermissions } from 'expo-camera'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import {
   ActivityIndicator,
@@ -61,8 +60,9 @@ import {
   writeStoredPendingEsewaPayment,
   writeStoredPendingKhaltiPayment
 } from './src/lib/session-storage'
+import { ValidatorScreen } from './src/screens/ValidatorScreen'
 
-type MobileView = 'home' | 'tickets' | 'cart' | 'validator' | 'account'
+type MobileView = 'home' | 'search' | 'tickets' | 'cart' | 'validator' | 'account'
 type AuthMode = 'login' | 'register'
 type ValidationTone = 'neutral' | 'success' | 'warning' | 'error'
 type AppIconName =
@@ -277,7 +277,6 @@ export default function App() {
   const [isSessionRestored, setIsSessionRestored] = useState(false)
   const [session, setSession] = useState<MobileSessionState>(emptySession)
   const registeredPushTokenRef = useRef<string | null>(null)
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [events, setEvents] = useState<PublicEventState>(() => createInitialEventState())
   const [ticketTypes, setTicketTypes] = useState<TicketTypeState>(() => createInitialTicketTypeState())
   const [purchasedTickets, setPurchasedTickets] = useState<PurchasedTicketState>({
@@ -325,17 +324,6 @@ export default function App() {
   const [isRefreshingAccount, setIsRefreshingAccount] = useState(false)
   const [guestCheckoutContact, setGuestCheckoutContact] = useState<GuestCheckoutContact>(initialGuestCheckoutContact)
   const [guestCheckoutIdentity, setGuestCheckoutIdentity] = useState<GuestCheckoutIdentity | null>(null)
-  const [validationState, setValidationState] = useState<ValidationState>({
-    qrInput: '',
-    status: 'Ready to scan tickets.',
-    tone: 'neutral',
-    ticket: null,
-    pendingQrValue: '',
-    pendingStatus: null,
-    scanning: false,
-    busy: false
-  })
-  const validationBusyRef = useRef(false)
   const [resolvedApiBaseUrl, setResolvedApiBaseUrl] = useState(defaultMobileApiBaseUrl)
   const [apiUrlDraft, setApiUrlDraft] = useState(defaultMobileApiBaseUrl)
   const [isTicketPickerOpen, setIsTicketPickerOpen] = useState(false)
@@ -1207,10 +1195,35 @@ export default function App() {
     }
 
     try {
-      const response = await api.validateCoupon({
-        code,
+      const eventItems = cartItems.filter((item) => item.event_id === eventId)
+      if (eventItems.length === 0) {
+        setCouponMessages((current) => ({ ...current, [eventId]: 'No items for this event.' }))
+        return
+      }
+      const first = eventItems[0]
+      const orderGroup: StorefrontOrderGroup = {
+        order_id: `coupon-${Date.now().toString(36)}-${eventId.slice(0, 6)}`,
+        order_number: `CPN-${Date.now().toString(36).toUpperCase()}-${eventId.slice(0, 4).toUpperCase()}`,
         event_id: eventId,
-        subtotal_amount_paisa: subtotal
+        event_location_id: first.event_location_id,
+        subtotal_amount_paisa: subtotal,
+        discount_amount_paisa: 0,
+        total_amount_paisa: subtotal,
+        currency: first.currency,
+        items: eventItems.map((item) => {
+          const lineSubtotal = item.unit_price_paisa * item.quantity
+          return {
+            ticket_type_id: item.ticket_type_id,
+            quantity: item.quantity,
+            unit_price_paisa: item.unit_price_paisa,
+            subtotal_amount_paisa: lineSubtotal,
+            total_amount_paisa: lineSubtotal
+          }
+        })
+      }
+      const response = await api.validateCoupon({
+        coupon: { value: code, source: 'code' },
+        order_groups: [orderGroup]
       })
       if (!response.valid || !response.data) {
         throw new Error(response.error ?? 'Coupon is invalid.')
@@ -1706,157 +1719,6 @@ export default function App() {
     }
   }
 
-  async function inspectTicketByQr(value: string, source: 'camera' | 'manual') {
-    const qrCodeValue = resolveQrCodeValueFromPayload(value)
-    if (!qrCodeValue || validationState.busy || validationBusyRef.current) return
-
-    validationBusyRef.current = true
-
-    setValidationState((current) => ({
-      ...current,
-      qrInput: qrCodeValue,
-      status: source === 'camera' ? 'Checking scanned QR code...' : 'Checking QR code...',
-      tone: 'neutral',
-      ticket: null,
-      pendingQrValue: '',
-      pendingStatus: null,
-      scanning: source === 'camera' ? false : current.scanning,
-      busy: true
-    }))
-
-    try {
-      const response = await api.inspectTicket({ qr_code_value: qrCodeValue })
-      const result = response.data
-      const ticket = result?.ticket ?? null
-      const resolvedQrValue = ticket?.qr_code_value?.trim() || qrCodeValue
-
-      if (result?.status === 'unredeemed' && ticket) {
-        setValidationState((current) => ({
-          ...current,
-          qrInput: resolvedQrValue,
-          status: result.message || 'Ticket is valid. Confirm redemption.',
-          tone: 'neutral',
-          ticket,
-          pendingQrValue: resolvedQrValue,
-          pendingStatus: 'unredeemed',
-          busy: false,
-          scanning: false
-        }))
-        return
-      }
-
-      if ((result?.status === 'already_redeemed' || result?.status === 'expired') && ticket) {
-        setValidationState((current) => ({
-          ...current,
-          qrInput: resolvedQrValue,
-          status: result.message || (result.status === 'expired' ? 'Ticket is expired.' : 'Ticket has already been redeemed.'),
-          tone: 'warning',
-          ticket,
-          pendingQrValue: resolvedQrValue,
-          pendingStatus: result.status,
-          scanning: false,
-          busy: false
-        }))
-        return
-      }
-
-      setValidationState((current) => ({
-        ...current,
-        status: result?.message || 'No matching ticket was found for this QR code.',
-        tone: 'error',
-        ticket: null,
-        pendingQrValue: '',
-        pendingStatus: null,
-        scanning: false,
-        busy: false
-      }))
-    } catch (error) {
-      setValidationState((current) => ({
-        ...current,
-        status: buildApiErrorMessage(error, resolvedApiBaseUrl),
-        tone: 'error',
-        ticket: null,
-        pendingQrValue: '',
-        pendingStatus: null,
-        scanning: false,
-        busy: false
-      }))
-    } finally {
-      validationBusyRef.current = false
-    }
-  }
-
-  async function confirmTicketRedeem() {
-    if (!validationState.pendingQrValue || validationState.pendingStatus !== 'unredeemed' || validationState.busy) return
-
-    setValidationState((current) => ({
-      ...current,
-      status: 'Redeeming ticket...',
-      tone: 'neutral',
-      busy: true
-    }))
-
-    try {
-      const response = await api.redeemTicket({ qr_code_value: validationState.pendingQrValue })
-      const result = response.data
-      const ticket = result?.ticket ?? validationState.ticket
-      setValidationState((current) => ({
-        ...current,
-        status: result?.message || (result?.status === 'redeemed' ? 'Ticket redeemed successfully.' : 'Unable to redeem ticket.'),
-        tone: result?.status === 'redeemed' ? 'success' : result?.status === 'already_redeemed' || result?.status === 'expired' ? 'warning' : 'error',
-        ticket,
-        pendingStatus:
-          result?.status === 'redeemed' || result?.status === 'already_redeemed'
-            ? 'already_redeemed'
-            : result?.status === 'expired'
-              ? 'expired'
-              : null,
-        busy: false
-      }))
-    } catch (error) {
-      setValidationState((current) => ({
-        ...current,
-        status: buildApiErrorMessage(error, resolvedApiBaseUrl),
-        tone: 'error',
-        busy: false
-      }))
-    }
-  }
-
-  async function toggleScanner() {
-    if (!canUseValidator(session.user)) {
-      setValidationState((current) => ({
-        ...current,
-        status: 'Login as an admin, organizer, or ticket validator to scan tickets.',
-        tone: 'error'
-      }))
-      setActiveView('account')
-      return
-    }
-    if (validationState.scanning) {
-      setValidationState((current) => ({ ...current, scanning: false }))
-      return
-    }
-    if (!cameraPermission?.granted) {
-      const permission = await requestCameraPermission()
-      if (!permission.granted) {
-        setValidationState((current) => ({
-          ...current,
-          status: 'Camera permission is required to scan QR codes.',
-          tone: 'error'
-        }))
-        return
-      }
-    }
-    validationBusyRef.current = false
-    setValidationState((current) => ({
-      ...current,
-      scanning: true,
-      status: 'Camera ready. Point it at a ticket QR code.',
-      tone: 'neutral'
-    }))
-  }
-
   const selectedEvent = events.items.find((event) => event.id === selectedEventId) ?? events.items[0] ?? null
   const featuredEvents = events.items.filter(isFeatured)
   const rotatingFeaturedEvents = featuredEvents.length > 0 ? featuredEvents : events.items
@@ -1929,6 +1791,17 @@ export default function App() {
 
     async function registerPush() {
       try {
+        const runtime = String(process.env.EXPO_PUBLIC_APP_RUNTIME ?? '').trim().toLowerCase()
+        const pushEnabled = String(process.env.EXPO_PUBLIC_ENABLE_PUSH ?? '').trim().toLowerCase() === 'true'
+        if (runtime === 'expo-go') {
+          console.log('[push] skipped — EXPO_PUBLIC_APP_RUNTIME=expo-go')
+          return
+        }
+        if (!pushEnabled) {
+          console.log('[push] skipped — EXPO_PUBLIC_ENABLE_PUSH is false')
+          return
+        }
+
         console.log('[push] starting — appOwnership:', Constants.appOwnership, 'isDevice:', Device.isDevice)
 
         // Expo Go (appOwnership === 'expo') does not support push notifications on
@@ -2115,6 +1988,16 @@ export default function App() {
           keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 24}
           style={styles.root}
         >
+      {activeView === 'validator' ? (
+        <ValidatorScreen
+          validatorAllowed={validatorAllowed}
+          api={api}
+          resolvedApiBaseUrl={resolvedApiBaseUrl}
+          onBack={() => navigateTo('home')}
+          onGoToAccount={() => navigateTo('account')}
+        />
+      ) : (
+        <>
       <Animated.View
         style={[
           styles.appChrome,
@@ -2558,91 +2441,6 @@ export default function App() {
           </View>
         ) : null}
 
-        {activeView === 'validator' ? (
-          <View style={styles.stack}>
-            <Card
-              title="QR ticket validator"
-              subtitle={validatorAllowed ? 'Scan ticket QR codes, confirm ticket details, and redeem at the gate.' : 'A staff account is required to use the scanner.'}
-            >
-              {validatorAllowed ? (
-                <View style={styles.stackSmall}>
-                  <View style={styles.validatorHero}>
-                    {validationState.scanning ? (
-                      <CameraView
-                        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                        facing="back"
-                        onBarcodeScanned={({ data }) => {
-                          if (!validationState.busy && data) {
-                            void inspectTicketByQr(data, 'camera')
-                          }
-                        }}
-                        style={styles.cameraPreview}
-                      />
-                    ) : (
-                      <View style={styles.cameraPlaceholder}>
-                        <Text style={styles.cameraPlaceholderTitle}>Camera idle</Text>
-                        <Text style={styles.cameraPlaceholderText}>Start scanning when you are at the gate.</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.validatorStatusGrid}>
-                    <StatPill label="Camera" value={validationState.scanning ? 'Live' : 'Idle'} />
-                    <StatPill label="Result" value={formatValidationTone(validationState.tone)} />
-                  </View>
-                  <View style={styles.inlineActions}>
-                    <ActionButton label={validationState.scanning ? 'Stop scanner' : 'Start scanner'} onPress={() => void toggleScanner()} />
-                    <ActionButton
-                      label="Reset"
-                      secondary
-                      onPress={() => {
-                        setValidationState({
-                          qrInput: '',
-                          status: 'Ready to scan tickets.',
-                          tone: 'neutral',
-                          ticket: null,
-                          pendingQrValue: '',
-                          pendingStatus: null,
-                          scanning: false,
-                          busy: false
-                        })
-                        validationBusyRef.current = false
-                      }}
-                    />
-                  </View>
-                  <TextInput
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    editable={!validationState.busy}
-                    value={validationState.qrInput}
-                    onChangeText={(value) => setValidationState((current) => ({ ...current, qrInput: value }))}
-                    style={styles.input}
-                    placeholder="Scan or paste the QR payload"
-                    placeholderTextColor="#90a3b8"
-                  />
-                  <View style={styles.inlineActions}>
-                    <ActionButton
-                      label={validationState.busy ? 'Checking...' : 'Check ticket'}
-                      onPress={() => void inspectTicketByQr(validationState.qrInput, 'manual')}
-                    />
-                    <ActionButton
-                      label={validationState.busy ? 'Redeeming...' : 'Confirm redeem'}
-                      secondary
-                      onPress={() => void confirmTicketRedeem()}
-                    />
-                  </View>
-                  <ValidationStatus tone={validationState.tone} message={validationState.status} />
-                  {validationState.ticket ? <TicketValidationCard ticket={validationState.ticket} /> : null}
-                </View>
-              ) : (
-                <View style={styles.stackSmall}>
-                  <Text style={styles.mutedText}>Sign in with your approved staff account to unlock camera scanning and redemption.</Text>
-                  <ActionButton label="Sign in" onPress={() => setActiveView('account')} />
-                </View>
-              )}
-            </Card>
-          </View>
-        ) : null}
-
         {activeView === 'account' ? (
           <View style={styles.stack}>
             <Card
@@ -2749,6 +2547,8 @@ export default function App() {
           </View>
         ) : null}
       </ScrollView>
+        </>
+      )}
       <TicketPickerModal
         apiBaseUrl={resolvedApiBaseUrl}
         cartCount={cartTicketCount}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { PinConfig } from './MapPinAppearance'
-import type { PopupField } from '../public/KathmanduMap'
+import type { PopupField } from '../public/NepalMap'
 import { EventMapPopup } from '../public/EventMapPopup'
 
 const ICON_SVG_PATHS: Record<string, string> = {
