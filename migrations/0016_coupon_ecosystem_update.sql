@@ -6,6 +6,15 @@
 
 PRAGMA foreign_keys = OFF;
 
+CREATE TABLE coupon_redemptions_migration_backup AS
+SELECT
+    coupon_id,
+    order_id,
+    customer_id,
+    discount_amount_paisa,
+    redeemed_at
+FROM coupon_redemptions;
+
 CREATE TABLE coupons_new (
     id TEXT PRIMARY KEY,
     coupon_type TEXT NOT NULL DEFAULT 'organizer',
@@ -62,8 +71,10 @@ SELECT
     'organizer',
     'ORG-' || upper(replace(replace(coupons.code, ' ', '-'), '_', '-')) || '-' || upper(substr(replace(coupons.id, '-', ''), 1, 8)),
     'waahcoupon:v1:ORG-' || upper(replace(replace(coupons.code, ' ', '-'), '_', '-')) || '-' || upper(substr(replace(coupons.id, '-', ''), 1, 8)),
-    coupons.event_id,
-    events.organization_id,
+    -- Ensure event_id exists before inserting to avoid FK constraint failure.
+    (SELECT e.id FROM events e WHERE e.id = coupons.event_id),
+    -- Ensure organization_id exists before inserting to avoid FK constraint failure.
+    (SELECT o.id FROM organizations o WHERE o.id = events.organization_id),
     upper(replace(replace(coupons.code, ' ', '-'), '_', '-')) || '-' || upper(substr(replace(coupons.id, '-', ''), 1, 8)),
     coupons.description,
     coupons.discount_type,
@@ -82,6 +93,9 @@ SELECT
 FROM coupons
 LEFT JOIN events ON events.id = coupons.event_id;
 
+-- D1 runs migrations in a way that can keep FK checks active, so drop the child
+-- table before replacing its parent and rebuild it after the coupons swap.
+DROP TABLE coupon_redemptions;
 DROP TABLE coupons;
 ALTER TABLE coupons_new RENAME TO coupons;
 
@@ -112,10 +126,15 @@ SELECT
     MIN(customer_id),
     SUM(discount_amount_paisa),
     MIN(redeemed_at)
-FROM coupon_redemptions
+FROM coupon_redemptions_migration_backup AS coupon_redemptions
+-- Filter out orphaned redemptions to prevent FK constraint failures.
+WHERE
+    EXISTS (SELECT 1 FROM coupons c WHERE c.id = coupon_redemptions.coupon_id) AND
+    EXISTS (SELECT 1 FROM orders o WHERE o.id = coupon_redemptions.order_id) AND
+    EXISTS (SELECT 1 FROM users u WHERE u.id = coupon_redemptions.customer_id)
 GROUP BY coupon_id;
 
-DROP TABLE coupon_redemptions;
+DROP TABLE coupon_redemptions_migration_backup;
 ALTER TABLE coupon_redemptions_new RENAME TO coupon_redemptions;
 
 PRAGMA foreign_keys = ON;

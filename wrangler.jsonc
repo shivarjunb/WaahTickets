@@ -13,7 +13,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "waah-tickets-sandbox",
+      "database_name": "waahtickets-db",
       "database_id": "8382ba7d-a43d-41e1-896d-8d897aeb5f11",
       "migrations_dir": "migrations"
     }
