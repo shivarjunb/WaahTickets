@@ -9,6 +9,7 @@ import {
   MAX_COUPON_CREATE_QUANTITY,
   normalizeCouponType,
   normalizeCouponCreateQuantity,
+  normalizeCouponRedemptionType,
   parseCouponCheckoutInput,
   parseCouponQrPayload
 } from '../src/coupons.js'
@@ -48,6 +49,14 @@ describe('coupon rules', () => {
     expect(normalizeCouponType('waah')).toBe('waahcoupon')
     expect(normalizeCouponType('waahcoupon')).toBe('waahcoupon')
     expect(normalizeCouponType('sales')).toBeNull()
+  })
+
+  it('normalizes redemption types', () => {
+    expect(normalizeCouponRedemptionType(undefined)).toBe('single_use')
+    expect(normalizeCouponRedemptionType('single-use')).toBe('single_use')
+    expect(normalizeCouponRedemptionType('fcfs')).toBe('first_come_first_serve')
+    expect(normalizeCouponRedemptionType('first come first serve')).toBe('first_come_first_serve')
+    expect(normalizeCouponRedemptionType('auction')).toBeNull()
   })
 
   it('applies organizer coupons only to events from that organizer', () => {
@@ -109,7 +118,41 @@ describe('coupon rules', () => {
         events,
         now
       )
-    ).toMatchObject({ ok: false, error: 'Coupon has already been redeemed.' })
+    ).toMatchObject({ ok: false, error: 'Coupon redemptions have been exhausted.' })
+
+    expect(
+      getEligibleCouponOrderGroups(
+        {
+          couponType: 'waahcoupon',
+          redemptionType: 'first_come_first_serve',
+          expiresAt: '2031-05-16T00:00:00.000Z',
+          isActive: true,
+          redeemed: false,
+          redeemedCount: 9,
+          maxRedemptions: 10
+        },
+        groups,
+        events,
+        now
+      )
+    ).toMatchObject({ ok: true })
+
+    expect(
+      getEligibleCouponOrderGroups(
+        {
+          couponType: 'waahcoupon',
+          redemptionType: 'first_come_first_serve',
+          expiresAt: '2031-05-16T00:00:00.000Z',
+          isActive: true,
+          redeemed: false,
+          redeemedCount: 10,
+          maxRedemptions: 10
+        },
+        groups,
+        events,
+        now
+      )
+    ).toMatchObject({ ok: false, error: 'Coupon redemptions have been exhausted.' })
 
     expect(
       getEligibleCouponOrderGroups(

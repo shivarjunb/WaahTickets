@@ -16,11 +16,14 @@ import {
   getEligibleCouponOrderGroups,
   MAX_COUPON_CREATE_QUANTITY,
   normalizeCouponCreateQuantity,
+  normalizeCouponMaxRedemptions,
   normalizeCouponPublicCode,
+  normalizeCouponRedemptionType,
   normalizeCouponType,
   parseCouponCheckoutInput,
   parseCouponQrPayload,
   type CouponCheckoutInput,
+  type CouponRedemptionType,
   type CouponType
 } from '../coupons.js'
 import { listResources, resolveTable } from '../db/schema.js'
@@ -218,6 +221,8 @@ type AppliedCheckoutCoupon = {
   couponId: string
   publicCode: string
   couponType: CouponType
+  redemptionType: CouponRedemptionType
+  maxRedemptions: number
   discountType: string
   totalDiscountPaisa: number
   allocatedByOrderId: Map<string, number>
@@ -275,6 +280,12 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     assertCheckoutCouponTotals(orderGroups.value, appliedCoupon)
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
+  }
+
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
   }
   let completedOrders = 0
 
@@ -403,12 +414,6 @@ storefrontRoutes.post('/checkout/complete', async (c) => {
     completedOrders += 1
   }
 
-  try {
-    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
-  }
-
   await ensureUserCartItemsTable(db)
   await db.prepare('DELETE FROM user_cart_items WHERE user_id = ?').bind(actor.userId).run()
 
@@ -459,6 +464,8 @@ storefrontRoutes.post('/coupons/validate', async (c) => {
         coupon_id: coupon.couponId,
         public_code: coupon.publicCode,
         coupon_type: coupon.couponType,
+        redemption_type: coupon.redemptionType,
+        max_redemptions: coupon.maxRedemptions,
         discount_type: coupon.discountType,
         discount_amount_paisa: coupon.totalDiscountPaisa,
         allocations: Object.fromEntries(
@@ -1146,6 +1153,12 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
+  }
   let completedOrders = 0
 
   for (const payment of linkedPayments.results) {
@@ -1233,12 +1246,6 @@ storefrontRoutes.post('/payments/khalti/complete', async (c) => {
     }
 
     completedOrders += 1
-  }
-
-  try {
-    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: actor.userId, orderGroups: orderGroups.value, nowIso: now })
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
   }
 
   await ensureUserCartItemsTable(db)
@@ -2670,6 +2677,12 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be applied.' }, 409)
   }
+
+  try {
+    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: scope.userId, orderGroups: orderGroups.value, nowIso: now })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
+  }
   let completedOrders = 0
 
   for (const payment of linkedPayments.results) {
@@ -2757,12 +2770,6 @@ crudRoutes.post('/payments/khalti/complete', async (c) => {
     }
 
     completedOrders += 1
-  }
-
-  try {
-    await redeemCheckoutCoupon({ db, coupon: appliedCoupon, customerId: scope.userId, orderGroups: orderGroups.value, nowIso: now })
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : 'Coupon could not be redeemed.' }, 409)
   }
 
   await ensureUserCartItemsTable(db)
@@ -4164,6 +4171,7 @@ async function resolveAppliedCheckoutCoupon(args: {
          coupons.coupon_type,
          coupons.public_code,
          coupons.qr_payload,
+         coupons.redemption_type,
          coupons.event_id,
          coupons.organization_id,
          coupons.code,
@@ -4175,6 +4183,7 @@ async function resolveAppliedCheckoutCoupon(args: {
          coupons.expires_at,
          coupons.is_active,
          coupons.redeemed_count,
+         coupons.max_redemptions,
          events.end_datetime AS event_end_datetime
        FROM coupons
        LEFT JOIN events ON events.id = coupons.event_id
@@ -4189,6 +4198,7 @@ async function resolveAppliedCheckoutCoupon(args: {
       coupon_type: string
       public_code: string
       qr_payload: string | null
+      redemption_type: string | null
       event_id: string | null
       organization_id: string | null
       code: string
@@ -4200,6 +4210,7 @@ async function resolveAppliedCheckoutCoupon(args: {
       expires_at: string | null
       is_active: number
       redeemed_count: number
+      max_redemptions: number | null
       event_end_datetime: string | null
     }>()
 
@@ -4210,31 +4221,41 @@ async function resolveAppliedCheckoutCoupon(args: {
   if (!couponType) {
     throw new Error('Coupon type is invalid.')
   }
+  const redemptionType = normalizeCouponRedemptionType(coupon.redemption_type)
+  if (!redemptionType) {
+    throw new Error('Coupon redemption type is invalid.')
+  }
+  const maxRedemptions = normalizeCouponMaxRedemptions(coupon.max_redemptions, 1) ?? 1
   if (!coupon.is_active) {
     throw new Error('Coupon is inactive.')
   }
-  if (Number(coupon.redeemed_count ?? 0) > 0) {
-    throw new Error('Coupon has already been redeemed.')
+  if (Number(coupon.redeemed_count ?? 0) >= maxRedemptions) {
+    throw new Error('Coupon redemptions have been exhausted.')
   }
-  const existingRedemption = await args.db
-    .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
-    .bind(coupon.id)
-    .first<{ id: string }>()
-  if (existingRedemption?.id) {
-    throw new Error('Coupon has already been redeemed.')
+  if (redemptionType === 'single_use') {
+    const existingRedemption = await args.db
+      .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
+      .bind(coupon.id)
+      .first<{ id: string }>()
+    if (existingRedemption?.id) {
+      throw new Error('Coupon redemptions have been exhausted.')
+    }
   }
 
   const eventIds = [...new Set(args.orderGroups.map((group) => group.event_id))]
   const eventRows = await selectCheckoutEvents(args.db, eventIds)
   const eligibility = getEligibleCouponOrderGroups({
     couponType,
+    redemptionType,
     eventId: coupon.event_id,
     organizationId: coupon.organization_id,
     expiresAt: coupon.expires_at,
     eventEndDatetime: coupon.event_end_datetime,
     startDatetime: coupon.start_datetime,
     isActive: Boolean(coupon.is_active),
-    redeemed: false,
+    redeemed: Number(coupon.redeemed_count ?? 0) >= maxRedemptions,
+    redeemedCount: coupon.redeemed_count,
+    maxRedemptions,
     minOrderAmountPaisa: coupon.min_order_amount_paisa
   }, args.orderGroups, eventRows, args.nowIso)
   if (!eligibility.ok) {
@@ -4255,6 +4276,8 @@ async function resolveAppliedCheckoutCoupon(args: {
     couponId: coupon.id,
     publicCode: coupon.public_code,
     couponType,
+    redemptionType,
+    maxRedemptions,
     discountType: coupon.discount_type,
     totalDiscountPaisa: totalDiscount,
     allocatedByOrderId
@@ -4293,12 +4316,28 @@ async function redeemCheckoutCoupon(args: {
 }) {
   if (!args.coupon) return
 
-  const existingRedemption = await args.db
-    .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
-    .bind(args.coupon.couponId)
-    .first<{ id: string }>()
-  if (existingRedemption?.id) {
-    throw new Error('Coupon has already been redeemed.')
+  if (args.coupon.redemptionType === 'single_use') {
+    const existingRedemption = await args.db
+      .prepare('SELECT id FROM coupon_redemptions WHERE coupon_id = ? LIMIT 1')
+      .bind(args.coupon.couponId)
+      .first<{ id: string }>()
+    if (existingRedemption?.id) {
+      throw new Error('Coupon redemptions have been exhausted.')
+    }
+  }
+
+  const claimResult = await args.db
+    .prepare(
+      `UPDATE coupons
+       SET redeemed_count = redeemed_count + 1,
+           updated_at = ?
+       WHERE id = ?
+         AND redeemed_count < max_redemptions`
+    )
+    .bind(args.nowIso, args.coupon.couponId)
+    .run()
+  if ((claimResult.meta?.changes ?? 0) < 1) {
+    throw new Error('Coupon redemptions have been exhausted.')
   }
 
   const primaryOrder = args.orderGroups.find((group) => (args.coupon?.allocatedByOrderId.get(group.order_id) ?? 0) > 0) ?? args.orderGroups[0]
@@ -4308,17 +4347,6 @@ async function redeemCheckoutCoupon(args: {
        VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(crypto.randomUUID(), args.coupon.couponId, primaryOrder.order_id, args.customerId, args.coupon.totalDiscountPaisa, args.nowIso)
-    .run()
-
-  await args.db
-    .prepare(
-      `UPDATE coupons
-       SET redeemed_count = 1,
-           updated_at = ?
-       WHERE id = ?
-         AND redeemed_count = 0`
-    )
-    .bind(args.nowIso, args.coupon.couponId)
     .run()
 }
 
@@ -4430,12 +4458,38 @@ async function normalizeCouponRecordForMutation(
     return c.json({ error: 'Only admins can issue Waah coupons.' }, 403)
   }
 
+  const redemptionType = normalizeCouponRedemptionType(record.redemption_type ?? (isCreate ? 'single_use' : undefined))
+  if (record.redemption_type !== undefined || isCreate) {
+    if (!redemptionType) {
+      return c.json({ error: 'redemption_type must be single_use or first_come_first_serve.' }, 400)
+    }
+    record.redemption_type = redemptionType
+  }
+
   const discountType = String(record.discount_type ?? (isCreate ? 'fixed' : '')).trim().toLowerCase()
   if (record.discount_type !== undefined || isCreate) {
     if (!['percentage', 'fixed'].includes(discountType)) {
       return c.json({ error: 'discount_type must be percentage or fixed.' }, 400)
     }
     record.discount_type = discountType
+  }
+
+  if (discountType === 'percentage' && (record.discount_percentage !== undefined || isCreate)) {
+    const discountPercentage = Number(record.discount_percentage)
+    if (!Number.isFinite(discountPercentage) || discountPercentage <= 0 || discountPercentage > 100) {
+      return c.json({ error: 'discount_percentage must be greater than 0 and no more than 100.' }, 400)
+    }
+    record.discount_percentage = discountPercentage
+    record.discount_amount_paisa = null
+  }
+
+  if (discountType === 'fixed' && (record.discount_amount_paisa !== undefined || isCreate)) {
+    const discountAmountPaisa = Number(record.discount_amount_paisa)
+    if (!Number.isInteger(discountAmountPaisa) || discountAmountPaisa <= 0) {
+      return c.json({ error: 'discount_amount_paisa must be a whole number greater than 0.' }, 400)
+    }
+    record.discount_amount_paisa = discountAmountPaisa
+    record.discount_percentage = null
   }
 
   if (record.code !== undefined || isCreate) {
@@ -4488,8 +4542,18 @@ async function normalizeCouponRecordForMutation(
     record.issued_by_user_id = scope.userId
   }
   if (isCreate) {
-    record.max_redemptions = 1
+    const maxRedemptions = normalizeCouponMaxRedemptions(record.max_redemptions, 1)
+    if (!maxRedemptions) {
+      return c.json({ error: 'max_redemptions must be a whole number greater than 0.' }, 400)
+    }
+    record.max_redemptions = redemptionType === 'first_come_first_serve' ? maxRedemptions : 1
     record.redeemed_count = Number(record.redeemed_count ?? 0)
+  } else if (record.max_redemptions !== undefined) {
+    const maxRedemptions = normalizeCouponMaxRedemptions(record.max_redemptions, 1)
+    if (!maxRedemptions) {
+      return c.json({ error: 'max_redemptions must be a whole number greater than 0.' }, 400)
+    }
+    record.max_redemptions = maxRedemptions
   }
 
   if ((record.public_code !== undefined || isCreate) && effectiveCouponType) {
@@ -4919,6 +4983,28 @@ async function executeMutation<T>(
       )
     }
 
+    if (normalizedMessage.includes('NOT NULL constraint failed')) {
+      const column = extractConstraintColumn(normalizedMessage, 'NOT NULL constraint failed:')
+      return c.json(
+        {
+          error: 'Missing required field.',
+          message: column ? `${formatColumnLabel(column)} is required.` : 'One or more required fields are missing.'
+        },
+        400
+      )
+    }
+
+    if (normalizedMessage.includes('CHECK constraint failed')) {
+      const column = extractConstraintColumn(normalizedMessage, 'CHECK constraint failed:')
+      return c.json(
+        {
+          error: 'Invalid field value.',
+          message: column ? `${formatColumnLabel(column)} has an invalid value.` : 'One or more fields has an invalid value.'
+        },
+        400
+      )
+    }
+
     throw error
   }
 }
@@ -5321,6 +5407,24 @@ function extractUniqueConstraintColumns(message: string) {
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
+}
+
+function extractConstraintColumn(message: string, marker: string) {
+  const markerIndex = message.indexOf(marker)
+  if (markerIndex === -1) return ''
+  const rawColumn = message
+    .slice(markerIndex + marker.length)
+    .split(/[,\s]/)
+    .map((value) => value.trim())
+    .find(Boolean)
+  return rawColumn?.split('.').pop()?.toLowerCase() ?? ''
+}
+
+function formatColumnLabel(column: string) {
+  return column
+    .replace(/_paisa$/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function getUniqueConstraintMessage(columns: string[]) {

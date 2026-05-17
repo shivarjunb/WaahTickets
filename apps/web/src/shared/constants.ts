@@ -324,12 +324,14 @@ export const samplePayloads: Record<string, Record<string, unknown>> = {
   coupons: {
     quantity: 1,
     coupon_type: 'waahcoupon',
+    redemption_type: 'single_use',
     public_code: 'ORG-EARLY10',
     organization_id: 'replace-with-existing-organization-id',
     event_id: '',
     code: 'EARLY10',
     discount_type: 'percentage',
     discount_percentage: 10,
+    max_redemptions: 1,
     expires_at: '2031-04-25T12:00:00.000Z'
   },
   coupon_redemptions: {
@@ -358,8 +360,8 @@ export const resourceUiConfig: Record<string, ResourceUiConfig> = {
   payout_batches: { title: 'Settlements', description: 'Review payout batches and settlement processing state.', columns: ['batch_type', 'event_title', 'beneficiary_name', 'total_amount_paisa', 'status', 'paid_at'] },
   payout_items: { title: 'Payout Items', description: 'Inspect payout recipients, amounts, and processing status.', columns: ['beneficiary_name', 'beneficiary_type', 'amount_paisa', 'status', 'created_at'] },
   refunds: { title: 'Refunds', description: 'Monitor refund requests, reasons, and returned amounts.', columns: ['order_number', 'event_title', 'status', 'refund_amount_paisa', 'created_at'] },
-  coupons: { title: 'Coupons', description: 'Manage one-time organizer and Waah checkout coupons.', columns: ['public_code', 'coupon_type', 'event_title', 'organization_name', 'discount_type', 'expires_at', 'redeemed_count', 'is_active'], createLabel: 'Create coupon', searchPlaceholder: 'Search coupons' },
-  coupon_redemptions: { title: 'Coupon Redemptions', description: 'Audit one-time coupon redemptions.', columns: ['coupon_code', 'order_number', 'customer_name', 'discount_amount_paisa', 'redeemed_at'] },
+  coupons: { title: 'Coupons', description: 'Manage organizer and Waah checkout coupons.', columns: ['public_code', 'coupon_type', 'redemption_type', 'event_title', 'organization_name', 'discount_type', 'max_redemptions', 'redeemed_count', 'is_active'], createLabel: 'Create coupon', searchPlaceholder: 'Search coupons' },
+  coupon_redemptions: { title: 'Coupon Redemptions', description: 'Audit coupon redemptions.', columns: ['coupon_code', 'order_number', 'customer_name', 'discount_amount_paisa', 'redeemed_at'] },
   files: { title: 'Files', description: 'Manage uploaded event assets, PDFs, and storage metadata.', columns: ['file_name', 'file_type', 'mime_type', 'size_bytes', 'created_at'] },
   ads: { title: 'Ads', description: 'Manage promotional placements across web and mobile.', columns: ['name', 'advertiser_name', 'placement', 'device_target', 'status', 'start_date', 'end_date'], createLabel: 'Create ad' }
 }
@@ -445,6 +447,7 @@ export const fieldSelectOptions: Record<string, Record<string, string[]>> = {
   },
   coupons: {
     coupon_type: ['organizer', 'waahcoupon'],
+    redemption_type: ['single_use', 'first_come_first_serve'],
     discount_type: ['percentage', 'fixed']
   }
 }

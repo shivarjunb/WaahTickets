@@ -235,6 +235,9 @@ export type CouponValidationResponse = {
     event_id?: string
     code?: string
     coupon_type?: string
+    redemption_type?: string
+    max_redemptions?: number
+    remaining_redemptions?: number
     discount_type: string
     discount_amount_paisa: number
     allocations?: Record<string, number>

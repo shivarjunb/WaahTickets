@@ -341,6 +341,7 @@ export const tableConfigs: Record<TableName, TableConfig> = {
     columns: [
       'id',
       'coupon_type',
+      'redemption_type',
       'public_code',
       'qr_payload',
       'event_id',

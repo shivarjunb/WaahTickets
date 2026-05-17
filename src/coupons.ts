@@ -3,6 +3,7 @@ export const COUPON_EXPIRY_YEARS = 5
 export const MAX_COUPON_CREATE_QUANTITY = 500
 
 export type CouponType = 'organizer' | 'waahcoupon'
+export type CouponRedemptionType = 'single_use' | 'first_come_first_serve'
 export type CouponInputSource = 'code' | 'qr_payload'
 
 export type CouponCheckoutInput = {
@@ -24,6 +25,7 @@ export type CouponOrderGroupLike = {
 
 export type CouponRuleSnapshot = {
   couponType: CouponType
+  redemptionType?: CouponRedemptionType | null
   eventId?: string | null
   organizationId?: string | null
   expiresAt?: string | null
@@ -31,6 +33,8 @@ export type CouponRuleSnapshot = {
   startDatetime?: string | null
   isActive: boolean
   redeemed: boolean
+  redeemedCount?: number | null
+  maxRedemptions?: number | null
   minOrderAmountPaisa?: number | null
 }
 
@@ -44,6 +48,19 @@ export function normalizeCouponType(value: unknown): CouponType | null {
   if (normalized === 'organizer') return 'organizer'
   if (normalized === 'waah' || normalized === 'waahcoupon') return 'waahcoupon'
   return null
+}
+
+export function normalizeCouponRedemptionType(value: unknown): CouponRedemptionType | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+  if (!normalized || normalized === 'single' || normalized === 'single_use' || normalized === 'one_time') return 'single_use'
+  if (normalized === 'fcfs' || normalized === 'first_come_first_serve' || normalized === 'limited') return 'first_come_first_serve'
+  return null
+}
+
+export function normalizeCouponMaxRedemptions(value: unknown, fallback = 1) {
+  const count = value === undefined || value === null || value === '' ? fallback : Number(value)
+  if (!Number.isInteger(count) || count < 1) return null
+  return count
 }
 
 export function couponPublicCodePrefix(couponType: CouponType) {
@@ -158,7 +175,11 @@ export function getEligibleCouponOrderGroups(
   nowIso: string
 ) {
   if (!coupon.isActive) return { ok: false as const, error: 'Coupon is inactive.' }
-  if (coupon.redeemed) return { ok: false as const, error: 'Coupon has already been redeemed.' }
+  const maxRedemptions = normalizeCouponMaxRedemptions(coupon.maxRedemptions, 1) ?? 1
+  const redeemedCount = Math.max(0, Math.floor(Number(coupon.redeemedCount ?? (coupon.redeemed ? maxRedemptions : 0))))
+  if (coupon.redeemed || redeemedCount >= maxRedemptions) {
+    return { ok: false as const, error: 'Coupon redemptions have been exhausted.' }
+  }
 
   const nowTs = new Date(nowIso).getTime()
   if (coupon.startDatetime) {

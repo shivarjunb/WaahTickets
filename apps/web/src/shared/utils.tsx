@@ -1164,13 +1164,17 @@ export function getVisibleFormFields(
       if (field === 'discount_amount_paisa' && values.discount_type !== 'fixed') return 'discount_percentage'
       return field
     })
-    .filter((field, index, list) => !hiddenFields.has(field) && list.indexOf(field) === index)
+    .filter((field, index, list) => {
+      if (resource === 'coupons' && field === 'max_redemptions' && values.redemption_type !== 'first_come_first_serve') return false
+      return !hiddenFields.has(field) && list.indexOf(field) === index
+    })
 }
 
 
 export function getFormFieldLabel(resource: string, field: string) {
   if (resource === 'coupons' && field === 'discount_percentage') return 'Discount Percentage'
   if (resource === 'coupons' && field === 'discount_amount_paisa') return 'Discount Amount'
+  if (resource === 'coupons' && field === 'max_redemptions') return 'Max Redemptions'
   return formatResourceName(field)
 }
 
@@ -1215,6 +1219,32 @@ export function validateForm(
   if (resource === 'coupons' && options?.mode === 'create' && options.webRole === 'Organizations') {
     if (!String(values.organization_id ?? '').trim() && !String(values.event_id ?? '').trim()) {
       messages.push('organization or event is required for organizer coupons.')
+    }
+  }
+
+  if (resource === 'coupons') {
+    if (!String(values.redemption_type ?? '').trim()) {
+      messages.push('redemption type is required.')
+    }
+
+    if (values.discount_type === 'percentage') {
+      const discountPercentage = Number(values.discount_percentage ?? '')
+      if (!String(values.discount_percentage ?? '').trim()) {
+        messages.push('discount percentage is required for percentage coupons.')
+      } else if (!Number.isFinite(discountPercentage) || discountPercentage <= 0 || discountPercentage > 100) {
+        messages.push('discount percentage must be greater than 0 and no more than 100.')
+      }
+    }
+
+    if (values.discount_type === 'fixed' && !String(values.discount_amount_paisa ?? '').trim()) {
+      messages.push('discount amount is required for fixed coupons.')
+    }
+
+    if (values.redemption_type === 'first_come_first_serve') {
+      const maxRedemptions = Number(values.max_redemptions ?? '')
+      if (!Number.isInteger(maxRedemptions) || maxRedemptions < 1) {
+        messages.push('max redemptions must be a whole number greater than 0.')
+      }
     }
   }
 

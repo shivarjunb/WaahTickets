@@ -101,7 +101,7 @@ ALTER TABLE coupons_new RENAME TO coupons;
 
 CREATE TABLE coupon_redemptions_new (
     id TEXT PRIMARY KEY,
-    coupon_id TEXT NOT NULL UNIQUE,
+    coupon_id TEXT NOT NULL,
     order_id TEXT NOT NULL,
     customer_id TEXT NOT NULL,
     discount_amount_paisa INTEGER NOT NULL DEFAULT 0,

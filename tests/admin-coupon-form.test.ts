@@ -11,6 +11,7 @@ const couponFormValues = {
   code: 'EARLY10',
   public_code: 'ORG-EARLY10',
   coupon_type: 'waahcoupon',
+  redemption_type: 'single_use',
   organization_id: 'org-1',
   event_id: '',
   discount_type: 'percentage',
@@ -65,6 +66,38 @@ describe('admin coupon form behavior', () => {
     expect(fields).toContain('discount_amount_paisa')
     expect(fields).not.toContain('discount_percentage')
     expect(getFormFieldLabel('coupons', 'discount_amount_paisa')).toBe('Discount Amount')
+  })
+
+  it('shows max redemptions only for first-come-first-serve coupons', () => {
+    expect(getVisibleFormFields('coupons', couponFormValues, { webRole: 'Admin' })).not.toContain('max_redemptions')
+
+    const fields = getVisibleFormFields(
+      'coupons',
+      { ...couponFormValues, redemption_type: 'first_come_first_serve', max_redemptions: '25' },
+      { webRole: 'Admin' }
+    )
+    expect(fields).toContain('max_redemptions')
+    expect(getFormFieldLabel('coupons', 'max_redemptions')).toBe('Max Redemptions')
+  })
+
+  it('validates max redemptions for first-come-first-serve coupons', () => {
+    expect(
+      validateForm(
+        { ...couponFormValues, redemption_type: 'first_come_first_serve', max_redemptions: '0' },
+        'coupons',
+        { mode: 'create', webRole: 'Admin' }
+      )
+    ).toContain('max redemptions must be a whole number greater than 0.')
+  })
+
+  it('validates missing percentage discount values precisely', () => {
+    expect(
+      validateForm(
+        { ...couponFormValues, discount_type: 'percentage', discount_percentage: '' },
+        'coupons',
+        { mode: 'create', webRole: 'Admin' }
+      )
+    ).toContain('discount percentage is required for percentage coupons.')
   })
 
   it('validates that organization coupon creation is scoped to an organization or event', () => {

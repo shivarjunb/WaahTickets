@@ -57,6 +57,54 @@ describe('coupon CRUD access and defaults', () => {
     expect(body.data.public_code).toBe('ORG-DEAL')
   })
 
+  it('allows first-come-first-serve coupons with a redemption limit', async () => {
+    const db = createCouponCrudDatabase('Admin')
+    const response = await requestCouponCrud(db, 'POST', '/api/coupons', {
+      code: 'flash deal',
+      coupon_type: 'waahcoupon',
+      redemption_type: 'first_come_first_serve',
+      max_redemptions: 25,
+      discount_type: 'fixed',
+      discount_amount_paisa: 500
+    })
+
+    expect(response.status).toBe(201)
+    const body = await response.json() as { data: Record<string, unknown> }
+    expect(body.data.redemption_type).toBe('first_come_first_serve')
+    expect(body.data.max_redemptions).toBe(25)
+  })
+
+  it('forces single-use coupons to one redemption', async () => {
+    const db = createCouponCrudDatabase('Admin')
+    const response = await requestCouponCrud(db, 'POST', '/api/coupons', {
+      code: 'single deal',
+      coupon_type: 'waahcoupon',
+      redemption_type: 'single_use',
+      max_redemptions: 25,
+      discount_type: 'percentage',
+      discount_percentage: 10
+    })
+
+    expect(response.status).toBe(201)
+    const body = await response.json() as { data: Record<string, unknown> }
+    expect(body.data.redemption_type).toBe('single_use')
+    expect(body.data.max_redemptions).toBe(1)
+  })
+
+  it('returns a precise error for missing fixed discount amounts', async () => {
+    const db = createCouponCrudDatabase('Admin')
+    const response = await requestCouponCrud(db, 'POST', '/api/coupons', {
+      code: 'missing amount',
+      coupon_type: 'waahcoupon',
+      discount_type: 'fixed'
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'discount_amount_paisa must be a whole number greater than 0.'
+    })
+  })
+
   it('filters organization coupon lists to organizer coupons in their organization scope', async () => {
     const db = createCouponCrudDatabase('Organizations')
     const response = await requestCouponCrud(db, 'GET', '/api/coupons?limit=10')

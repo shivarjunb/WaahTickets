@@ -26,10 +26,35 @@ export function sanitizeServerError(error: unknown, fallbackError = 'Request fai
   }
 
   if (normalizedMessage.includes('NOT NULL constraint failed')) {
+    const column = extractConstraintColumn(normalizedMessage, 'NOT NULL constraint failed:')
     return {
       error: 'Missing required field.',
-      message: 'One or more required fields are missing.',
+      message: column
+        ? `${formatColumnLabel(column)} is required.`
+        : 'One or more required fields are missing.',
       status: 400
+    }
+  }
+
+  if (normalizedMessage.includes('CHECK constraint failed')) {
+    const column = extractConstraintColumn(normalizedMessage, 'CHECK constraint failed:')
+    return {
+      error: 'Invalid field value.',
+      message: column
+        ? `${formatColumnLabel(column)} has an invalid value.`
+        : 'One or more fields has an invalid value.',
+      status: 400
+    }
+  }
+
+  if (/table .* has no column /i.test(normalizedMessage)) {
+    const column = normalizedMessage.match(/has no column named? ([\w_]+)/i)?.[1]
+    return {
+      error: 'Database schema is out of date.',
+      message: column
+        ? `The database is missing the ${formatColumnLabel(column)} column. Run the latest migration, then try again.`
+        : 'The database schema is out of date. Run the latest migration, then try again.',
+      status: 500
     }
   }
 
@@ -62,6 +87,24 @@ function extractUniqueConstraintColumns(message: string) {
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
+}
+
+function extractConstraintColumn(message: string, marker: string) {
+  const markerIndex = message.indexOf(marker)
+  if (markerIndex === -1) return ''
+  const rawColumn = message
+    .slice(markerIndex + marker.length)
+    .split(/[,\s]/)
+    .map((value) => value.trim())
+    .find(Boolean)
+  return rawColumn?.split('.').pop()?.toLowerCase() ?? ''
+}
+
+function formatColumnLabel(column: string) {
+  return column
+    .replace(/_paisa$/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function getUniqueConstraintMessage(columns: string[]) {
